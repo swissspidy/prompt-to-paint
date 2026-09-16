@@ -10,6 +10,7 @@ import { computeMetrics } from './metrics/curve.js';
 import { renderHtml } from './report/html.js';
 import { renderText } from './report/text.js';
 import { renderCompareText, renderCompareHtml } from './report/compare.js';
+import { aggregate, renderAggregate } from './report/aggregate.js';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.js';
 import type { Adapter, RunResult } from './types.js';
 
@@ -19,7 +20,8 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p run      --brief <file> [options]     measure one agent on one brief
   p2p floor    --template <id> [options]    measure the toolchain with no agent
   p2p compare  <result.json...>             rank runs by trajectory and by final score
-  p2p rescore  <runDir> [--judge <backend>] re-score saved frames without re-running
+  p2p rescore  <runDir> [--judge <backend>] [--brief <file>]
+                                            re-score saved frames without re-running
   p2p briefs                                list bundled briefs
   p2p floors                                list toolchain-floor templates
 
@@ -39,6 +41,7 @@ Options for run:
   --kill-port  free the target port first instead of refusing to run
   --keep-server leave the agent's dev server running after the run
   --unsafe     pass --dangerously-skip-permissions to claude-code (sandboxes only)
+  --repeat N   run N times and report a median with its full range
 `;
 
 function fail(msg: string): never {
@@ -90,6 +93,7 @@ async function main(): Promise<void> {
       template: { type: 'string' }, port: { type: 'string' }, horizon: { type: 'string' },
       'no-iterate': { type: 'boolean' }, unsafe: { type: 'boolean' },
       'kill-port': { type: 'boolean' }, 'keep-server': { type: 'boolean' },
+      repeat: { type: 'string' },
     },
   });
 
@@ -97,11 +101,18 @@ async function main(): Promise<void> {
     const dir = argv.find((a) => !a.startsWith('-'));
     if (!dir) fail('rescore needs a run directory');
     const prev = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as RunResult;
-    const brief = await loadBrief(join('briefs', `${prev.brief}.json`));
+    // Prefer an explicit --brief, then the path the run recorded, then the
+    // bundled brief of that id.
+    const briefPath = values.brief ?? prev.briefPath ?? join('briefs', `${prev.brief}.json`);
+    const brief = await loadBrief(briefPath);
     const backend = pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
     const judged = await judgeRun(prev.frames, brief, { backend });
     const next: RunResult = {
       ...prev,
+      // Warnings from the previous scoring pass are stale; keep the ones about
+      // the run itself. Without this a rescore silently inherits the old
+      // judge's verdict about itself and hides fresh failures.
+      warnings: [...prev.warnings.filter((w) => !w.startsWith('judge:')), ...judged.warnings],
       frames: judged.frames,
       judge: { backend: backend.name, model: backend.model, framesJudged: judged.framesJudged, degraded: judged.degraded },
       curve: computeMetrics(judged.frames, {
@@ -158,28 +169,50 @@ async function main(): Promise<void> {
     : pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
 
   const outRoot = values.out ?? 'runs';
-  const runDir = resolve(outRoot, `${brief.id}-${label.replace(/[^\w.-]/g, '_')}-${Date.now().toString(36)}`);
-  await mkdir(runDir, { recursive: true });
-  console.log(`  run dir: ${runDir}`);
+  const repeats = Math.max(1, Number(values.repeat ?? 1));
+  const results: RunResult[] = [];
 
-  const result = await runBenchmark({
-    brief,
-    adapter,
-    runDir,
-    label,
-    judgeBackend,
-    pollMs: values.poll ? Number(values.poll) : undefined,
-    iterationPollMs: values['iter-poll'] ? Number(values['iter-poll']) : undefined,
-    settleMs: values.settle ? Number(values.settle) : undefined,
-    skipIterations: values['no-iterate'] || cmd === 'floor',
-    killPort: values['kill-port'],
-    keepServer: values['keep-server'],
-    onLog: (m) => console.log(`  · ${m}`),
-  });
+  for (let i = 0; i < repeats; i++) {
+    const runDir = resolve(
+      outRoot,
+      `${brief.id}-${label.replace(/[^\w.-]/g, '_')}-${Date.now().toString(36)}${repeats > 1 ? `-r${i + 1}` : ''}`,
+    );
+    await mkdir(runDir, { recursive: true });
+    if (repeats > 1) console.log(`\n  === run ${i + 1} of ${repeats} ===`);
+    console.log(`  run dir: ${runDir}`);
 
-  await writeFile(join(runDir, 'report.html'), renderHtml(result, runDir));
-  console.log(renderText(result));
-  console.log(`  report: ${join(runDir, 'report.html')}\n`);
+    const result = await runBenchmark({
+      brief,
+      briefPath: cmd === 'run' ? values.brief : undefined,
+      adapter,
+      runDir,
+      label,
+      judgeBackend,
+      pollMs: values.poll ? Number(values.poll) : undefined,
+      iterationPollMs: values['iter-poll'] ? Number(values['iter-poll']) : undefined,
+      settleMs: values.settle ? Number(values.settle) : undefined,
+      skipIterations: values['no-iterate'] || cmd === 'floor',
+      killPort: values['kill-port'],
+      // A control run has no agent turn to wait for: its dev server runs forever.
+      stopAfterRenderMs: cmd === 'floor' ? Number(values.settle ?? 8000) : undefined,
+      keepServer: values['keep-server'],
+      onLog: (m) => console.log(`  · ${m}`),
+    });
+
+    await writeFile(join(runDir, 'report.html'), renderHtml(result, runDir));
+    console.log(renderText(result));
+    console.log(`  report: ${join(runDir, 'report.html')}\n`);
+    results.push(result);
+  }
+
+  if (results.length > 1) {
+    const agg = aggregate(results);
+    await mkdir(resolve(outRoot), { recursive: true });
+    const aggPath = resolve(outRoot, `aggregate-${brief.id}-${label.replace(/[^\w.-]/g, '_')}.json`);
+    await writeFile(aggPath, JSON.stringify(agg, null, 2));
+    console.log(renderAggregate(agg));
+    console.log(`  aggregate: ${aggPath}\n`);
+  }
 }
 
 main().catch((e) => {

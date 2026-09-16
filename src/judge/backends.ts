@@ -94,16 +94,20 @@ export class CliBackend implements JudgeBackend {
 
   async ask(req: JudgeRequest): Promise<string> {
     const prompt = `Read the image file at ${req.imagePath}, then answer.\n\n${req.prompt}`;
+    // The prompt goes over stdin, never as a positional argument: --add-dir and
+    // --allowedTools are both variadic, so a trailing positional gets swallowed
+    // as one of their values and the CLI exits complaining of no input.
     const args = [
       '-p',
       '--output-format', 'json',
       '--model', this.model,
       '--allowedTools', 'Read',
       '--add-dir', dirname(req.imagePath),
-      prompt,
     ];
     return await new Promise<string>((resolve, reject) => {
-      const child = spawn(this.bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(this.bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      child.stdin.write(prompt);
+      child.stdin.end();
       let out = '';
       let err = '';
       const timer = setTimeout(() => child.kill('SIGKILL'), 180_000);

@@ -47,10 +47,19 @@ function curveChart(r: RunResult): string {
     return `<text class="tick" x="${x(t)}" y="${H - 10}" text-anchor="middle">${Math.round(t / 1000)}s</text>`;
   }).join('');
 
+  // Stagger labels that would otherwise land on top of each other. On a fast
+  // run first render and first reviewable are often the same frame, and two
+  // labels at one x position render as illegible overlapping text.
+  const drawn: number[] = [];
   const marker = (t: number | null, label: string, color: string): string => {
     if (t === null || t > hz) return '';
-    return `<line class="marker" x1="${x(t)}" x2="${x(t)}" y1="${M.t}" y2="${M.t + PH}" stroke="${color}"/>
-      <text class="marker-label" x="${x(t) + 5}" y="${M.t + 12}" fill="${color}">${label}</text>`;
+    const px = x(t);
+    let row = 0;
+    while (drawn.some((d, i) => i === row && Math.abs(d - px) < 78)) row++;
+    drawn[row] = px;
+    const ty = M.t + 12 + row * 15;
+    return `<line class="marker" x1="${px}" x2="${px}" y1="${M.t}" y2="${M.t + PH}" stroke="${color}"/>
+      <text class="marker-label" x="${px + 5}" y="${ty}" fill="${color}">${label}</text>`;
   };
 
   // The held tail is drawn differently: it is an assumption, not an observation.

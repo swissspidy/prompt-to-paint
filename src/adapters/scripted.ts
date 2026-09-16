@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Adapter, AgentContext, AgentRunHandle } from '../types.js';
+import { withShimPath } from '../decompose/shims.js';
 
 export interface ScriptedStep {
   /** When to fire, relative to the start of this turn. */
@@ -57,7 +58,7 @@ export class ScriptedAdapter implements Adapter {
       if (s.sh) {
         ctx.onEvent({ tMs, type: 'assistant', text: s.sh, raw: { message: { content: [{ type: 'tool_use' }] } } });
         await new Promise<void>((resolve) => {
-          const child = spawn('/bin/bash', ['-lc', s.sh!], {
+          const child = spawn('/bin/bash', ['-lc', withShimPath(s.sh!)], {
             cwd: ctx.workdir,
             env: { ...process.env, ...ctx.env },
             stdio: 'ignore',

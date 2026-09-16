@@ -100,6 +100,9 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter exec \
 
 # rank runs by trajectory and by final score, side by side
 npm run p2p -- compare runs/*/result.json
+
+# one run is not a measurement -- report a median and its range
+npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe --repeat 5
 ```
 
 Each run writes a directory containing `result.json` (every frame, phase and
@@ -127,6 +130,53 @@ the run would put model latency inside the window being measured. Only visually
 distinct frames cost a call; the rest inherit by forward-fill. `p2p rescore`
 re-scores a finished run without re-running any agent, which is also how you
 measure judge variance.
+
+## Running the actual experiment
+
+The interesting hypothesis is that on greenfield tasks the toolchain dominates
+and model differences are noise. Here is how to settle it rather than assert it.
+
+**1. Establish the floor.** Nothing here is an agent; this is what the toolchain
+costs on its own.
+
+```bash
+npm run p2p -- floor --template vite-react --port 5242 --kill-port
+npm run p2p -- floor --template static      --port 5242 --kill-port
+```
+
+On the machine this was developed on, `vite-react` first paints at **13.5s on a
+cold npm cache and 6.8s on a warm one** — scaffold, install, dev-server boot and
+first request, with no model involved at all. That is the budget no agent
+choosing that stack can beat.
+
+That 2x spread from cache state alone is worth noticing before ranking
+anything: if it exceeds the gap between two agents, you are measuring the
+machine, not the model. Run the floor on the same box, in the same cache state,
+in the same session as the agents you are comparing.
+
+**2. Measure agents on the same brief, repeatedly.**
+
+```bash
+for m in opus sonnet haiku; do
+  npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code     --model "$m" --label "$m" --unsafe --repeat 5 --kill-port
+done
+```
+
+**3. Read the answer off three places.**
+
+- **Time to first render vs the floor.** If every agent lands within a second or
+  two of the floor, the toolchain set the pace and the model choice did not.
+- **The agent/toolchain split** in each report. If `install + build +
+  devserver_boot + first_paint` dwarfs `model + tool_overhead`, same conclusion —
+  provided attribution coverage is high enough to trust, which the report states.
+- **The range across repeats.** If the spread within one model overlaps the gap
+  between two models, there is no ranking yet, only noise. The aggregate output
+  says so explicitly when the AUC range exceeds 0.15.
+
+A null result here is worth as much as a positive one: "the thing everyone is
+optimising is not the bottleneck" is only credible with the floor to compare
+against, which is why the control ships with the harness rather than as an
+afterthought.
 
 ## Writing a brief
 

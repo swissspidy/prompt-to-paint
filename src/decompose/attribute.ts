@@ -141,6 +141,14 @@ export interface StreamAttribution {
  * agent is blocked until the slowest one returns.
  */
 export function attributeAgentStream(events: AgentEvent[], endMs: number): StreamAttribution {
+  // An adapter that exposes no assistant events cannot tell us what the agent
+  // was doing, and guessing is worse than admitting it. Without this guard a
+  // wrapper with no stream -- or the floor control, which has no model at all --
+  // has its entire run charged to "model thinking", which is exactly the
+  // misattribution this harness exists to avoid. Returning nothing sends the
+  // time to `residual`, where the coverage warning can flag it honestly.
+  if (!events.some((e) => e.type === 'assistant')) return { model: [], tool: [] };
+
   const model: Interval[] = [];
   const tool: Interval[] = [];
   let cursor = 0;
@@ -198,6 +206,12 @@ export interface DecomposeInput {
   /** Time of the first frame showing anything. */
   firstPaintMs: number | null;
   reportedApiMs: number | null;
+  /**
+   * Whether the adapter exposed an event stream. Without one, model and tool
+   * time are structurally unknowable and a large residual is expected rather
+   * than a symptom of anything being wrong.
+   */
+  hasStream?: boolean;
 }
 
 /**
@@ -268,9 +282,12 @@ export function decompose(input: DecomposeInput): Decomposition {
   buckets.residual = Math.max(0, end - accounted);
 
   const coverage = end > 0 ? accounted / end : 0;
+  const hasStream = input.hasStream ?? input.stream.model.length + input.stream.tool.length > 0;
   if (coverage < 0.85) {
     notes.push(
-      `Only ${(coverage * 100).toFixed(0)}% of wall clock is accounted for. The split below is not trustworthy; check whether the agent shelled out through an unshimmed command.`,
+      hasStream
+        ? `Only ${(coverage * 100).toFixed(0)}% of wall clock is accounted for. The split below is not trustworthy; check whether the agent shelled out through a command the shims do not wrap.`
+        : `Only ${(coverage * 100).toFixed(0)}% of wall clock is accounted for, because this adapter exposes no event stream: model and tool time cannot be separated and land in the residual. The toolchain phases below still come from the shims and are sound.`,
     );
   }
   if (input.serverReadyMs === null) notes.push('Dev server never answered; first_paint and devserver_boot are unmeasured.');

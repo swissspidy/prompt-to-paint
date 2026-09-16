@@ -90,6 +90,20 @@ export interface ShimSetup {
 }
 
 /**
+ * Prefix a shell command so the shims survive a login shell.
+ *
+ * Inheriting PATH through the environment is not enough. A login shell sources
+ * the profile, which commonly rebuilds PATH from scratch and drops the shim
+ * directory, and the run then records no phases at all while looking perfectly
+ * healthy. Re-prepending inside the command runs after any profile has had its
+ * say, and appends rather than replaces, so tools the profile added are kept.
+ */
+export function withShimPath(command: string): string {
+  return `if [ -n "$P2P_SHIM_DIR" ]; then export PATH="$P2P_SHIM_DIR:$PATH"; fi
+${command}`;
+}
+
+/**
  * Write the shim directory and return the env that activates it.
  *
  * Each shim costs one extra Node startup (~40ms). That overhead is inside the
@@ -112,6 +126,11 @@ export async function setupShims(runDir: string, extraPath = process.env.PATH ??
   return {
     dir,
     phaseLog,
-    env: { PATH: `${dir}:${extraPath}`, P2P_PHASE_LOG: phaseLog, P2P_PHASE_DEPTH: '0' },
+    env: {
+      PATH: `${dir}:${extraPath}`,
+      P2P_SHIM_DIR: dir,
+      P2P_PHASE_LOG: phaseLog,
+      P2P_PHASE_DEPTH: '0',
+    },
   };
 }

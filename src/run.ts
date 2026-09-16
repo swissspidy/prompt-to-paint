@@ -16,12 +16,20 @@ import { ensureFreePort, killPort } from './port.js';
 
 export interface RunOptions {
   brief: Brief;
+  /** Where the brief came from; recorded so `rescore` can find it again. */
+  briefPath?: string;
   adapter: Adapter;
   runDir: string;
   label: string;
   judgeBackend: JudgeBackend;
   /** Extra observation after the agent stops, to catch late breakage. */
   settleMs?: number;
+  /**
+   * End the cold-start window this long after the app first renders, instead
+   * of waiting for the agent to finish. A dev server never exits, so a control
+   * run would otherwise always burn the full horizon.
+   */
+  stopAfterRenderMs?: number;
   /** Free the target port before starting instead of refusing to run. */
   killPort?: boolean;
   /** Leave any server the run started alive (for debugging a finished run). */
@@ -93,20 +101,46 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   // the horizon, whichever comes first. Probing until the horizon regardless
   // would multiply benchmark wall time for no extra signal, since the curve
   // holds its last value anyway.
-  let hitHorizon = false;
-  await Promise.race([
-    handle.waitForTurn(0),
-    sleep(horizonMs).then(() => {
-      hitHorizon = true;
-    }),
-  ]);
-  if (hitHorizon) warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
-  log(hitHorizon ? 'horizon reached' : 'agent finished first turn');
+  type EndReason = 'turn' | 'horizon' | 'rendered';
+  const races: Array<Promise<EndReason>> = [
+    handle.waitForTurn(0).then((): EndReason => 'turn'),
+    sleep(horizonMs).then((): EndReason => 'horizon'),
+  ];
+  if (opts.stopAfterRenderMs !== undefined) {
+    const settleAfterRender = opts.stopAfterRenderMs;
+    races.push(
+      (async (): Promise<EndReason> => {
+        while (!prober.frames.some((f) => f.class === 'render')) await sleep(250);
+        await sleep(settleAfterRender);
+        return 'rendered';
+      })(),
+    );
+  }
+  const ended = await Promise.race(races);
+  if (ended === 'horizon')
+    warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
+  log(
+    ended === 'horizon' ? 'horizon reached'
+      : ended === 'rendered' ? 'app rendered; ending cold-start window'
+      : 'agent finished first turn',
+  );
 
   // Keep watching briefly: builds land after the agent stops talking, and some
-  // agents break the page on their way out.
-  await sleep(opts.settleMs ?? 15_000);
+  // agents break the page on their way out. A run that stopped on the render
+  // condition has already waited, so it does not wait again.
+  const settleMs = ended === 'rendered' ? 0 : (opts.settleMs ?? 15_000);
+  const settleStartMs = Date.now() - t0Epoch;
+  await sleep(settleMs);
   const coldEndMs = Date.now() - t0Epoch;
+
+  // Time the harness spent deliberately watching an idle app is not
+  // "unattributed": we know exactly what was happening, which is nothing. If it
+  // were charged to the residual bucket, a control run that starts fast would
+  // report low attribution coverage and warn that its own split is untrustworthy,
+  // which is the opposite of the truth.
+  const observationOnlyMs =
+    (coldEndMs - settleStartMs) + (ended === 'rendered' ? (opts.stopAfterRenderMs ?? 0) : 0);
+  const activeWallMs = Math.max(0, coldEndMs - observationOnlyMs);
 
   const iterations: IterationResult[] = [];
   const rendering = prober.frames.some((f) => f.class === 'render');
@@ -168,10 +202,12 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     sleep(2000).then(() => ({ exitCode: null, reportedApiMs: null })),
   ]);
 
+  const stream = attributeAgentStream(agentEvents, coldEndMs);
   const decomposition = decompose({
-    wallMs: coldEndMs,
+    wallMs: activeWallMs,
     phases,
-    stream: attributeAgentStream(agentEvents, coldEndMs),
+    stream,
+    hasStream: agentEvents.some((e) => e.type === 'assistant'),
     serverReadyMs,
     firstPaintMs,
     reportedApiMs,
@@ -198,6 +234,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     schema: 1,
     runId,
     brief: brief.id,
+    briefPath: opts.briefPath ?? '',
     adapter: adapter.name,
     label: opts.label,
     startedAt: new Date(t0Epoch).toISOString(),
@@ -205,7 +242,17 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     wallMs,
     url,
     curve,
-    decomposition,
+    decomposition: {
+      ...decomposition,
+      notes: [
+        ...decomposition.notes,
+        ...(observationOnlyMs > 1000
+          ? [
+              `Excludes ${(observationOnlyMs / 1000).toFixed(1)}s of deliberate idle observation (settle window); the curve still covers it.`,
+            ]
+          : []),
+      ],
+    },
     iterations,
     frames: slimFrames,
     phases,

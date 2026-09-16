@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import type { Adapter, AgentContext, AgentRunHandle } from '../types.js';
+import { withShimPath } from '../decompose/shims.js';
 
 export interface ExecOptions {
   /** Shell command. {{PROMPT}} and {{WORKDIR}} are substituted. */
@@ -41,7 +42,7 @@ export class ExecAdapter implements Adapter {
 
     const run = (cmd: string): Promise<number | null> =>
       new Promise((resolve) => {
-        const child = spawn(shell, ['-lc', cmd], {
+        const child = spawn(shell, ['-lc', withShimPath(cmd)], {
           cwd: ctx.workdir,
           env: { ...process.env, ...ctx.env },
           stdio: ['ignore', 'pipe', 'pipe'],

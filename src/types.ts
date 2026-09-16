@@ -257,6 +257,8 @@ export interface RunResult {
   schema: 1;
   runId: string;
   brief: string;
+  /** Path the brief was loaded from, so a run can be re-scored later. */
+  briefPath: string;
   adapter: string;
   label: string;
   startedAt: string;

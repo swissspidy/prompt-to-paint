@@ -170,7 +170,7 @@ export async function judgeRun(
 
   if (degraded) {
     warnings.push(
-      'No judge backend: scores are entity coverage, not rubric correctness. AUC is not comparable to judged runs.',
+      'judge: no backend configured. Scores are entity coverage, not rubric correctness, and AUC is not comparable to judged runs.',
     );
     return {
       frames: frames.map((f) => ({
@@ -220,13 +220,13 @@ export async function judgeRun(
         calls++;
         const v = parseVerdict(raw);
         if (!v) {
-          warnings.push(`frame ${idx}: judge returned unparseable output`);
+          warnings.push(`judge: frame ${idx} returned unparseable output`);
         } else {
           verdicts.set(idx, v);
           cache[frame.dhash] = v;
         }
       } catch (e) {
-        warnings.push(`frame ${idx}: judge failed (${String(e).slice(0, 120)})`);
+        warnings.push(`judge: frame ${idx} failed (${String(e).slice(0, 200)})`);
       }
       opts.onProgress?.(++done, targets.length);
     }

@@ -144,3 +144,38 @@ test('cross-check surfaces disagreement with the agent self-reported API time', 
   });
   assert.equal(d.crossCheck.deltaMs, 3_000);
 });
+
+test('an adapter with no event stream attributes nothing to the model', () => {
+  // The floor control has no model at all, and a bare command wrapper exposes
+  // no stream. Charging their wall clock to "model thinking" would invent the
+  // exact finding this harness is built to test.
+  const { model, tool } = attributeAgentStream([{ tMs: 245_000, type: 'result' }], 245_000);
+  assert.equal(total(model), 0);
+  assert.equal(total(tool), 0);
+
+  const d = decompose({
+    wallMs: 245_000,
+    phases: [],
+    stream: { model, tool },
+    serverReadyMs: null, firstPaintMs: null, reportedApiMs: null,
+  });
+  assert.equal(d.buckets.model, 0);
+  assert.equal(d.buckets.residual, 245_000, 'unknown time is unaccounted, not attributed');
+});
+
+test('a missing event stream is explained, not blamed on the shims', () => {
+  const noStream = decompose({
+    wallMs: 100_000, phases: [phase('install', 0, 50_000)],
+    stream: { model: [], tool: [] }, hasStream: false,
+    serverReadyMs: null, firstPaintMs: null, reportedApiMs: null,
+  });
+  assert.ok(noStream.notes.some((n) => n.includes('exposes no event stream')));
+  assert.ok(noStream.notes.some((n) => n.includes('still come from the shims')));
+
+  const withStream = decompose({
+    wallMs: 100_000, phases: [],
+    stream: { model: [{ start: 0, end: 5_000 }], tool: [] }, hasStream: true,
+    serverReadyMs: null, firstPaintMs: null, reportedApiMs: null,
+  });
+  assert.ok(withStream.notes.some((n) => n.includes('shims do not wrap')));
+});
