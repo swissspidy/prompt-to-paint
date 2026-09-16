@@ -9,7 +9,16 @@ export interface Gray {
 
 /** Decode a PNG buffer to a luminance plane. */
 export function decodeGray(buf: Buffer): Gray {
-  const png = PNG.sync.read(buf);
+  return toGray(PNG.sync.read(buf));
+}
+
+interface RGBA {
+  width: number;
+  height: number;
+  data: Buffer | Uint8Array;
+}
+
+function toGray(png: RGBA): Gray {
   const { width: w, height: h } = png;
   const data = new Uint8Array(w * h);
   for (let i = 0, p = 0; i < data.length; i++, p += 4) {
@@ -140,7 +149,10 @@ export function downscalePngColor(buf: Buffer, maxW: number): Buffer {
  * movement that dhash structurally cannot see.
  */
 export function colorSignature(buf: Buffer, grid = 16): string {
-  const src = PNG.sync.read(buf);
+  return colorSignatureFrom(PNG.sync.read(buf), grid);
+}
+
+function colorSignatureFrom(src: RGBA, grid: number): string {
   const out = Buffer.alloc(grid * grid * 3);
   for (let gy = 0; gy < grid; gy++) {
     const y0 = Math.floor((gy * src.height) / grid);
@@ -196,4 +208,28 @@ export function colorDelta(a: string | null, b: string | null): ColorDelta {
     if (d > max) max = d;
   }
   return { mean: sum / cells, max };
+}
+
+export interface ShotAnalysis {
+  inkRatio: number;
+  dhash: string;
+  colorSig: string;
+}
+
+/**
+ * Everything the prober needs from one screenshot, decoding the PNG once.
+ *
+ * Decoding is by far the most expensive part of a capture, and doing it
+ * separately for the luminance hash and the colour grid meant paying it twice
+ * per frame. At a 250ms iteration poll that was enough to overrun the tick and
+ * drop frames, which costs exactly the resolution the iteration metric needs.
+ */
+export function analyzeShot(buf: Buffer, grid = 16): ShotAnalysis {
+  const png = PNG.sync.read(buf);
+  const gray = toGray(png);
+  return {
+    inkRatio: inkRatio(gray),
+    dhash: dhash(gray),
+    colorSig: colorSignatureFrom(png, grid),
+  };
 }

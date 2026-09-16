@@ -134,6 +134,23 @@ install > build > devserver_boot > model > tool_overhead > first_paint
   the report says outright that the split is not trustworthy, which is what
   happens when an agent shells out through a command the shims do not wrap.
 
+An adapter that exposes no event stream (the `exec` wrapper, and the floor
+control, which has no model at all) gets **nothing** attributed to `model` or
+`tool_overhead`. That time goes to `residual`, and the report says the gap is
+structural rather than a sign the shims missed something. Charging it to "model
+thinking" would invent the very result this harness exists to test — an earlier
+version did exactly that and reported 245s of model time for a control run with
+no model in it.
+
+### What the denominator excludes
+
+Attribution is computed over **active** wall clock: the settle window, and the
+wait after a control run first renders, are subtracted. The harness knows
+exactly what was happening then — nothing — so charging its own deliberate
+idling to `residual` would make a fast control run warn that its own split is
+untrustworthy. The curve still covers that time; only the attribution
+denominator excludes it, and the report states how much was excluded.
+
 ### Cross-check
 
 When the adapter can supply the agent's self-reported API time, the report
@@ -178,7 +195,46 @@ Three numbers, because they answer different questions:
   cost that neither timestamp captures.
 
 Iteration polls at 250ms by default; cold start polls at 1000ms. Edits are fast
-and deserve finer resolution.
+and deserve finer resolution. Once the agent's turn ends, the harness waits a
+grace period (20s) rather than the full timeout: an agent that has stopped
+talking is not about to change the page.
+
+### Writing a check expression
+
+The check decides whether an edit landed, so a wrong check reports a working
+agent as a failure. Two traps, both hit while building this:
+
+**A selector list matches in document order, not in the order you wrote it.**
+`document.querySelector('h1,h2,header')` on a page with `<header><h1>…</h1></header>`
+returns the `<header>`, not the `<h1>`. A real run had the agent correctly
+recolour the heading to `rgb(56,189,248)` in 4.7 seconds; the check read the
+wrapper's colour instead and reported the edit as never landing. Target the
+element the prompt names.
+
+**Check the property the prompt is about.** "Make the header blue" is a
+`backgroundColor` question for a banner and a `color` question for a heading.
+Where the element is uncertain, scan candidates by geometry -- a wide, short box
+near the top -- rather than betting on one selector, and accept a range of
+blues rather than one hex value, since agents pick their own shade.
+
+## Port hygiene
+
+A run **refuses to start** if anything is already answering on the target port,
+and kills whatever it started when it finishes.
+
+This is not tidiness. Agents launch dev servers as children of a shell inside a
+tool call, so terminating the agent does not reliably take the server with it. A
+leaked server would make the next run report a time-to-first-render near zero,
+for an application the agent under test never built — a wrong number that looks
+entirely plausible. Pass `--kill-port` to clear the port instead of aborting,
+and `--keep-server` to leave a finished run's server up for debugging.
+
+## Repeats
+
+`--repeat N` runs the same brief N times and reports the median with its full
+range, plus how many runs never rendered at all. When the range across repeats
+is wider than the gap between two agents, there is no ranking yet, only noise,
+and the output says so when the AUC range exceeds 0.15.
 
 ## Known limits
 

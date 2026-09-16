@@ -272,5 +272,10 @@ export interface RunResult {
   phases: PhaseEvent[];
   agentEvents: AgentEvent[];
   judge: { backend: string; model: string | null; framesJudged: number; degraded: boolean };
+  /**
+   * Set when the agent process died before the harness stopped it. A run that
+   * failed to launch must never be mistaken for an agent that built nothing.
+   */
+  agentFailure: { exitCode: number | null; atMs: number; logPath: string } | null;
   warnings: string[];
 }

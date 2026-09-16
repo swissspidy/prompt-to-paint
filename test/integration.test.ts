@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { loadBrief } from '../src/brief.js';
 import { runBenchmark } from '../src/run.js';
 import { ScriptedAdapter } from '../src/adapters/scripted.js';
+import { ExecAdapter } from '../src/adapters/exec.js';
 import { NullBackend } from '../src/judge/backends.js';
 import { findChromium } from '../src/probe/browser.js';
 import { readFile } from 'node:fs/promises';
@@ -72,6 +73,33 @@ test('harness recovers a known curve end to end', { skip: hasBrowser ? false : '
       iter.timeToFirstChangeMs !== null,
       'first visible change must be detected for a pure colour edit',
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a crashed agent is reported as a failure, not as a zero score', { skip: hasBrowser ? false : 'no chromium available', timeout: 120_000 }, async () => {
+  // The failure mode this guards against is silent: an agent that dies on bad
+  // flags produces a run that looks identical to an agent which built nothing
+  // -- a clean 0.000 AUC with no errors anywhere. That number is worse than
+  // no number, because it is publishable.
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-fail-'));
+  try {
+    const brief = await loadBrief('test/fixtures/calibration-brief.json');
+    const result = await runBenchmark({
+      brief: { ...brief, horizonSec: 12, iterations: [] },
+      adapter: new ExecAdapter({ command: 'echo "simulated launch failure" >&2; exit 3' }),
+      runDir: dir,
+      label: 'crash',
+      judgeBackend: new NullBackend(),
+      settleMs: 1000,
+      killPort: true,
+    });
+
+    assert.ok(result.agentFailure, 'the early non-zero exit must be recorded');
+    assert.equal(result.agentFailure?.exitCode, 3);
+    assert.match(result.warnings[0] ?? '', /AGENT FAILED/);
+    assert.equal(result.curve.auc, 0, 'the score is still zero -- but now it is explained');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

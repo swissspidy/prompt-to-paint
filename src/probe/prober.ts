@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { decodeGray, dhash, inkRatio, colorSignature } from './pixels.js';
+import { analyzeShot } from './pixels.js';
 import { classify, ERROR_SELECTORS } from './classify.js';
 import { findChromium } from './browser.js';
 import type { Frame } from '../types.js';
@@ -265,10 +265,10 @@ export class Prober {
     let sig: string | null = null;
     let screenshotPath: string | null = null;
     if (shot) {
-      const gray = decodeGray(shot);
-      ink = inkRatio(gray);
-      hash = dhash(gray);
-      sig = colorSignature(shot);
+      const a = analyzeShot(shot);
+      ink = a.inkRatio;
+      hash = a.dhash;
+      sig = a.colorSig;
       screenshotPath = join(this.opts.framesDir, `f${String(this.index).padStart(5, '0')}.png`);
       await writeFile(screenshotPath, shot);
     }
@@ -361,8 +361,14 @@ export class Prober {
     this.check = expr;
   }
 
-  /** Run one capture immediately, outside the poll schedule. */
+  /**
+   * Run one capture immediately, outside the poll schedule.
+   *
+   * Waits for any in-flight capture rather than skipping, so an iteration
+   * baseline is the current state and not a frame up to one interval stale.
+   */
   async sample(): Promise<Frame | null> {
+    for (let i = 0; i < 40 && this.capturing; i++) await new Promise((r) => setTimeout(r, 25));
     await this.tick();
     return this.frames.at(-1) ?? null;
   }

@@ -89,12 +89,25 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   await prober.start();
 
   const agentEvents: AgentEvent[] = [];
+  const agentLogPath = join(opts.runDir, 'agent.log');
   const handle = await adapter.start(brief.prompt + protocolSuffix(url), {
     workdir,
     env: shims.env,
     t0Epoch,
     onEvent: (e) => agentEvents.push(e),
-    logPath: join(opts.runDir, 'agent.log'),
+    logPath: agentLogPath,
+  });
+
+  // An agent that dies on its own -- bad flags, refused permissions, a crash --
+  // produces a run that looks exactly like an agent which built nothing: a
+  // clean 0.000 with no errors. Catching the early exit is what separates
+  // "measured a failure" from "measured nothing".
+  let agentFailure: RunResult['agentFailure'] = null;
+  let stopping = false;
+  void handle.done.then(({ exitCode }) => {
+    if (!stopping && exitCode !== 0) {
+      agentFailure = { exitCode, atMs: Date.now() - t0Epoch, logPath: agentLogPath };
+    }
   });
 
   // The cold-start window closes when the agent finishes its first turn, or at
@@ -164,6 +177,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     }
   }
 
+  stopping = true;
   await handle.stop();
   await prober.stop();
   staticServer?.close();
@@ -197,10 +211,12 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     reviewableThreshold: brief.reviewableThreshold,
   });
 
-  const { reportedApiMs } = await Promise.race([
-    handle.done,
-    sleep(2000).then(() => ({ exitCode: null, reportedApiMs: null })),
-  ]);
+  // Compare like with like: the agent's self-reported API time for the
+  // cold-start turn, not the whole session. Reading it off the final result
+  // event would fold in the iteration turns and show a phantom disagreement.
+  const coldResult = agentEvents.find((e) => e.type === 'result' && e.tMs <= coldEndMs);
+  const reportedApiMs =
+    (coldResult?.raw as { duration_api_ms?: number } | undefined)?.duration_api_ms ?? null;
 
   const stream = attributeAgentStream(agentEvents, coldEndMs);
   const decomposition = decompose({
@@ -213,6 +229,17 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     reportedApiMs,
   });
 
+  if (agentFailure) {
+    const f = agentFailure as NonNullable<RunResult['agentFailure']>;
+    warnings.unshift(
+      `AGENT FAILED: the agent process exited with code ${f.exitCode} after ${(f.atMs / 1000).toFixed(1)}s, before the harness stopped it. ` +
+        `These numbers measure a failed run, not agent performance. See ${f.logPath}.`,
+    );
+  } else if (adapter.name !== 'exec' && !agentEvents.some((e) => e.type === 'assistant')) {
+    warnings.unshift(
+      'AGENT PRODUCED NO OUTPUT: no assistant events were seen. The adapter may not have started the agent correctly; check agent.log.',
+    );
+  }
   if (prober.skippedTicks > 0)
     warnings.push(`${prober.skippedTicks} poll ticks were skipped because a capture overran the interval.`);
   if (prober.reloadCount > prober.frames.length * 0.25)
@@ -263,6 +290,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       framesJudged: judged.framesJudged,
       degraded: judged.degraded,
     },
+    agentFailure,
     warnings,
   };
 

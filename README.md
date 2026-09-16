@@ -113,6 +113,13 @@ screenshot), `phases.jsonl` and `agent.log`.
 agent that needs to run commands will stall waiting for approval. **Sandboxes
 only.**
 
+The CLI refuses to bypass permissions when running as **root**, so a
+containerised harness should run as a non-root user. For briefs that only need
+file writes (`static-page`), `--permission-mode acceptEdits` works as root. If
+an agent dies on startup the report says so in a banner rather than quietly
+reporting a 0.000 — a failed launch and an agent that built nothing produce
+identical numbers otherwise.
+
 ### Judging
 
 Frames are scored against per-brief rubrics of binary, screenshot-answerable

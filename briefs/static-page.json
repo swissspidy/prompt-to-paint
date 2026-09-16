@@ -4,26 +4,76 @@
   "prompt": "Create a single self-contained index.html file (inline CSS, no build step, no dependencies) for a conference schedule page. The heading reads \"DevConf 2026\". Show four sessions in a list; each has a time, a talk title, and a speaker name. Add a footer reading \"See you in Berlin\".",
   "horizonSec": 300,
   "reviewableThreshold": 0.5,
-  "target": { "port": 5173, "serveStatic": true },
+  "target": {
+    "port": 5173,
+    "serveStatic": true
+  },
   "entities": [
-    { "id": "title", "aliases": ["DevConf 2026", "DevConf"], "weight": 2 },
-    { "id": "footer", "aliases": ["See you in Berlin"] },
-    { "id": "time", "aliases": ["09:", "10:", "11:", "am", "pm"] },
-    { "id": "speaker-label", "aliases": ["speaker", "by "] }
+    {
+      "id": "title",
+      "aliases": [
+        "DevConf 2026",
+        "DevConf"
+      ],
+      "weight": 2
+    },
+    {
+      "id": "footer",
+      "aliases": [
+        "See you in Berlin"
+      ]
+    },
+    {
+      "id": "time",
+      "aliases": [
+        "09:",
+        "10:",
+        "11:",
+        "am",
+        "pm"
+      ]
+    },
+    {
+      "id": "speaker-label",
+      "aliases": [
+        "speaker",
+        "by "
+      ]
+    }
   ],
   "rubric": [
-    { "id": "renders", "description": "The page shows a real interface, not a blank page or an error.", "weight": 1 },
-    { "id": "heading", "description": "A heading reading \"DevConf 2026\" is visible.", "weight": 1 },
-    { "id": "sessions", "description": "At least four sessions are listed, each showing a time, a talk title, and a speaker name.", "weight": 2 },
-    { "id": "footer", "description": "A footer reading \"See you in Berlin\" is visible.", "weight": 1 },
-    { "id": "styled", "description": "The page is deliberately styled rather than raw unstyled HTML.", "weight": 1 }
+    {
+      "id": "renders",
+      "description": "The page shows a real interface, not a blank page or an error.",
+      "weight": 1
+    },
+    {
+      "id": "heading",
+      "description": "A heading reading \"DevConf 2026\" is visible.",
+      "weight": 1
+    },
+    {
+      "id": "sessions",
+      "description": "At least four sessions are listed, each showing a time, a talk title, and a speaker name.",
+      "weight": 2
+    },
+    {
+      "id": "footer",
+      "description": "A footer reading \"See you in Berlin\" is visible.",
+      "weight": 1
+    },
+    {
+      "id": "styled",
+      "description": "The page is deliberately styled rather than raw unstyled HTML.",
+      "weight": 1
+    }
   ],
   "iterations": [
     {
       "id": "header-blue",
       "prompt": "Make the page heading blue.",
       "description": "The canonical small visual edit, with no bundler in the loop.",
-      "check": "(() => { const h = document.querySelector('h1,h2,header'); if (!h) return false; const m = getComputedStyle(h).color.match(/\\d+/g); if (!m) return false; const [r,g,b] = m.map(Number); return b > 90 && b > r + 25 && b > g + 15; })()"
+      "check": "(() => { const h = document.querySelector('h1') || document.querySelector('h2'); if (!h) return false; const m = getComputedStyle(h).color.match(/\\d+/g); if (!m) return false; const [r,g,b] = m.map(Number); return b > 90 && b > r + 25 && b > g + 15; })()"
     }
   ]
 }

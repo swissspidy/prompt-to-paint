@@ -9,6 +9,11 @@ export interface IterateOptions {
   /** Poll interval during iteration. Finer than cold start; edits are fast. */
   intervalMs?: number;
   timeoutMs?: number;
+  /**
+   * How long to keep watching after the agent says it is finished. Once the
+   * turn has ended and the change has not appeared, it is not going to.
+   */
+  postTurnGraceMs?: number;
   /** dhash distance counting as a visible change. Lower than the judge's. */
   changeThreshold?: number;
   /** Worst-cell colour distance counting as a visible change (0..255). */
@@ -57,8 +62,10 @@ export async function runIteration(
   await handle.send?.(spec.prompt);
 
   let agentDoneMs: number | null = null;
+  let doneAtWallMs = Number.POSITIVE_INFINITY;
   void handle.waitForTurn(turnsBefore).then(() => {
     agentDoneMs = Date.now() - t0Epoch;
+    doneAtWallMs = Date.now();
   });
 
   let timeToFirstChangeMs: number | null = null;
@@ -69,8 +76,14 @@ export async function runIteration(
   let cursor = firstNewFrame;
   let lastFrameEnd = promptSentMs;
 
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline && timeToCorrectChangeMs === null) {
+  const hardDeadline = Date.now() + timeoutMs;
+  const grace = opts.postTurnGraceMs ?? 20_000;
+  // A failed edit should not cost the full timeout: an agent that has stopped
+  // talking is not about to change the page.
+  const deadline = (): number =>
+    agentDoneMs === null ? hardDeadline : Math.min(hardDeadline, doneAtWallMs + grace);
+
+  while (Date.now() < deadline() && timeToCorrectChangeMs === null) {
     await sleep(60);
     for (; cursor < prober.frames.length; cursor++) {
       const f: Frame = prober.frames[cursor]!;

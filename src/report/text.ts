@@ -8,6 +8,13 @@ const bar = (frac: number, width = 24): string =>
 export function renderText(r: RunResult): string {
   const L: string[] = [];
   L.push(`\n  ${r.brief} / ${r.label}  (${r.adapter})`);
+  if (r.agentFailure) {
+    L.push(`  ${'='.repeat(64)}`);
+    L.push(`  AGENT FAILED (exit ${r.agentFailure.exitCode} at ${(r.agentFailure.atMs / 1000).toFixed(1)}s).`);
+    L.push('  The numbers below describe a failed run, not agent performance.');
+    L.push(`  Log: ${r.agentFailure.logPath}`);
+    L.push(`  ${'='.repeat(64)}`);
+  }
   L.push(`  ${'-'.repeat(64)}`);
   L.push(`  AUC (headline)        ${r.curve.auc.toFixed(3)}   ${bar(r.curve.auc)}`);
   L.push(`  First render          ${secs(r.curve.ttfnbrMs)}`);

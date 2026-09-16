@@ -244,11 +244,19 @@ export function renderHtml(r: RunResult, outDir: string): string {
   .muted { color: var(--text-muted); }
   .bad { color: var(--series-2); font-weight: 600; }
   .warn { border-color: var(--series-4); }
+  .failbanner { border-color: var(--series-6); border-width: 2px; }
   .warn li, .notes li { margin-bottom: 5px; }
   ul.notes { color: var(--text-secondary); font-size: 13px; padding-left: 18px; margin: 12px 0 0; }
   @media (max-width: 560px) { .wrap { padding: 20px 16px 48px; } .tile .v { font-size: 24px; } }
 </style></head>
 <body><div class="wrap">
+  ${r.agentFailure
+    ? `<section class="panel failbanner"><h2 style="color:var(--series-6)">Agent failed</h2>
+        <p>The agent process exited with code <b>${r.agentFailure.exitCode}</b> after
+        ${(r.agentFailure.atMs / 1000).toFixed(1)}s, before the harness stopped it.
+        Everything below describes a failed run, not agent performance.</p>
+        <p class="muted">Log: <code>${esc(r.agentFailure.logPath)}</code></p></section>`
+    : ''}
   <h1>${esc(r.brief)} · ${esc(r.label)}</h1>
   <p class="sub">${esc(r.adapter)} · started ${esc(r.startedAt)} · horizon ${r.curve.horizonMs / 1000}s ·
     judge ${esc(r.judge.backend)}${r.judge.model ? ` (${esc(r.judge.model)})` : ''}, ${r.judge.framesJudged} frames scored${r.judge.degraded ? ' · <b>degraded: no judge</b>' : ''}</p>

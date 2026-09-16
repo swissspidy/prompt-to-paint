@@ -40,7 +40,8 @@ Options for run:
   --no-iterate skip the iteration phase
   --kill-port  free the target port first instead of refusing to run
   --keep-server leave the agent's dev server running after the run
-  --unsafe     pass --dangerously-skip-permissions to claude-code (sandboxes only)
+  --unsafe     pass --dangerously-skip-permissions to claude-code (non-root sandboxes only)
+  --permission-mode <mode>  permission mode for claude-code (default acceptEdits)
   --repeat N   run N times and report a median with its full range
 `;
 
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
       template: { type: 'string' }, port: { type: 'string' }, horizon: { type: 'string' },
       'no-iterate': { type: 'boolean' }, unsafe: { type: 'boolean' },
       'kill-port': { type: 'boolean' }, 'keep-server': { type: 'boolean' },
-      repeat: { type: 'string' },
+      repeat: { type: 'string' }, 'permission-mode': { type: 'string' },
     },
   });
 
@@ -143,11 +144,26 @@ async function main(): Promise<void> {
     brief = await loadBrief(values.brief);
     const kind = values.adapter ?? 'claude-code';
     if (kind === 'claude-code') {
-      adapter = new ClaudeCodeAdapter({ model: values.model, skipPermissions: values.unsafe });
+      // The CLI refuses to bypass permissions when running as root, and the
+      // resulting failure is opaque: the agent exits instantly and the run
+      // looks like an agent that simply built nothing.
+      if (values.unsafe && process.getuid?.() === 0) {
+        fail(
+          'the Claude Code CLI refuses --dangerously-skip-permissions as root.\n' +
+            '  Run the harness as a non-root user in your sandbox, or pass\n' +
+            '  --permission-mode acceptEdits for briefs that only need file writes\n' +
+            '  (an agent that must run shell commands will stall on approval).',
+        );
+      }
+      adapter = new ClaudeCodeAdapter({
+        model: values.model,
+        skipPermissions: values.unsafe,
+        permissionMode: values['permission-mode'],
+      });
       label ||= values.model ? `claude-code:${values.model}` : 'claude-code';
-      if (!values.unsafe)
+      if (!values.unsafe && !values['permission-mode'])
         console.log('  note: running with --permission-mode acceptEdits. An agent that needs to run\n' +
-                    '        commands will stall on approval. Use --unsafe in a sandbox.');
+                    '        commands will stall on approval. Use --unsafe in a non-root sandbox.');
     } else if (kind === 'exec') {
       if (!values.command) fail('--adapter exec needs --command');
       adapter = new ExecAdapter({ command: values.command });

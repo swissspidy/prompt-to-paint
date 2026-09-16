@@ -4,31 +4,108 @@
   "prompt": "Build a task board web app called \"Orbit\". It shows three columns -- Todo, In Progress, Done -- each holding task cards. Seed it with six tasks spread across the columns; each card shows a title, an assignee name, and a priority badge (High, Medium, or Low). There is an \"Add task\" button at the top right. The header reads \"Orbit\" with the subtitle \"Sprint 14\". Use a clean light theme.",
   "horizonSec": 480,
   "reviewableThreshold": 0.5,
-  "target": { "port": 5173 },
+  "target": {
+    "port": 5173
+  },
   "entities": [
-    { "id": "app-name", "aliases": ["Orbit"], "weight": 2 },
-    { "id": "sprint", "aliases": ["Sprint 14"] },
-    { "id": "col-todo", "aliases": ["Todo", "To do", "To-do"] },
-    { "id": "col-progress", "aliases": ["In Progress", "In-progress", "Doing"] },
-    { "id": "col-done", "aliases": ["Done", "Complete", "Completed"] },
-    { "id": "add-button", "aliases": ["Add task", "Add Task", "New task", "+ Add"] },
-    { "id": "priority", "aliases": ["High", "Medium", "Low"] }
+    {
+      "id": "app-name",
+      "aliases": [
+        "Orbit"
+      ],
+      "weight": 2
+    },
+    {
+      "id": "sprint",
+      "aliases": [
+        "Sprint 14"
+      ]
+    },
+    {
+      "id": "col-todo",
+      "aliases": [
+        "Todo",
+        "To do",
+        "To-do"
+      ]
+    },
+    {
+      "id": "col-progress",
+      "aliases": [
+        "In Progress",
+        "In-progress",
+        "Doing"
+      ]
+    },
+    {
+      "id": "col-done",
+      "aliases": [
+        "Done",
+        "Complete",
+        "Completed"
+      ]
+    },
+    {
+      "id": "add-button",
+      "aliases": [
+        "Add task",
+        "Add Task",
+        "New task",
+        "+ Add"
+      ]
+    },
+    {
+      "id": "priority",
+      "aliases": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    }
   ],
   "rubric": [
-    { "id": "renders", "description": "The page shows a real interface, not a blank page, a loading spinner, or an error overlay.", "weight": 1 },
-    { "id": "title", "description": "A header is visible reading \"Orbit\", with \"Sprint 14\" nearby as a subtitle.", "weight": 1 },
-    { "id": "three-columns", "description": "Three distinct columns are laid out side by side, labelled Todo, In Progress and Done.", "weight": 2 },
-    { "id": "cards", "description": "At least four task cards are visible, distributed across more than one column.", "weight": 2 },
-    { "id": "card-detail", "description": "Task cards show an assignee name and a priority badge, not just a bare title.", "weight": 1 },
-    { "id": "add-button", "description": "An \"Add task\" button is visible near the top right of the page.", "weight": 1 },
-    { "id": "styled", "description": "The layout is deliberately styled -- spacing, colour and alignment look designed rather than default browser output.", "weight": 1 }
+    {
+      "id": "renders",
+      "description": "The page shows a real interface, not a blank page, a loading spinner, or an error overlay.",
+      "weight": 1
+    },
+    {
+      "id": "title",
+      "description": "A header is visible reading \"Orbit\", with \"Sprint 14\" nearby as a subtitle.",
+      "weight": 1
+    },
+    {
+      "id": "three-columns",
+      "description": "Three distinct columns are laid out side by side, labelled Todo, In Progress and Done.",
+      "weight": 2
+    },
+    {
+      "id": "cards",
+      "description": "At least four task cards are visible, distributed across more than one column.",
+      "weight": 2
+    },
+    {
+      "id": "card-detail",
+      "description": "Task cards show an assignee name and a priority badge, not just a bare title.",
+      "weight": 1
+    },
+    {
+      "id": "add-button",
+      "description": "An \"Add task\" button is visible near the top right of the page.",
+      "weight": 1
+    },
+    {
+      "id": "styled",
+      "description": "The layout is deliberately styled -- spacing, colour and alignment look designed rather than default browser output.",
+      "weight": 1
+    }
   ],
   "iterations": [
     {
       "id": "header-blue",
       "prompt": "Make the header background blue.",
       "description": "The canonical small visual edit.",
-      "check": "(() => { const el = document.querySelector('header') || document.querySelector('[class*=header]') || document.body.firstElementChild; if (!el) return false; const m = getComputedStyle(el).backgroundColor.match(/\\d+/g); if (!m) return false; const [r,g,b] = m.map(Number); return b > 90 && b > r + 25 && b > g + 15; })()"
+      "check": "(() => { for (const el of document.querySelectorAll('header,nav,div,section')) { const r = el.getBoundingClientRect(); if (r.width < 400 || r.height < 40 || r.height > 320 || r.top > 260) continue; const m = getComputedStyle(el).backgroundColor.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } return false; })()"
     },
     {
       "id": "add-column",
