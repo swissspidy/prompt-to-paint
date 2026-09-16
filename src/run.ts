@@ -1,0 +1,224 @@
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Server } from 'node:http';
+import type { Adapter, AgentEvent, Brief, RunResult, IterationResult } from './types.js';
+import { Prober } from './probe/prober.js';
+import { entityCoverage } from './probe/entities.js';
+import { setupShims } from './decompose/shims.js';
+import { parsePhaseLog, attributeAgentStream, decompose } from './decompose/attribute.js';
+import { computeMetrics } from './metrics/curve.js';
+import { judgeRun } from './judge/judge.js';
+import type { JudgeBackend } from './judge/backends.js';
+import { runIteration } from './iterate.js';
+import { serveStatic } from './static-server.js';
+import { ensureFreePort, killPort } from './port.js';
+
+export interface RunOptions {
+  brief: Brief;
+  adapter: Adapter;
+  runDir: string;
+  label: string;
+  judgeBackend: JudgeBackend;
+  /** Extra observation after the agent stops, to catch late breakage. */
+  settleMs?: number;
+  /** Free the target port before starting instead of refusing to run. */
+  killPort?: boolean;
+  /** Leave any server the run started alive (for debugging a finished run). */
+  keepServer?: boolean;
+  pollMs?: number;
+  iterationPollMs?: number;
+  skipIterations?: boolean;
+  onLog?: (msg: string) => void;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Every agent is told the same thing about where to serve, so a run is never
+ * lost to a port mismatch. This is part of the protocol, not a hint: it is
+ * appended verbatim to every brief for every agent.
+ */
+export function protocolSuffix(url: string): string {
+  return `\n\nWhen the app is ready to look at, serve it at ${url} and leave the server running. Do not stop the server when you are done.`;
+}
+
+export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
+  const { brief, adapter } = opts;
+  const log = opts.onLog ?? (() => {});
+  const runId = `${brief.id}-${adapter.name}-${Date.now().toString(36)}`;
+  const workdir = join(opts.runDir, 'workdir');
+  const framesDir = join(opts.runDir, 'frames');
+  await mkdir(workdir, { recursive: true });
+
+  const port = brief.target?.port ?? 5173;
+  const url = brief.target?.url ?? `http://127.0.0.1:${port}/`;
+  const horizonMs = brief.horizonSec * 1000;
+  const warnings: string[] = [];
+
+  // Refuse to measure whatever a previous run left behind.
+  await ensureFreePort(url, port, opts.killPort ?? false);
+
+  const shims = await setupShims(opts.runDir);
+  const t0Epoch = Date.now();
+
+  let staticServer: Server | null = null;
+  if (brief.target?.serveStatic) {
+    staticServer = await serveStatic(workdir, port);
+    log(`serving ${workdir} statically on ${url}`);
+  }
+
+  const prober = new Prober({
+    url,
+    framesDir,
+    t0Epoch,
+    intervalMs: opts.pollMs ?? 1000,
+    analyze: (text) => {
+      const c = entityCoverage(text, brief.entities);
+      return { entityCoverage: c.coverage, entitiesFound: c.found };
+    },
+  });
+  await prober.start();
+
+  const agentEvents: AgentEvent[] = [];
+  const handle = await adapter.start(brief.prompt + protocolSuffix(url), {
+    workdir,
+    env: shims.env,
+    t0Epoch,
+    onEvent: (e) => agentEvents.push(e),
+    logPath: join(opts.runDir, 'agent.log'),
+  });
+
+  // The cold-start window closes when the agent finishes its first turn, or at
+  // the horizon, whichever comes first. Probing until the horizon regardless
+  // would multiply benchmark wall time for no extra signal, since the curve
+  // holds its last value anyway.
+  let hitHorizon = false;
+  await Promise.race([
+    handle.waitForTurn(0),
+    sleep(horizonMs).then(() => {
+      hitHorizon = true;
+    }),
+  ]);
+  if (hitHorizon) warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
+  log(hitHorizon ? 'horizon reached' : 'agent finished first turn');
+
+  // Keep watching briefly: builds land after the agent stops talking, and some
+  // agents break the page on their way out.
+  await sleep(opts.settleMs ?? 15_000);
+  const coldEndMs = Date.now() - t0Epoch;
+
+  const iterations: IterationResult[] = [];
+  const rendering = prober.frames.some((f) => f.class === 'render');
+  if (!opts.skipIterations && brief.iterations?.length) {
+    if (!rendering) {
+      warnings.push('Skipped iterations: the app never rendered, so there is nothing to edit.');
+    } else if (!handle.send) {
+      warnings.push('Skipped iterations: this adapter cannot send follow-up prompts.');
+    } else {
+      for (const spec of brief.iterations) {
+        log(`iteration: ${spec.id}`);
+        const res = await runIteration(spec, {
+          prober,
+          handle,
+          t0Epoch,
+          intervalMs: opts.iterationPollMs ?? 250,
+        });
+        iterations.push(res);
+        if (!res.ok) warnings.push(`Iteration "${spec.id}" never landed within its timeout.`);
+      }
+    }
+  }
+
+  await handle.stop();
+  await prober.stop();
+  staticServer?.close();
+  // Terminating the agent does not reliably take its dev server with it, and a
+  // survivor would corrupt the next run against this port.
+  if (!opts.keepServer) await killPort(port);
+  const wallMs = Date.now() - t0Epoch;
+
+  // ---- analysis (strictly after the run; never inside the measured window) --
+  const phaseText = existsSync(shims.phaseLog) ? await readFile(shims.phaseLog, 'utf8') : '';
+  const phases = parsePhaseLog(phaseText, t0Epoch);
+
+  // The cold-start curve must not see the iteration edits: turning the header
+  // blue is a different experiment, and scoring those frames against the
+  // original brief would blend two measurements into one number.
+  const coldFrames = prober.frames.filter((f) => f.tMs <= coldEndMs);
+
+  log(`judging ${coldFrames.length} cold-start frames`);
+  const judged = await judgeRun(coldFrames, brief, {
+    backend: opts.judgeBackend,
+    onProgress: (d, t) => d % 5 === 0 && log(`  judged ${d}/${t}`),
+  });
+  warnings.push(...judged.warnings);
+
+  const serverReadyMs = prober.frames.find((f) => f.httpStatus !== null)?.tMs ?? null;
+  const firstPaintMs = judged.frames.find((f) => f.class === 'render')?.tMs ?? null;
+
+  const curve = computeMetrics(judged.frames, {
+    horizonMs,
+    runEndMs: coldEndMs,
+    reviewableThreshold: brief.reviewableThreshold,
+  });
+
+  const { reportedApiMs } = await Promise.race([
+    handle.done,
+    sleep(2000).then(() => ({ exitCode: null, reportedApiMs: null })),
+  ]);
+
+  const decomposition = decompose({
+    wallMs: coldEndMs,
+    phases,
+    stream: attributeAgentStream(agentEvents, coldEndMs),
+    serverReadyMs,
+    firstPaintMs,
+    reportedApiMs,
+  });
+
+  if (prober.skippedTicks > 0)
+    warnings.push(`${prober.skippedTicks} poll ticks were skipped because a capture overran the interval.`);
+  if (prober.reloadCount > prober.frames.length * 0.25)
+    warnings.push(
+      `The prober reloaded ${prober.reloadCount} times across ${prober.frames.length} frames. The served document changes on nearly every request (a per-request nonce or timestamp), so reload-driven timings here are unreliable.`,
+    );
+
+  // Entity coverage was computed during the run from the full text; what is
+  // stored is for eyeballing why a frame scored as it did. Keeping 20KB of DOM
+  // text per frame would make result.json hundreds of megabytes on a long run.
+  const STORED_TEXT = 4000;
+  const slimFrames = judged.frames.map((f) =>
+    f.text.length > STORED_TEXT
+      ? { ...f, text: `${f.text.slice(0, STORED_TEXT)}\n...[truncated ${f.text.length - STORED_TEXT} chars]` }
+      : f,
+  );
+
+  const result: RunResult = {
+    schema: 1,
+    runId,
+    brief: brief.id,
+    adapter: adapter.name,
+    label: opts.label,
+    startedAt: new Date(t0Epoch).toISOString(),
+    t0Epoch,
+    wallMs,
+    url,
+    curve,
+    decomposition,
+    iterations,
+    frames: slimFrames,
+    phases,
+    agentEvents,
+    judge: {
+      backend: opts.judgeBackend.name,
+      model: opts.judgeBackend.model,
+      framesJudged: judged.framesJudged,
+      degraded: judged.degraded,
+    },
+    warnings,
+  };
+
+  await writeFile(join(opts.runDir, 'result.json'), JSON.stringify(result, null, 2));
+  return result;
+}

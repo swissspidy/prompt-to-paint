@@ -1,0 +1,36 @@
+{
+  "steps": [
+    {
+      "atMs": 0,
+      "write": {
+        "path": "index.html",
+        "content": "<!doctype html><meta charset=utf-8><title>App</title><body>Loading...</body>"
+      }
+    },
+    {
+      "atMs": 4000,
+      "write": {
+        "path": "index.html",
+        "content": "<!doctype html><meta charset=utf-8><title>App</title><body style=\"font-family:sans-serif;padding:40px\"><h1>DevConf 2026</h1></body>"
+      }
+    },
+    {
+      "atMs": 9000,
+      "write": {
+        "path": "index.html",
+        "content": "<!doctype html><meta charset=utf-8><title>App</title><body style=\"font-family:sans-serif;padding:40px\"><h1>DevConf 2026</h1><ul><li>09:00 - Opening keynote - Ada Lovelace</li><li>10:30 - Type systems - Grace Hopper</li></ul><footer>See you in Berlin</footer></body>"
+      }
+    }
+  ],
+  "iterationSteps": {
+    "0": [
+      {
+        "atMs": 1500,
+        "write": {
+          "path": "index.html",
+          "content": "<!doctype html><meta charset=utf-8><title>App</title><body style=\"font-family:sans-serif;padding:40px\"><h1 style=\"color:#1544d6\">DevConf 2026</h1><ul><li>09:00 - Opening keynote - Ada Lovelace</li><li>10:30 - Type systems - Grace Hopper</li></ul><footer>See you in Berlin</footer></body>"
+        }
+      }
+    ]
+  }
+}

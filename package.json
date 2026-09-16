@@ -1,0 +1,31 @@
+{
+  "name": "prompt-to-paint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Measures how long an agent takes to render something a human can react to, and where that time actually goes.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "p2p": "./bin/p2p.js"
+  },
+  "scripts": {
+    "p2p": "tsx src/cli.ts",
+    "test": "tsx --test test/curve.test.ts test/decompose.test.ts test/judge.test.ts test/probe.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "tsx --test test/integration.test.ts",
+    "test:all": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

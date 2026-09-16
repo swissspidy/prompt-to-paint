@@ -1,0 +1,122 @@
+import type { AgentRunHandle, Frame, IterationResult, IterationSpec } from './types.js';
+import type { Prober } from './probe/prober.js';
+import { hamming, colorDelta } from './probe/pixels.js';
+
+export interface IterateOptions {
+  prober: Prober;
+  handle: AgentRunHandle;
+  t0Epoch: number;
+  /** Poll interval during iteration. Finer than cold start; edits are fast. */
+  intervalMs?: number;
+  timeoutMs?: number;
+  /** dhash distance counting as a visible change. Lower than the judge's. */
+  changeThreshold?: number;
+  /** Worst-cell colour distance counting as a visible change (0..255). */
+  colorThreshold?: number;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Measures one edit, from prompt to visible change.
+ *
+ * Two different things get timed, because they answer different questions.
+ * Time to first change is how long the loop takes to show *any* sign of life,
+ * which is what makes an edit feel responsive. Time to correct change is when
+ * the edit actually landed, decided by the spec's in-page predicate. An agent
+ * that repaints instantly and gets it right forty seconds later is a different
+ * experience from one that does both at twelve seconds, and a single number
+ * would hide that.
+ *
+ * Breakage is tracked separately: white-screening the app for eight seconds
+ * mid-edit is a real cost that neither timestamp captures on its own.
+ */
+export async function runIteration(
+  spec: IterationSpec,
+  opts: IterateOptions,
+): Promise<IterationResult> {
+  const { prober, handle, t0Epoch } = opts;
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+  const changeThreshold = opts.changeThreshold ?? 3;
+  const colorThreshold = opts.colorThreshold ?? 8;
+  const confirmFrames = spec.confirmFrames ?? 2;
+
+  const coldInterval = prober.intervalMs;
+  prober.setInterval(opts.intervalMs ?? 250);
+  prober.setCheck(spec.check);
+
+  // Baseline: the state a human would be looking at as they type the prompt.
+  const baseline = await prober.sample();
+  const baselineHash = baseline?.dhash ?? null;
+  const baselineSig = baseline?.colorSig ?? null;
+  const firstNewFrame = prober.frames.length;
+
+  const turnsBefore = handle.turns();
+  const promptSentEpoch = Date.now();
+  const promptSentMs = promptSentEpoch - t0Epoch;
+  await handle.send?.(spec.prompt);
+
+  let agentDoneMs: number | null = null;
+  void handle.waitForTurn(turnsBefore).then(() => {
+    agentDoneMs = Date.now() - t0Epoch;
+  });
+
+  let timeToFirstChangeMs: number | null = null;
+  let timeToCorrectChangeMs: number | null = null;
+  let consecutivePasses = 0;
+  let firstPassMs: number | null = null;
+  let brokenMs = 0;
+  let cursor = firstNewFrame;
+  let lastFrameEnd = promptSentMs;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && timeToCorrectChangeMs === null) {
+    await sleep(60);
+    for (; cursor < prober.frames.length; cursor++) {
+      const f: Frame = prober.frames[cursor]!;
+      if (f.tMs < promptSentMs) continue;
+
+      if (f.class === 'error' || f.class === 'blank' || f.class === 'unreachable') {
+        brokenMs += Math.max(0, f.tMs - lastFrameEnd);
+      }
+      lastFrameEnd = f.tMs;
+
+      // Structure OR colour. A recolour moves the colour signature while
+      // leaving the luminance hash almost untouched; a layout change does the
+      // reverse. Either one is a visible change to the person watching.
+      const structuralMove =
+        f.dhash && baselineHash ? hamming(f.dhash, baselineHash) > changeThreshold : false;
+      const colourMove = colorDelta(f.colorSig, baselineSig).max > colorThreshold;
+      if (timeToFirstChangeMs === null && (structuralMove || colourMove)) {
+        timeToFirstChangeMs = f.tMs - promptSentMs;
+      }
+
+      if (f.checkPassed) {
+        if (consecutivePasses === 0) firstPassMs = f.tMs;
+        consecutivePasses++;
+        // Require the change to persist: HMR can flash a half-applied state.
+        if (consecutivePasses >= confirmFrames) {
+          timeToCorrectChangeMs = (firstPassMs ?? f.tMs) - promptSentMs;
+          break;
+        }
+      } else {
+        consecutivePasses = 0;
+        firstPassMs = null;
+      }
+    }
+  }
+
+  prober.setCheck(null);
+  prober.setInterval(coldInterval);
+
+  return {
+    id: spec.id,
+    prompt: spec.prompt,
+    promptSentMs,
+    timeToFirstChangeMs,
+    timeToCorrectChangeMs,
+    agentDoneMs,
+    brokenMs,
+    ok: timeToCorrectChangeMs !== null,
+  };
+}
