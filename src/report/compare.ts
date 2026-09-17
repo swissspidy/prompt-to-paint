@@ -7,6 +7,12 @@ const esc = (s: string): string =>
 const secs = (ms: number | null): string => (ms === null ? '--' : `${(ms / 1000).toFixed(1)}s`);
 
 export interface Ranked {
+  /**
+   * Position in the input array. Labels are not unique -- `--repeat 5` produces
+   * five runs with the same one -- so anything that needs to get back to the
+   * run behind a row has to key on this rather than on the name.
+   */
+  index: number;
   label: string;
   auc: number;
   finalScore: number;
@@ -17,6 +23,15 @@ export interface Ranked {
   rankTtfrr: number;
 }
 
+/**
+ * Competition ranking: equal values share a position, and the next one skips.
+ *
+ * Handing tied runs distinct ranks is not a cosmetic problem here. The whole
+ * point of the table is the places where ranking by trajectory disagrees with
+ * ranking by final score, and two runs that both finish at 1.00 would be given
+ * an arbitrary order by final score and then flagged as a disagreement with
+ * AUC -- manufacturing the exact finding the harness exists to test for.
+ */
 const rankBy = <T>(items: T[], key: (t: T) => number | null, asc: boolean): Map<T, number> => {
   const sorted = [...items].sort((a, b) => {
     const av = key(a), bv = key(b);
@@ -25,7 +40,17 @@ const rankBy = <T>(items: T[], key: (t: T) => number | null, asc: boolean): Map<
     if (bv === null) return -1;
     return asc ? av - bv : bv - av;
   });
-  return new Map(sorted.map((t, i) => [t, i + 1]));
+  const out = new Map<T, number>();
+  let prev: number | null | undefined;
+  let prevRank = 0;
+  sorted.forEach((t, i) => {
+    const v = key(t);
+    const tied = i > 0 && v === prev;
+    prevRank = tied ? prevRank : i + 1;
+    prev = v;
+    out.set(t, prevRank);
+  });
+  return out;
 };
 
 /**
@@ -40,7 +65,8 @@ export function rank(runs: RunResult[]): Ranked[] {
   const byAuc = rankBy(runs, (r) => r.curve.auc, false);
   const byFinal = rankBy(runs, (r) => r.curve.finalScore, false);
   const byTtfrr = rankBy(runs, (r) => r.curve.ttfrrMs, true);
-  return runs.map((r) => ({
+  return runs.map((r, index) => ({
+    index,
     label: r.label || r.adapter,
     auc: r.curve.auc,
     finalScore: r.curve.finalScore,
@@ -178,8 +204,8 @@ export function renderCompareHtml(runs: RunResult[]): string {
 <section class="panel"><h2>Ranking</h2>
 <table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final score</th>
 <th class="num">First render</th><th class="num">First reviewable</th><th class="num">Rank by AUC</th><th class="num">Rank by final</th></tr></thead><tbody>
-${rows.map((r, i) => `<tr>
-  <td><span class="swatch" style="background:var(--series-${(runs.findIndex((x) => (x.label || x.adapter) === r.label) % 6) + 1})"></span>${esc(r.label)}</td>
+${rows.map((r) => `<tr>
+  <td><span class="swatch" style="background:var(--series-${(r.index % 6) + 1})"></span>${esc(r.label)}</td>
   <td class="num"><b>${r.auc.toFixed(3)}</b></td><td class="num">${r.finalScore.toFixed(2)}</td>
   <td class="num">${secs(r.ttfnbrMs)}</td><td class="num">${secs(r.ttfrrMs)}</td>
   <td class="num">${r.rankAuc}</td>

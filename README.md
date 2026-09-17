@@ -110,13 +110,17 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter exec \
 # rank runs by trajectory and by final score, side by side
 npm run p2p -- compare runs/*/result.json
 
+# the same ranking, with every run replayed side by side on one clock
+npm run p2p -- leaderboard runs/*/result.json
+
 # one run is not a measurement -- report a median and its range
 npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe --repeat 5
 ```
 
 Each run writes a directory containing `result.json` (every frame, phase and
-event), `report.html` (curve, decomposition, filmstrip), `frames/` (every
-screenshot), `phases.jsonl` and `agent.log`.
+event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
+screenshot per distinct visual state), `prompt.txt` (the exact text the agent
+was given), `phases.jsonl` and `agent.log`. With `--video`, also `video.webm`.
 
 `--unsafe` passes `--dangerously-skip-permissions` to Claude Code. Without it an
 agent that needs to run commands will stall waiting for approval. **Sandboxes
@@ -129,7 +133,81 @@ an agent dies on startup the report says so in a banner rather than quietly
 reporting a 0.000 — a failed launch and an agent that built nothing produce
 identical numbers otherwise.
 
-### Judging
+## Watching a run happen
+
+A run is several minutes of an agent working somewhere else, so the CLI shows a
+live status line: elapsed time against the horizon, what is on screen right now,
+how much of the brief is visible, how many frames have been captured, and what
+the agent last did — with how long ago, which is the number that separates
+"working" from "wedged".
+
+```
+  02:14/08:00  ·  ● rendering  ·   71% of brief on screen  ·  134 frames / 19 distinct  ·  tool: Write (00:08 ago)
+```
+
+`--headed` shows the prober's browser window so you can watch the page being
+built. `--video` records the whole session to `video.webm` through Chromium's
+screencast — real video, no ffmpeg — at the cost of a little more browser work
+during the run, which is why it is opt-in.
+
+## The leaderboard
+
+```bash
+npm run p2p -- leaderboard runs/*/result.json --out runs/leaderboard.html \
+  --title "Greenfield task board, five agents"
+```
+
+One page with the ranking table, the overlaid curves, and **every run replayed
+side by side on a single shared clock** — play, pause, scrub, 1x to 30x. At any
+instant you see what each agent had on screen at that moment, its score, and
+whether it was still serving an error page.
+
+The players are driven by the same frames the scores were computed from, so the
+table and the pictures cannot disagree: a run that wins on area under the curve
+is visibly ahead at the four-minute mark, and if it is not, the number is wrong
+and this is where you notice.
+
+Runs must share a brief and a horizon; the command refuses to rank runs that do
+not, because AUC has the horizon in its denominator.
+
+## What every agent is told, and how a run ends
+
+Every brief is handed to the agent with the same block appended, identically,
+for every agent. It is part of the measurement rather than a hint to one of
+them, and the exact text sent is saved as `prompt.txt` beside the result. It
+says: a browser is already watching this URL and screenshots it every second;
+get something on screen early and refine it in place; start the dev server in
+the background; and create an empty `.p2p-done` when you consider it finished.
+
+Each of those exists because leaving it out broke a run:
+
+- **"Render early"** replaced "when the app is ready to look at, serve it",
+  which asked for precisely the behaviour this metric is built to catch — a
+  blank page for the whole run, and a first frame that is already the finished
+  app. Telling every agent the clock is running is the fair version of that
+  instruction. `--no-render-early` drops the clause and measures unprompted
+  behaviour, which is a different experiment; the two are not comparable.
+- **"Background the server"** because a dev server in the foreground never
+  returns, so the agent's turn never completes.
+- **`.p2p-done`** because a turn that never completes left the horizon as the
+  only way for a run to end. The sentinel works for every adapter, including
+  the ones whose event stream this harness can only partly read.
+
+The window closes on whichever comes first: the agent's turn completing
+(`turn`), the sentinel appearing (`signal`), **quiescence** (`quiet`), or the
+horizon (`horizon`). The reason is recorded with the result and printed by
+`p2p leaderboard`, because a run the agent finished and a run that was cut off
+are not the same measurement.
+
+Quiescence is the backstop for an agent that ignores the sentinel: no visible
+change, no agent output, and no shimmed command running, all at once, for
+`--quiet-for` seconds (default 120, `0` to disable), with something already on
+screen. All three signals are required because each one alone has a false
+positive that would cut a working run short. Ending early cannot change the AUC
+— the curve holds its last value to the horizon regardless — but it can miss a
+late improvement, so a `quiet` run says so in its caveats.
+
+## Judging
 
 Frames are scored against per-brief rubrics of binary, screenshot-answerable
 criteria — "are three columns visible", not "rate this 0-10" — so scores are
@@ -330,6 +408,13 @@ definitions arrive in one pull request.
   decomposition is untrustworthy. The curve and wall clock stay valid.
 - **Entity coverage is text-only** — it cannot see text baked into images,
   canvas, or shadow DOM.
+- **The protocol suffix is part of the measurement.** These numbers describe
+  agents that were told a browser is watching and asked to render early. That
+  is a fair instruction because every agent gets it verbatim, but it is not the
+  same as measuring what an agent does unprompted.
+- **A run ended by quiescence could have missed a late improvement.** It never
+  changes the AUC, since the curve holds forward either way, and the report
+  names the runs it happened to.
 
 Full definitions, conventions and edge cases: [`docs/METRIC.md`](docs/METRIC.md).
 

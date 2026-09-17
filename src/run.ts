@@ -1,8 +1,10 @@
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import type { Adapter, AgentEvent, AgentRunHandle, Brief, RunResult, IterationResult } from './types.ts';
+import type {
+  Adapter, AgentEvent, AgentRunHandle, Brief, Frame, RunEndReason, RunResult, IterationResult,
+} from './types.ts';
 import { Prober } from './probe/prober.ts';
 import { entityCoverage } from './probe/entities.ts';
 import { setupShims } from './decompose/shims.ts';
@@ -38,16 +40,81 @@ export interface RunOptions {
   pollMs?: number;
   iterationPollMs?: number;
   skipIterations?: boolean;
+  /**
+   * End the cold-start window after this long with no visible change, no agent
+   * output and no toolchain activity. 0 disables it. The curve holds its last
+   * value to the horizon either way, so stopping a settled run early changes
+   * the AUC by nothing and saves the rest of the horizon.
+   */
+  quietForMs?: number;
+  /** Drop the "render something early" clause from the protocol suffix. */
+  noRenderEarly?: boolean;
+  /** Show the prober's browser window. Needs a display. */
+  headed?: boolean;
+  /** Record the prober's session to this path as WebM. */
+  videoPath?: string;
   onLog?: (msg: string) => void;
+  onFrame?: (f: Frame) => void;
+  onAgentEvent?: (e: AgentEvent) => void;
 }
 
 /**
- * Every agent is told the same thing about where to serve, so a run is never
- * lost to a port mismatch. This is part of the protocol, not a hint: it is
- * appended verbatim to every brief for every agent.
+ * The file an agent creates to say it is finished.
+ *
+ * A sentinel rather than a stream event because it works for every adapter,
+ * including the ones whose event stream this harness can only partly read. An
+ * agent whose last act is starting a dev server never emits a turn-complete
+ * event at all -- the server holds the tool call open forever -- so without
+ * this the run had no way to end except the horizon.
  */
-export function protocolSuffix(url: string): string {
-  return `\n\nWhen the app is ready to look at, serve it at ${url} and leave the server running. Do not stop the server when you are done.`;
+export const DONE_SENTINEL = '.p2p-done';
+
+export interface ProtocolOptions {
+  /**
+   * Ask for an early rough render. On by default, and identical for every
+   * agent, so the metric measures who acts on it rather than who happens to
+   * work that way. Turn it off to measure unprompted behaviour instead --
+   * a different experiment, and not comparable with the default one.
+   */
+  renderEarly?: boolean;
+}
+
+/**
+ * Every agent is told the same thing about how the run is observed, so a run
+ * is never lost to a port mismatch, a foreground dev server, or an agent that
+ * builds the whole app before serving any of it. This is part of the protocol,
+ * not a hint: it is appended verbatim to every brief for every agent.
+ *
+ * The earlier version of this said "when the app is ready to look at, serve
+ * it", which asked for exactly the behaviour the metric is built to catch --
+ * every frame before the end blank, and the first render already the finished
+ * app. Telling every agent the clock is running is the fair version of that
+ * instruction.
+ */
+export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string {
+  const L = [
+    '',
+    '---',
+    'How this run is observed:',
+    '',
+    `- A browser is already open at ${url} and screenshots it every second, starting`,
+    '  now. Serve the app there, and leave the server running when you are done.',
+  ];
+  if (opts.renderEarly !== false)
+    L.push(
+      '- Get something on screen as early as you can and then refine it in place. A',
+      '  rough page that renders in the first minute counts for more here than a',
+      '  perfect one that only appears at the end.',
+    );
+  L.push(
+    '- Start the dev server in the background so it does not block you, e.g.',
+    '  `npm run dev > dev.log 2>&1 &`. A server left in the foreground never returns,',
+    '  so your turn can never finish.',
+    `- When you consider the app done, create an empty file named \`${DONE_SENTINEL}\` in the`,
+    '  project root. That is what stops the clock. Do not create it before the app is',
+    '  serving, and do not stop the server after creating it.',
+  );
+  return `\n\n${L.join('\n')}\n`;
 }
 
 /**
@@ -81,6 +148,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     framesDir,
     t0Epoch,
     intervalMs: opts.pollMs ?? 1000,
+    headed: opts.headed,
+    videoPath: opts.videoPath,
+    onFrame: opts.onFrame,
     analyze: (text) => {
       const c = entityCoverage(text, brief.entities);
       return { entityCoverage: c.coverage, entitiesFound: c.found };
@@ -99,6 +169,62 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   let activeWallMs = 0;
   let observationOnlyMs = 0;
   let cleaned = false;
+  let endReason: RunEndReason = 'horizon';
+
+  // Shared by every branch of the end-of-window race below. The losing branches
+  // keep running after Promise.race resolves, and a pending timer holds the
+  // whole process open, so they all take this signal.
+  const raceCtl = new AbortController();
+  const { signal } = raceCtl;
+  const quietForMs = opts.quietForMs ?? 120_000;
+
+  /**
+   * Resolve once the run has plainly stopped moving.
+   *
+   * Three independent signals have to agree, because any one of them alone has
+   * a false positive that would cut a working run short. The page can sit
+   * unchanged through a long install; the agent can go quiet while a build
+   * runs; a shimmed command can be running with nothing to show for it yet. All
+   * three idle at once, with something already on screen, is a finished run.
+   *
+   * Cheap on purpose: the frame scan walks forward from a cursor and the
+   * toolchain check is one stat() of the phase log, so this costs nothing
+   * against the thing it is watching.
+   */
+  const waitForQuiet = async (): Promise<RunEndReason> => {
+    let cursor = 0;
+    let lastVisualChangeMs = 0;
+    let prev: Frame | null = null;
+    let lastPhaseSize = -1;
+    let lastPhaseChangeMs = 0;
+    for (;;) {
+      await sleep(Math.min(5000, Math.max(1000, quietForMs / 10)), signal);
+      // Losing the race means this promise is never awaited again; returning
+      // is only a way to stop looping.
+      if (signal.aborted) return 'quiet';
+      for (; cursor < prober.frames.length; cursor++) {
+        const f = prober.frames[cursor]!;
+        const moved =
+          prev === null ||
+          f.dhash !== prev.dhash ||
+          f.colorSig !== prev.colorSig ||
+          f.domSignature !== prev.domSignature ||
+          f.class !== prev.class;
+        if (moved) lastVisualChangeMs = f.tMs;
+        prev = f;
+      }
+      const size = await stat(shims.phaseLog).then((st) => st.size).catch(() => -1);
+      const nowMs = Date.now() - t0Epoch;
+      if (size !== lastPhaseSize) {
+        lastPhaseSize = size;
+        lastPhaseChangeMs = nowMs;
+      }
+      if (!prober.frames.some((f) => f.class === 'render')) continue;
+      const lastAgentMs = agentEvents.at(-1)?.tMs ?? 0;
+      const lastAnythingMs = Math.max(lastVisualChangeMs, lastAgentMs, lastPhaseChangeMs);
+      if (nowMs - lastAnythingMs >= quietForMs) return 'quiet';
+    }
+  };
 
   /**
    * Stop everything this run started.
@@ -131,11 +257,17 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
 
     await prober.start();
 
-    handle = await adapter.start(brief.prompt + protocolSuffix(url), {
+    const prompt =
+      brief.prompt + protocolSuffix(url, { renderEarly: !opts.noRenderEarly });
+    await writeFile(join(opts.runDir, 'prompt.txt'), prompt);
+    handle = await adapter.start(prompt, {
       workdir,
       env: shims.env,
       t0Epoch,
-      onEvent: (e) => agentEvents.push(e),
+      onEvent: (e) => {
+        agentEvents.push(e);
+        opts.onAgentEvent?.(e);
+      },
       logPath: agentLogPath,
     });
 
@@ -149,26 +281,38 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       }
     });
 
-    // The cold-start window closes when the agent finishes its first turn, or
-    // at the horizon, whichever comes first. Probing until the horizon
-    // regardless would multiply benchmark wall time for no extra signal, since
-    // the curve holds its last value anyway.
-    type EndReason = 'turn' | 'horizon' | 'rendered';
-    // The losing branches keep running after Promise.race resolves, and a
-    // pending timer holds the whole process open. Waiting out an eight-minute
-    // horizon that the agent beat in thirty seconds is not a hypothetical: the
-    // CLI printed its report and then sat idle for the rest of it. Aborting
-    // stops the render poll and clears the horizon timer together.
-    const raceCtl = new AbortController();
-    const races: Array<Promise<EndReason>> = [
-      handle.waitForTurn(0).then((): EndReason => 'turn'),
-      sleep(horizonMs, raceCtl.signal).then((): EndReason => 'horizon'),
+    // The cold-start window closes on whichever of these comes first: the
+    // agent's first turn completing, the agent creating the done sentinel,
+    // quiescence, the optional stop-after-render condition, or the horizon.
+    // Probing until the horizon regardless would multiply benchmark wall time
+    // for no extra signal, since the curve holds its last value anyway.
+    // Aborting when the race is decided stops the render poll, the sentinel
+    // poll and the quiescence watcher and clears the horizon timer together.
+    // Waiting out an eight-minute horizon that the agent beat in thirty seconds
+    // is not a hypothetical: the CLI printed its report and then sat idle for
+    // the rest of it.
+    const races: Array<Promise<RunEndReason>> = [
+      handle.waitForTurn(0).then((): RunEndReason => 'turn'),
+      sleep(horizonMs, raceCtl.signal).then((): RunEndReason => 'horizon'),
     ];
+
+    // The agent's own "I am done". The only end condition that survives an
+    // agent whose last act is a foreground dev server, which never returns and
+    // so never completes a turn.
+    const donePath = join(workdir, DONE_SENTINEL);
+    races.push(
+      (async (): Promise<RunEndReason> => {
+        while (!signal.aborted && !existsSync(donePath)) await sleep(500, signal);
+        return 'signal';
+      })(),
+    );
+
+    if (quietForMs > 0) races.push(waitForQuiet());
+
     if (opts.stopAfterRenderMs !== undefined) {
       const settleAfterRender = opts.stopAfterRenderMs;
-      const { signal } = raceCtl;
       races.push(
-        (async (): Promise<EndReason> => {
+        (async (): Promise<RunEndReason> => {
           while (!signal.aborted && !prober.frames.some((f) => f.class === 'render'))
             await sleep(250, signal);
           if (!signal.aborted) await sleep(settleAfterRender, signal);
@@ -176,25 +320,36 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         })(),
       );
     }
-    let ended: EndReason;
+    let ended: RunEndReason;
     try {
       ended = await Promise.race(races);
     } finally {
       raceCtl.abort();
     }
+    endReason = ended;
 
     if (ended === 'horizon')
       warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
+    if (ended === 'quiet')
+      warnings.push(
+        `The cold-start window was closed by quiescence: nothing on the page changed, the ` +
+          `agent emitted nothing, and no shimmed command ran for ${(quietForMs / 1000).toFixed(0)}s. ` +
+          `The agent had not reported finishing. The curve holds its last value to the horizon ` +
+          `either way, so this does not change the AUC, but a late improvement would have been missed.`,
+      );
     log(
       ended === 'horizon' ? 'horizon reached'
         : ended === 'rendered' ? 'app rendered; ending cold-start window'
+        : ended === 'signal' ? `agent signalled done (${DONE_SENTINEL})`
+        : ended === 'quiet' ? `nothing changed for ${(quietForMs / 1000).toFixed(0)}s; ending cold-start window`
         : 'agent finished first turn',
     );
 
     // Keep watching briefly: builds land after the agent stops talking, and
     // some agents break the page on their way out. A run that stopped on the
-    // render condition has already waited, so it does not wait again.
-    const settleMs = ended === 'rendered' ? 0 : (opts.settleMs ?? 15_000);
+    // render condition or on quiescence has already waited, so it does not
+    // wait again.
+    const settleMs = ended === 'rendered' || ended === 'quiet' ? 0 : (opts.settleMs ?? 15_000);
     const settleStartMs = Date.now() - t0Epoch;
     await sleep(settleMs);
     coldEndMs = Date.now() - t0Epoch;
@@ -203,9 +358,12 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // "unattributed": we know exactly what was happening, which is nothing. If
     // it were charged to the residual bucket, a control run that starts fast
     // would report low attribution coverage and warn that its own split is
-    // untrustworthy, which is the opposite of the truth.
-    observationOnlyMs =
-      (coldEndMs - settleStartMs) + (ended === 'rendered' ? (opts.stopAfterRenderMs ?? 0) : 0);
+    // untrustworthy, which is the opposite of the truth. The quiescence window
+    // is the same thing by a different name -- it is defined as a stretch in
+    // which nothing happened -- so it is excluded on the same grounds.
+    const deliberateIdleMs =
+      ended === 'rendered' ? (opts.stopAfterRenderMs ?? 0) : ended === 'quiet' ? quietForMs : 0;
+    observationOnlyMs = (coldEndMs - settleStartMs) + deliberateIdleMs;
     activeWallMs = Math.max(0, coldEndMs - observationOnlyMs);
 
     const rendering = prober.frames.some((f) => f.class === 'render');
@@ -326,6 +484,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       'AGENT PRODUCED NO OUTPUT: no assistant events were seen. The adapter may not have started the agent correctly; check agent.log.',
     );
   }
+  if (prober.repeatedShots > 0 && prober.distinctShots > 0)
+    log(
+      `${prober.frames.length} frames, ${prober.distinctShots} distinct screenshots ` +
+        `(${prober.repeatedShots} repeats share a file)`,
+    );
   if (prober.skippedTicks > 0)
     warnings.push(`${prober.skippedTicks} poll ticks were skipped because a capture overran the interval.`);
   if (prober.reloadCount > prober.frames.length * 0.25)
@@ -361,7 +524,8 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         ...decomposition.notes,
         ...(observationOnlyMs > 1000
           ? [
-              `Excludes ${(observationOnlyMs / 1000).toFixed(1)}s of deliberate idle observation (settle window); the curve still covers it.`,
+              `Excludes ${(observationOnlyMs / 1000).toFixed(1)}s of deliberate idle observation ` +
+                `(${endReason === 'quiet' ? 'quiescence window plus settle' : 'settle window'}); the curve still covers it.`,
             ]
           : []),
       ],
@@ -377,6 +541,13 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       degraded: judged.degraded,
     },
     agentFailure,
+    endReason,
+    artifacts: {
+      videoPath: prober.videoPath,
+      promptPath: join(opts.runDir, 'prompt.txt'),
+      distinctShots: prober.distinctShots,
+      repeatedShots: prober.repeatedShots,
+    },
     warnings,
   };
 

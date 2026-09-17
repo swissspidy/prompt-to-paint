@@ -11,7 +11,9 @@ import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
 import { renderCompareText, renderCompareHtml } from './report/compare.ts';
+import { renderLeaderboard, renderLeaderboardText } from './report/leaderboard.ts';
 import { aggregate, renderAggregate } from './report/aggregate.ts';
+import { Progress } from './progress.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
 import type { Adapter, RunResult } from './types.ts';
 
@@ -36,6 +38,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p run      --brief <file> [options]     measure one agent on one brief
   p2p floor    --template <id> [options]    measure the toolchain with no agent
   p2p compare  <result.json...>             rank runs by trajectory and by final score
+  p2p leaderboard <result.json...>          ranking + every run replayed side by side
   p2p rescore  <runDir> [--judge <backend>] [--brief <file>]
                                             re-score saved frames without re-running
   p2p briefs                                list bundled briefs
@@ -56,6 +59,12 @@ Options for run:
   --no-iterate skip the iteration phase
   --kill-port  free the target port first instead of refusing to run
   --keep-server leave the agent's dev server running after the run
+  --quiet-for  end the window after N seconds with nothing changing (default 120, 0 off)
+  --stop-after-render  end the window N ms after the app first renders
+  --no-render-early    drop the "render something early" clause from the protocol
+  --headed     show the prober's browser window while the agent works
+  --video      record the session to video.webm (Playwright screencast)
+  --no-progress  no live status line
   --unsafe     pass --dangerously-skip-permissions to claude-code (non-root sandboxes only)
   --permission-mode <mode>  permission mode for claude-code (default acceptEdits)
   --provider   provider for pi (pi defaults to google)
@@ -64,6 +73,10 @@ Options for run:
   --print-timeout  agy print timeout (default 30m; agy's own default is 5m)
   --bin        override the agent binary name/path
   --repeat N   run N times and report a median with its full range
+
+Options for leaderboard:
+  --out        page to write   (default runs/leaderboard.html)
+  --title      heading for the page
 `;
 
 /** Print a usage error and exit, without a stack trace the user cannot act on. */
@@ -106,6 +119,33 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'leaderboard') {
+    // Positionals, not "every argument that does not start with a dash": the
+    // latter also collects option *values*, so `--title "Two agents"` was read
+    // as three more result files.
+    const { values: flags, positionals: files } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { out: { type: 'string' }, title: { type: 'string' } },
+    });
+    if (!files.length) fail('leaderboard needs at least one result.json');
+    const runs: RunResult[] = [];
+    const runDirs: string[] = [];
+    for (const f of files) {
+      runs.push(JSON.parse(await readFile(f, 'utf8')) as RunResult);
+      // Frames and report.html sit beside the result they belong to, and the
+      // page links to both relatively, so it keeps working when the whole
+      // runs/ directory is copied somewhere else.
+      runDirs.push(dirname(resolve(f)));
+    }
+    console.log(renderLeaderboardText(runs));
+    const out = resolve(flags.out ?? join('runs', 'leaderboard.html'));
+    await mkdir(dirname(out), { recursive: true });
+    await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs }));
+    console.log(`  leaderboard: ${out}\n`);
+    return;
+  }
+
   const { values } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -120,6 +160,10 @@ async function main(): Promise<void> {
       repeat: { type: 'string' }, 'permission-mode': { type: 'string' },
       provider: { type: 'string' }, tools: { type: 'string' }, effort: { type: 'string' },
       'print-timeout': { type: 'string' }, bin: { type: 'string' },
+      'quiet-for': { type: 'string' }, 'stop-after-render': { type: 'string' },
+      'no-render-early': { type: 'boolean' }, headed: { type: 'boolean' },
+      video: { type: 'boolean' }, 'no-progress': { type: 'boolean' },
+      title: { type: 'string' },
     },
   });
 
@@ -253,30 +297,59 @@ async function main(): Promise<void> {
     if (repeats > 1) console.log(`\n  === run ${i + 1} of ${repeats} ===`);
     console.log(`  run dir: ${runDir}`);
 
-    const result = await runBenchmark({
-      brief,
-      briefPath: cmd === 'run' ? values.brief : undefined,
-      // A fresh instance per repeat: adapters accumulate per-run state (the
-      // Antigravity one records what it learned about the stream), and reusing
-      // one would let an earlier repeat decide a later repeat's fidelity.
-      adapter: makeAdapter(),
-      runDir,
-      label,
-      judgeBackend,
-      pollMs: values.poll ? Number(values.poll) : undefined,
-      iterationPollMs: values['iter-poll'] ? Number(values['iter-poll']) : undefined,
-      settleMs: values.settle ? Number(values.settle) : undefined,
-      skipIterations: values['no-iterate'] || cmd === 'floor',
-      killPort: values['kill-port'],
-      // A control run has no agent turn to wait for: its dev server runs forever.
-      stopAfterRenderMs: cmd === 'floor' ? Number(values.settle ?? 8000) : undefined,
-      keepServer: values['keep-server'],
-      onLog: (m) => console.log(`  · ${m}`),
-    });
+    // A run is minutes of an agent working somewhere else. Without this the CLI
+    // printed nothing until it was over, and the only way to tell a run in
+    // progress from a hung one was to tail agent.log in another terminal.
+    const progress = values['no-progress'] ? null : new Progress(brief.horizonSec * 1000);
+    progress?.start();
+
+    let result: RunResult;
+    try {
+      result = await runBenchmark({
+        brief,
+        briefPath: cmd === 'run' ? values.brief : undefined,
+        // A fresh instance per repeat: adapters accumulate per-run state (the
+        // Antigravity one records what it learned about the stream), and reusing
+        // one would let an earlier repeat decide a later repeat's fidelity.
+        adapter: makeAdapter(),
+        runDir,
+        label,
+        judgeBackend,
+        pollMs: values.poll ? Number(values.poll) : undefined,
+        iterationPollMs: values['iter-poll'] ? Number(values['iter-poll']) : undefined,
+        settleMs: values.settle ? Number(values.settle) : undefined,
+        skipIterations: values['no-iterate'] || cmd === 'floor',
+        killPort: values['kill-port'],
+        // A control run has no agent turn to wait for: its dev server runs forever.
+        stopAfterRenderMs:
+          values['stop-after-render'] !== undefined
+            ? Number(values['stop-after-render'])
+            : cmd === 'floor' ? Number(values.settle ?? 8000) : undefined,
+        // A floor script exits on its own and has no agent to fall silent, so
+        // quiescence could only ever cut it short.
+        quietForMs:
+          cmd === 'floor' ? 0
+            : values['quiet-for'] !== undefined ? Number(values['quiet-for']) * 1000
+            : undefined,
+        noRenderEarly: values['no-render-early'],
+        headed: values.headed,
+        videoPath: values.video ? join(runDir, 'video.webm') : undefined,
+        keepServer: values['keep-server'],
+        onLog: (m) => (progress ? progress.log(m) : console.log(`  · ${m}`)),
+        onFrame: (f) => progress?.onFrame(f),
+        onAgentEvent: (e) => progress?.onAgentEvent(e),
+      });
+    } finally {
+      // The status line owns the last terminal row; the report must not be
+      // printed over the top of it.
+      progress?.stop();
+    }
 
     await writeFile(join(runDir, 'report.html'), renderHtml(result, runDir));
     console.log(renderText(result));
-    console.log(`  report: ${join(runDir, 'report.html')}\n`);
+    console.log(`  report: ${join(runDir, 'report.html')}`);
+    if (result.artifacts?.videoPath) console.log(`  video:  ${result.artifacts.videoPath}`);
+    console.log('');
     results.push(result);
   }
 

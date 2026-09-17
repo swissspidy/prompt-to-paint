@@ -311,6 +311,94 @@ test('a run that beats its horizon does not wait it out', { skip: needsBrowser, 
   }
 });
 
+// ---------------------------------------------------------------------------
+// The failure mode this harness was built to measure, reproduced: an agent that
+// builds the whole app before serving any of it, and whose last act is a dev
+// server that never returns.
+// ---------------------------------------------------------------------------
+
+/** A brief with nothing serving it: getting a server up is the agent's job. */
+const lateBrief = (port: number, horizonSec: number): Brief => ({
+  id: 'late', title: 'Serve late', prompt: '(fixture)', horizonSec,
+  reviewableThreshold: 0.5, target: { port },
+  entities: [{ id: 'title', aliases: ['DevConf 2026'] }],
+  rubric: [{ id: 'renders', description: 'The page shows something.', weight: 1 }],
+});
+
+const PAGE = '<!doctype html><meta charset=utf-8><body style="padding:40px"><h1>DevConf 2026</h1></body>';
+
+/** A shell agent that writes the page after `delaySec`, then blocks forever. */
+const blockingAgent = (port: number, delaySec: number, signalDone: boolean): string =>
+  `sleep ${delaySec}; printf '%s' ${JSON.stringify(PAGE)} > index.html; ` +
+  (signalDone
+    ? `python3 -m http.server ${port} --bind 127.0.0.1 >/dev/null 2>&1 & sleep 3; : > .p2p-done; exec sleep 600`
+    : `exec python3 -m http.server ${port} --bind 127.0.0.1 >/dev/null 2>&1`);
+
+test('a foreground dev server ends the run by quiescence, not at the horizon', { skip: needsBrowser, timeout: 180_000 }, async () => {
+  const dir = await tmp('p2p-quiet-');
+  try {
+    // The agent never completes a turn: `python -m http.server` in the
+    // foreground holds the tool call open forever. Before quiescence existed,
+    // the only end condition left was the horizon, which meant minutes of
+    // screenshotting an app that had been finished the whole time.
+    const result = await runBenchmark({
+      brief: lateBrief(5295, 300), adapter: new ExecAdapter({ command: blockingAgent(5295, 4, false) }),
+      runDir: dir, label: 'blocking', judgeBackend: new NullBackend(),
+      quietForMs: 10_000, skipIterations: true, killPort: true,
+    });
+    assert.equal(result.endReason, 'quiet');
+    assert.ok(result.wallMs < 90_000, `ran for ${(result.wallMs / 1000).toFixed(1)}s against a 300s horizon`);
+    assert.ok(result.warnings.some((w) => /quiescence/.test(w)), 'the run says how it ended');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an agent that signals done stops the clock immediately', { skip: needsBrowser, timeout: 180_000 }, async () => {
+  const dir = await tmp('p2p-signal-');
+  try {
+    const result = await runBenchmark({
+      brief: lateBrief(5296, 300), adapter: new ExecAdapter({ command: blockingAgent(5296, 3, true) }),
+      runDir: dir, label: 'signals', judgeBackend: new NullBackend(),
+      // Long enough that quiescence cannot be what ended this run.
+      quietForMs: 120_000, settleMs: 1000, skipIterations: true, killPort: true,
+    });
+    assert.equal(result.endReason, 'signal');
+    assert.ok(result.wallMs < 60_000, `ran for ${(result.wallMs / 1000).toFixed(1)}s`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the frames before anything is serving are captured, not skipped', { skip: needsBrowser, timeout: 180_000 }, async () => {
+  const dir = await tmp('p2p-early-');
+  try {
+    // The symptom that started this: frames/ held nothing until the dev server
+    // came up, so the first picture of every run was the finished app, and a
+    // filmstrip made a four-minute build look instant.
+    const result = await runBenchmark({
+      brief: lateBrief(5297, 120), adapter: new ExecAdapter({ command: blockingAgent(5297, 8, true) }),
+      runDir: dir, label: 'early-frames', judgeBackend: new NullBackend(),
+      quietForMs: 30_000, settleMs: 1000, skipIterations: true, killPort: true,
+    });
+
+    const before = result.frames.filter((f) => f.tMs < result.curve.ttfnbrMs!);
+    assert.ok(before.length >= 3, `expected several pre-render frames, got ${before.length}`);
+    assert.ok(before.every((f) => f.screenshotPath), 'every pre-render frame has a screenshot');
+    assert.ok(before.every((f) => f.class !== 'render'), 'and none of them is classified as a render');
+
+    // Those frames all show the same thing, so they share one file: the point
+    // is that the timeline is complete, not that the directory is enormous.
+    assert.equal(new Set(before.map((f) => f.screenshotPath)).size, 1);
+    assert.ok(
+      (result.artifacts?.distinctShots ?? 0) < result.frames.length,
+      'repeated screenshots are stored once',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('bundled briefs resolve from the package, not the working directory', async () => {
   // An installed CLI is run from somewhere else entirely.
   const elsewhere = await tmp('p2p-cwd-');
