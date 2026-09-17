@@ -365,6 +365,53 @@ test('the static server survives malformed and racing requests', async () => {
 // The CLI itself, run the way a user runs it.
 // ---------------------------------------------------------------------------
 
+test('rescore finds its run directory whichever side of the flags it is on', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-rescore-args-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    await runBenchmark({
+      brief: { ...base, horizonSec: 30, iterations: [], target: { ...base.target, port: 5297 } },
+      adapter: new ScriptedAdapter({
+        steps: [{
+          atMs: 0,
+          write: {
+            path: 'index.html',
+            content: '<!doctype html><meta charset=utf-8><body><h1>DevConf 2026</h1>'
+              + '<ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul><footer>See you in Berlin</footer></body>',
+          },
+        }],
+      }),
+      briefPath: 'test/fixtures/calibration-brief.json',
+      runDir: dir, label: 'rescore-args', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    // Both orders have to reach the same run. The directory used to be found
+    // with `argv.find(a => !a.startsWith('-'))`, which happily returned an
+    // option's value: with the flags first this went looking for
+    // `none/result.json` and the run was never touched.
+    for (const args of [
+      ['src/cli.ts', 'rescore', dir, '--judge', 'none'],
+      ['src/cli.ts', 'rescore', '--judge', 'none', dir],
+      ['src/cli.ts', 'rescore', '--judge', 'none', '--brief', 'test/fixtures/calibration-brief.json', dir],
+    ]) {
+      const { stdout } = await run(process.execPath, args);
+      assert.match(stdout, /AUC \(headline\)/, args.join(' '));
+    }
+
+    // A directory with no result.json is a usage error, not a stack trace.
+    await assert.rejects(
+      () => run(process.execPath, ['src/cli.ts', 'rescore', '--judge', 'none', join(dir, 'nope')]),
+      (e: { stderr?: string }) => {
+        assert.match(e.stderr ?? '', /error: could not read/);
+        assert.doesNotMatch(e.stderr ?? '', /at async main/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('the CLI runs from plain node with no loader', async () => {
   const { stdout: help } = await run(process.execPath, ['src/cli.ts', 'help']);
   assert.match(help, /prompt-to-paint/);

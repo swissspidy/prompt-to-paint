@@ -319,7 +319,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { values } = parse({
+  const { values, positionals } = parse({
     args: argv,
     allowPositionals: true,
     options: {
@@ -341,13 +341,42 @@ async function main(): Promise<void> {
   });
 
   if (cmd === 'rescore') {
-    const dir = argv.find((a) => !a.startsWith('-'));
+    // Positionals, not "the first argument without a dash": that one also
+    // matches option *values*, so `rescore --judge google:gemini-2.5-flash
+    // runs/x` read the judge as the run directory and went looking for
+    // `google:gemini-2.5-flash/result.json`. The same mistake was fixed in
+    // `leaderboard` above; this is the one that was missed, and re-scoring with
+    // a second judge is the main reason to run this command at all.
+    const dir = positionals[0];
     if (!dir) fail('rescore needs a run directory');
-    const prev = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as RunResult;
+    const resultPath = join(dir, 'result.json');
+    let prev: RunResult;
+    try {
+      prev = JSON.parse(await readFile(resultPath, 'utf8')) as RunResult;
+    } catch (e) {
+      fail(
+        `could not read ${resultPath}: ${(e as Error).message}\n` +
+          `  rescore takes a run directory, the one holding result.json and frames/.`,
+      );
+    }
     // Prefer an explicit --brief, then the path the run recorded, then the
     // bundled brief of that id.
-    const briefPath = values.brief ?? prev.briefPath ?? bundledBrief(prev.brief);
-    const brief = await loadBrief(briefPath);
+    //
+    // `||`, not `??`: a result records an empty briefPath when the run had none
+    // to record -- every `p2p floor` run, and anything driving runBenchmark
+    // directly -- and `??` only falls through null, so rescoring one of those
+    // called loadBrief('') and died on an ENOENT for the empty path.
+    const briefPath = values.brief || prev.briefPath || bundledBrief(prev.brief);
+    let brief;
+    try {
+      brief = await loadBrief(briefPath);
+    } catch (e) {
+      fail(
+        `could not load the brief at ${briefPath}: ${(e as Error).message}\n` +
+          `  This run does not record a brief path, and "${prev.brief}" is not bundled.\n` +
+          `  Pass --brief <file> to say what to score it against.`,
+      );
+    }
     const backend = judgeBackendFor(values.judge);
     // Only the cold-start frames are scored, exactly as during the run. A
     // result written before phases existed has none tagged, so fall back to the
@@ -386,7 +415,7 @@ async function main(): Promise<void> {
         reviewableThreshold: brief.reviewableThreshold,
       }),
     };
-    await writeJsonAtomic(join(dir, 'result.json'), next);
+    await writeJsonAtomic(resultPath, next);
     await writeFile(join(dir, 'report.html'), renderHtml(next, dir));
     console.log(renderText(next));
     return;
