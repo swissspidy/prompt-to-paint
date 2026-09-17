@@ -236,7 +236,7 @@ export async function judgeRun(
       try {
         const full = await readFile(frame.screenshotPath);
         const png = downscalePngColor(full, opts.maxImageWidth ?? 1024);
-        const raw = await opts.backend.ask({ imagePath: frame.screenshotPath, png, prompt });
+        const raw = await opts.backend.ask({ png, prompt });
         calls++;
         const v = parseVerdict(raw);
         if (!v) {

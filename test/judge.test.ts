@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
-import { parseJudgeModel, pickBackend } from '../src/judge/backends.ts';
+import { parseJudgeModel, pickBackend, DEFAULT_JUDGE_MODEL } from '../src/judge/backends.ts';
 import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
@@ -134,44 +134,48 @@ test('parseJudgeModel splits only known provider prefixes', () => {
   assert.equal(parseJudgeModel('google:'), null);
 });
 
-test('a provider-qualified model picks the AI SDK backend, even under auto', () => {
-  withKeys({ GOOGLE_GENERATIVE_AI_API_KEY: 'k' }, () => {
-    for (const backend of ['ai', 'auto'] as const) {
-      const b = pickBackend({ backend, model: 'google:gemini-2.5-flash' });
+test('every provider reaches the judge through the one AI SDK backend', () => {
+  withKeys({ GOOGLE_GENERATIVE_AI_API_KEY: 'k', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' }, () => {
+    for (const model of ['google:gemini-2.5-flash', 'openai:gpt-5', 'anthropic:claude-sonnet-5']) {
+      const b = pickBackend({ model });
       assert.equal(b.name, 'ai');
       // Qualified, so a report can never claim the wrong judge served a run.
-      assert.equal(b.model, 'google:gemini-2.5-flash');
+      assert.equal(b.model, model);
     }
   });
 });
 
-test('auto still prefers the Anthropic API, then the CLI, for a bare model', () => {
+test('the default judge model names its provider like any other', () => {
   withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
-    assert.equal(pickBackend({ backend: 'auto' }).name, 'api');
-  });
-  withKeys({}, () => {
-    const b = pickBackend({ backend: 'auto' });
-    assert.equal(b.name, 'cli');
-    assert.equal(b.model, 'claude-sonnet-5');
+    const b = pickBackend({});
+    assert.equal(b.name, 'ai');
+    assert.equal(b.model, DEFAULT_JUDGE_MODEL);
+    assert.match(DEFAULT_JUDGE_MODEL, /^anthropic:/);
   });
 });
 
 test('a judge that cannot be served is refused up front, not once per frame', () => {
   withKeys({}, () => {
-    // Named provider, missing key: say so before the run, not sixty times after.
-    assert.throws(() => pickBackend({ backend: 'ai', model: 'google:g' }), /GOOGLE_GENERATIVE_AI_API_KEY/);
-    assert.throws(() => pickBackend({ backend: 'api' }), /ANTHROPIC_API_KEY/);
-    // "ai" without a provider cannot be resolved to one.
-    assert.throws(() => pickBackend({ backend: 'ai', model: 'gemini-2.5-flash' }), /<provider>:<model>/);
+    assert.throws(() => pickBackend({ model: 'google:g' }), /GOOGLE_GENERATIVE_AI_API_KEY/);
+    assert.throws(() => pickBackend({}), /ANTHROPIC_API_KEY/);
   });
 });
 
-test('a provider prefix on an Anthropic-only backend is an error, not a silent swap', () => {
-  withKeys({ ANTHROPIC_API_KEY: 'k', GOOGLE_GENERATIVE_AI_API_KEY: 'k' }, () => {
-    assert.throws(
-      () => pickBackend({ backend: 'api', model: 'google:gemini-2.5-flash' }),
-      /names the google provider/,
-    );
+test('an unqualified judge model is an error, not a guess at the provider', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
+    assert.throws(() => pickBackend({ model: 'claude-sonnet-5' }), /does not name a provider/);
+    assert.throws(() => pickBackend({ model: 'gemini-2.5-flash' }), /<provider>:<model>/);
+  });
+});
+
+test('the backends that were removed say so instead of failing obscurely', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
+    // A command line written against the old flags must not silently do
+    // something else -- nor die on an unrelated error three minutes later.
+    for (const gone of ['api', 'cli']) {
+      assert.throws(() => pickBackend({ backend: gone }), /was removed/);
+    }
+    assert.throws(() => pickBackend({ backend: 'nonsense' }), /unknown judge backend/);
   });
 });
 
@@ -179,5 +183,6 @@ test('the null backend needs no credentials at all', () => {
   withKeys({}, () => {
     const b = pickBackend({ backend: 'none', model: 'google:g' });
     assert.equal(b.name, 'none');
+    assert.equal(b.model, null);
   });
 });

@@ -45,7 +45,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p compare  <result.json...>             rank runs by trajectory and by final score
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
-  p2p rescore  <runDir> [--judge <backend>] [--brief <file>]
+  p2p rescore  <runDir> [--judge-model <m>] [--brief <file>]
                                             re-score saved frames without re-running
   p2p briefs                                list bundled briefs
   p2p floors                                list toolchain-floor templates
@@ -54,10 +54,9 @@ Options for run:
   --adapter    claude-code | pi | antigravity | exec | scripted  (default claude-code)
   --model      model passed to the agent
   --label      name for this run in reports      (default: adapter[+model])
-  --judge      api | cli | ai | none | auto      (default auto)
-  --judge-model                                  (default ${DEFAULT_JUDGE_MODEL})
-               a bare id is an Anthropic model; <provider>:<model> judges
-               through the AI SDK, e.g. google:gemini-2.5-flash
+  --judge      auto | none                       (default auto)
+  --judge-model <provider>:<model>               (default ${DEFAULT_JUDGE_MODEL})
+               judged through the AI SDK, e.g. google:gemini-2.5-flash
                (providers: ${AI_SDK_PROVIDER_NAMES.join(' | ')})
   --out        output directory                  (default runs/)
   --poll       cold-start poll interval in ms    (default 1000)

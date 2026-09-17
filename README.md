@@ -257,27 +257,37 @@ late improvement, so a `quiet` run says so in its caveats.
 
 Frames are scored against per-brief rubrics of binary, screenshot-answerable
 criteria — "are three columns visible", not "rate this 0-10" — so scores are
-auditable and reasonably stable. Four backends:
+auditable and reasonably stable.
 
-| backend | when |
-|---|---|
-| `api` | `ANTHROPIC_API_KEY` is set. Parallel and cheap; the default when available. |
-| `cli` | falls back to a signed-in local `claude`. No key needed. |
-| `ai` | any provider the [AI SDK](https://ai-sdk.dev) speaks. Selected by a `<provider>:<model>` judge model. |
-| `none` | no model. Scores degrade to entity coverage, and every report says so. |
+Every judge reaches the model through the [AI SDK](https://ai-sdk.dev), so the
+provider is just part of the model name:
 
 ```bash
-# judge with Gemini instead of Claude -- needs GOOGLE_GENERATIVE_AI_API_KEY
+# the default judge
+npm run p2p -- run --brief briefs/todo-app.json
+
+# judge with Gemini instead -- needs GOOGLE_GENERATIVE_AI_API_KEY
 npm run p2p -- run --brief briefs/todo-app.json --judge-model google:gemini-2.5-flash
 ```
 
-Providers are `google`, `anthropic` and `openai`, each reading its own SDK
-environment variable. A qualified model selects the AI SDK on its own, so
-`--judge ai` is only needed to be explicit; a bare id like `claude-sonnet-5`
-still means the Anthropic backends. Naming a provider whose key is missing fails
-before the run starts rather than once per frame, and `result.json` records the
-judge as `google:gemini-2.5-flash` rather than a bare model name — **different
-judges disagree at the margin, so a leaderboard should not mix them.**
+| provider | key |
+|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` (also honours `ANTHROPIC_BASE_URL`) |
+| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+
+`--judge-model` defaults to `anthropic:claude-sonnet-5`, and `--judge none`
+turns scoring off entirely: scores degrade to entity coverage, and every report
+says so. There is no third option, because one transport for every provider is
+what makes two judges comparable — they differ in the model named on the
+command line and nowhere else in this code.
+
+A model must name its provider: a bare `claude-sonnet-5` is an error rather
+than a guess, and a provider whose key is missing fails before the run starts
+rather than once per frame, after the minutes it takes to measure one. Adding a
+provider is a line in `AI_SDK_PROVIDERS`. `result.json` records the judge as
+`google:gemini-2.5-flash` rather than a bare model name — **different judges
+disagree at the margin, so a leaderboard should not mix them.**
 
 Judging runs **after** the run finishes, from saved screenshots — scoring during
 the run would put model latency inside the window being measured. Only visually
