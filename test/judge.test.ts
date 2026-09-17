@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
+import { parseJudge, pickBackend, DEFAULT_JUDGE } from '../src/judge/backends.ts';
+import { judgeRun } from '../src/judge/judge.ts';
+import type { JudgeBackend } from '../src/judge/backends.ts';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
@@ -98,4 +104,143 @@ test('the judge prompt states the rubric and forbids crediting the unseen', () =
   assert.ok(p.includes('renders'));
   assert.ok(p.includes('columns'));
   assert.ok(/only what is visible/i.test(p));
+});
+
+// ---------------------------------------------------------------------------
+// Backend selection
+// ---------------------------------------------------------------------------
+
+/** Run with exactly these judge keys set, then put the environment back. */
+function withKeys<T>(keys: Record<string, string | undefined>, fn: () => T): T {
+  const names = ['ANTHROPIC_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'OPENAI_API_KEY'];
+  const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+  try {
+    for (const n of names) {
+      const v = keys[n];
+      if (v === undefined) delete process.env[n];
+      else process.env[n] = v;
+    }
+    return fn();
+  } finally {
+    for (const n of names) {
+      if (saved[n] === undefined) delete process.env[n];
+      else process.env[n] = saved[n];
+    }
+  }
+}
+
+test('parseJudge splits only known provider prefixes', () => {
+  assert.deepEqual(parseJudge('google:gemini-2.5-flash'), { provider: 'google', model: 'gemini-2.5-flash' });
+  assert.deepEqual(parseJudge('openai:gpt-5'), { provider: 'openai', model: 'gpt-5' });
+  // A bare model, and a model whose own name contains a colon, are not judges.
+  assert.equal(parseJudge('claude-sonnet-5'), null);
+  assert.equal(parseJudge('us.anthropic.claude-x:0'), null);
+  assert.equal(parseJudge('nosuchprovider:x'), null);
+  assert.equal(parseJudge('google:'), null);
+});
+
+test('every provider reaches the judge through the one AI SDK backend', () => {
+  withKeys({ GOOGLE_GENERATIVE_AI_API_KEY: 'k', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' }, () => {
+    for (const judge of ['google:gemini-2.5-flash', 'openai:gpt-5', 'anthropic:claude-sonnet-5']) {
+      const b = pickBackend(judge);
+      assert.equal(b.name, 'ai');
+      // Qualified, so a report can never claim the wrong judge served a run.
+      assert.equal(b.model, judge);
+    }
+  });
+});
+
+test('the default judge names its provider like any other', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
+    const b = pickBackend();
+    assert.equal(b.name, 'ai');
+    assert.equal(b.model, DEFAULT_JUDGE);
+    assert.match(DEFAULT_JUDGE, /^anthropic:/);
+  });
+});
+
+test('a judge that cannot be served is refused up front, not once per frame', () => {
+  withKeys({}, () => {
+    assert.throws(() => pickBackend('google:g'), /GOOGLE_GENERATIVE_AI_API_KEY/);
+    assert.throws(() => pickBackend(), /ANTHROPIC_API_KEY/);
+  });
+});
+
+test('a judge that does not name a provider is an error, not a guess', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
+    // Includes the spellings the removed backends used, which now fail the
+    // same way anything else unrecognised does.
+    for (const judge of ['claude-sonnet-5', 'gemini-2.5-flash', 'api', 'cli', 'auto']) {
+      assert.throws(() => pickBackend(judge), /does not name a provider/, judge);
+    }
+  });
+});
+
+test('the null judge needs no credentials at all', () => {
+  withKeys({}, () => {
+    const b = pickBackend('none');
+    assert.equal(b.name, 'none');
+    assert.equal(b.model, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The verdict cache
+// ---------------------------------------------------------------------------
+
+/** A judge with a fixed answer, which counts how often it is actually asked. */
+function fakeJudge(model: string, met: boolean): JudgeBackend & { calls: number } {
+  return {
+    name: 'ai',
+    model,
+    concurrency: 1,
+    calls: 0,
+    async ask(): Promise<string> {
+      this.calls++;
+      return JSON.stringify({ criteria: { renders: { met } } });
+    },
+  };
+}
+
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+test('two judges do not share a verdict cache', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judgecache-'));
+  try {
+    const shot = join(dir, 'f.png');
+    await writeFile(shot, PNG_1X1);
+    const cacheDir = join(dir, 'cache');
+    const frames = [{
+      index: 0, tMs: 1000, class: 'render' as const, reason: 'r', screenshotPath: shot,
+      dhash: 'abcdef0123456789', colorSig: '0'.repeat(16), inkRatio: 0.5, text: 'x',
+      title: 't', httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
+      entitiesFound: ['x'], domSignature: 'D', captureMs: 1,
+    }];
+    const single: Brief = { ...brief, rubric: [{ id: 'renders', description: 'renders', weight: 1 }] };
+
+    const first = fakeJudge('anthropic:claude-sonnet-5', true);
+    const a = await judgeRun(frames, single, { backend: first, cacheDir });
+    assert.equal(first.calls, 1);
+    assert.equal(a.frames[0]?.score, 1);
+
+    // The same brief, the same screenshot, a different judge. Verdicts are
+    // keyed by screenshot hash, so a shared cache file would hand this one the
+    // first judge's answer and record it under this judge's name -- which
+    // would make a rescore report perfect agreement between any two judges.
+    const second = fakeJudge('google:gemini-2.5-flash', false);
+    const b = await judgeRun(frames, single, { backend: second, cacheDir });
+    assert.equal(second.calls, 1, 'the second judge was asked for its own verdict');
+    assert.equal(b.frames[0]?.score, 0, 'and its own verdict is what got recorded');
+
+    // Re-running the first judge still hits its own cache, which is the point
+    // of having one.
+    const again = fakeJudge('anthropic:claude-sonnet-5', true);
+    await judgeRun(frames, single, { backend: again, cacheDir });
+    assert.equal(again.calls, 0, 'the same judge reuses its cached verdict');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

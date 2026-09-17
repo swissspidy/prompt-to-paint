@@ -1,6 +1,7 @@
 import { relative, dirname } from 'node:path';
 import type { Bucket, RunResult } from '../types.ts';
 import { buildCurve } from '../metrics/curve.ts';
+import { coldFrames } from '../phase.ts';
 import { BUCKET_ORDER, BUCKET_LABEL, BUCKET_SIDE, bucketVar, SERIES_LIGHT, SERIES_DARK } from './palette.ts';
 
 const esc = (s: string): string =>
@@ -17,7 +18,7 @@ const PW = W - M.l - M.r, PH = H - M.t - M.b;
  * samples because it is an assumption rather than a measurement.
  */
 function curveChart(r: RunResult): string {
-  const pts = buildCurve(r.frames, {
+  const pts = buildCurve(coldFrames(r), {
     horizonMs: r.curve.horizonMs,
     runEndMs: r.curve.runEndMs,
     reviewableThreshold: 0,
@@ -72,7 +73,7 @@ function curveChart(r: RunResult): string {
        <text class="tick" x="${(x(lastT) + x(hz)) / 2}" y="${M.t + PH - 8}" text-anchor="middle">held after run end</text>`
     : '';
 
-  const dots = r.frames
+  const dots = coldFrames(r)
     .filter((f) => f.scoreSource === 'judge' && f.tMs <= hz)
     .map((f) => `<circle class="judged" cx="${x(f.tMs)}" cy="${y(f.score)}" r="4"><title>${secs(f.tMs)} - score ${f.score.toFixed(2)} (judged)</title></circle>`)
     .join('');
@@ -168,7 +169,7 @@ function iterationTable(r: RunResult): string {
  * The judged frames in order, so a surprising curve can be eyeballed.
  */
 function filmstrip(r: RunResult, outDir: string): string {
-  const judged = r.frames.filter((f) => f.scoreSource === 'judge' && f.screenshotPath);
+  const judged = coldFrames(r).filter((f) => f.scoreSource === 'judge' && f.screenshotPath);
   if (!judged.length) return '<p class="muted">No frames were judged.</p>';
   return `<div class="strip">${judged
     .map((f) => {
@@ -322,7 +323,7 @@ export function renderHtml(r: RunResult, outDir: string): string {
   if (!svg) return;
   const hit = svg.querySelector('#hit'), cross = svg.querySelector('#cross'), tip = document.getElementById('tip');
   const pts = ${JSON.stringify(
-    buildCurve(r.frames, { horizonMs: r.curve.horizonMs, runEndMs: r.curve.runEndMs, reviewableThreshold: 0 }),
+    buildCurve(coldFrames(r), { horizonMs: r.curve.horizonMs, runEndMs: r.curve.runEndMs, reviewableThreshold: 0 }),
   )};
   const hz = ${r.curve.horizonMs}, M = ${JSON.stringify(M)}, PW = ${PW};
   hit.addEventListener('pointermove', (e) => {

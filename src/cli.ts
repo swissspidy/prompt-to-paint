@@ -1,12 +1,14 @@
-import { parseArgs, promisify } from 'node:util';
+import { parseArgs, promisify, type ParseArgsConfig } from 'node:util';
 import { execFile } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
+import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
-import { pickBackend, NullBackend } from './judge/backends.ts';
+import { pickBackend, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
+import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
@@ -19,7 +21,7 @@ import {
 import { aggregate, renderAggregate } from './report/aggregate.ts';
 import { Progress } from './progress.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
-import type { Adapter, RunResult } from './types.ts';
+import type { Adapter, RunResult, ScoredFrame } from './types.ts';
 
 /**
  * Bundled briefs live with the package, not in whatever directory the command
@@ -44,7 +46,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p compare  <result.json...>             rank runs by trajectory and by final score
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
-  p2p rescore  <runDir> [--judge <backend>] [--brief <file>]
+  p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
   p2p briefs                                list bundled briefs
   p2p floors                                list toolchain-floor templates
@@ -53,8 +55,9 @@ Options for run:
   --adapter    claude-code | pi | antigravity | exec | scripted  (default claude-code)
   --model      model passed to the agent
   --label      name for this run in reports      (default: adapter[+model])
-  --judge      api | cli | none | auto           (default auto)
-  --judge-model                                  (default claude-sonnet-5)
+  --judge      <provider>:<model> | none         (default ${DEFAULT_JUDGE})
+               scored through the AI SDK, e.g. google:gemini-2.5-flash
+               (providers: ${AI_SDK_PROVIDER_NAMES.join(' | ')})
   --out        output directory                  (default runs/)
   --poll       cold-start poll interval in ms    (default 1000)
   --iter-poll  iteration poll interval in ms     (default 250)
@@ -67,12 +70,6 @@ Options for run:
   --quiet-for  end the window after N seconds with nothing changing (default 120, 0 off)
   --stop-after-render  end the window N ms after the app first renders
   --no-render-early    drop the "render something early" clause from the protocol
-
-Options for video:
-  --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
-  --fps        output frame rate                 (default 30)
-  --to-horizon hold the last frame to the brief's horizon, so two runs' videos
-               are the same length and can be played side by side
   --headed     show the prober's browser window while the agent works
   --video      record the session to video.webm (Playwright screencast)
   --no-progress  no live status line
@@ -85,10 +82,41 @@ Options for video:
   --bin        override the agent binary name/path
   --repeat N   run N times and report a median with its full range
 
+Options for floor:
+  --template   toolchain template, see "p2p floors"  (default vite-react)
+  --port       port the template serves on           (default 5173)
+  --horizon    horizon in seconds                    (default 300)
+  plus the observation options from run (--out, --poll, --settle, --headed, ...)
+
+Options for rescore:
+  --brief      score against this brief   (default: the one the run recorded)
+  --judge                                 as for run
+
+Options for video:
+  --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
+  --fps        output frame rate                 (default 30)
+  --to-horizon hold the last frame to the brief's horizon, so two runs' videos
+               are the same length and can be played side by side
+
 Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
   --title      heading for the page
 `;
+
+/**
+ * parseArgs, reporting an unknown or malformed flag as a usage error.
+ *
+ * Its TypeError carries a stack trace into the terminal and buries the one
+ * sentence that matters, which is the name of the flag that was not understood
+ * -- exactly when the reader is already looking for the spelling.
+ */
+function parse<T extends ParseArgsConfig>(config: T): ReturnType<typeof parseArgs<T>> {
+  try {
+    return parseArgs(config);
+  } catch (e) {
+    fail(`${(e as Error).message}\n  Run "p2p help" for the options each command takes.`);
+  }
+}
 
 /** Quote an argument for a command line a person is meant to paste and run. */
 const shellQuote = (a: string): string =>
@@ -140,6 +168,21 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+/**
+ * Resolve --judge, reporting a bad one as a usage error.
+ *
+ * pickBackend throws for a judge it cannot serve -- an unqualified model, a
+ * missing key -- and every one of those is something the user types, not a bug
+ * they can act on a stack trace for.
+ */
+function judgeBackendFor(judge: string | undefined): JudgeBackend {
+  try {
+    return pickBackend(judge);
+  } catch (e) {
+    fail((e as Error).message);
+  }
+}
+
 /** Parse argv, dispatch the subcommand, and write whatever reports it produces. */
 async function main(): Promise<void> {
   const cmd = process.argv[2];
@@ -178,7 +221,7 @@ async function main(): Promise<void> {
     // Positionals, not "every argument that does not start with a dash": the
     // latter also collects option *values*, so `--title "Two agents"` was read
     // as three more result files.
-    const { values: flags, positionals: files } = parseArgs({
+    const { values: flags, positionals: files } = parse({
       args: argv,
       allowPositionals: true,
       options: { out: { type: 'string' }, title: { type: 'string' } },
@@ -202,7 +245,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'video') {
-    const { values: flags, positionals } = parseArgs({
+    const { values: flags, positionals } = parse({
       args: argv,
       allowPositionals: true,
       options: { out: { type: 'string' }, fps: { type: 'string' }, 'to-horizon': { type: 'boolean' } },
@@ -276,12 +319,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { values } = parseArgs({
+  const { values, positionals } = parse({
     args: argv,
     allowPositionals: true,
     options: {
       brief: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' },
-      label: { type: 'string' }, judge: { type: 'string' }, 'judge-model': { type: 'string' },
+      label: { type: 'string' }, judge: { type: 'string' },
       out: { type: 'string' }, poll: { type: 'string' }, 'iter-poll': { type: 'string' },
       settle: { type: 'string' }, command: { type: 'string' }, script: { type: 'string' },
       template: { type: 'string' }, port: { type: 'string' }, horizon: { type: 'string' },
@@ -298,15 +341,50 @@ async function main(): Promise<void> {
   });
 
   if (cmd === 'rescore') {
-    const dir = argv.find((a) => !a.startsWith('-'));
+    // Positionals, not "the first argument without a dash": that one also
+    // matches option *values*, so `rescore --judge google:gemini-2.5-flash
+    // runs/x` read the judge as the run directory and went looking for
+    // `google:gemini-2.5-flash/result.json`. The same mistake was fixed in
+    // `leaderboard` above; this is the one that was missed, and re-scoring with
+    // a second judge is the main reason to run this command at all.
+    const dir = positionals[0];
     if (!dir) fail('rescore needs a run directory');
-    const prev = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as RunResult;
+    const resultPath = join(dir, 'result.json');
+    let prev: RunResult;
+    try {
+      prev = JSON.parse(await readFile(resultPath, 'utf8')) as RunResult;
+    } catch (e) {
+      fail(
+        `could not read ${resultPath}: ${(e as Error).message}\n` +
+          `  rescore takes a run directory, the one holding result.json and frames/.`,
+      );
+    }
     // Prefer an explicit --brief, then the path the run recorded, then the
     // bundled brief of that id.
-    const briefPath = values.brief ?? prev.briefPath ?? bundledBrief(prev.brief);
-    const brief = await loadBrief(briefPath);
-    const backend = pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
-    const judged = await judgeRun(prev.frames, brief, { backend });
+    //
+    // `||`, not `??`: a result records an empty briefPath when the run had none
+    // to record -- every `p2p floor` run, and anything driving runBenchmark
+    // directly -- and `??` only falls through null, so rescoring one of those
+    // called loadBrief('') and died on an ENOENT for the empty path.
+    const briefPath = values.brief || prev.briefPath || bundledBrief(prev.brief);
+    let brief;
+    try {
+      brief = await loadBrief(briefPath);
+    } catch (e) {
+      fail(
+        `could not load the brief at ${briefPath}: ${(e as Error).message}\n` +
+          `  This run does not record a brief path, and "${prev.brief}" is not bundled.\n` +
+          `  Pass --brief <file> to say what to score it against.`,
+      );
+    }
+    const backend = judgeBackendFor(values.judge);
+    // Only the cold-start frames are scored, exactly as during the run. A
+    // result written before phases existed has none tagged, so fall back to the
+    // window the curve recorded; without that, rescoring an old run would judge
+    // its iteration frames against the cold-start rubric and quietly move AUC.
+    const isCold = (f: ScoredFrame): boolean =>
+      f.phase ? f.phase === 'cold' : f.tMs <= prev.curve.runEndMs;
+    const judged = await judgeRun(prev.frames.filter(isCold), brief, { backend });
     const next: RunResult = {
       ...prev,
       // Spreading prev would keep the old brief id and path, so the report
@@ -318,15 +396,26 @@ async function main(): Promise<void> {
       // the run itself. Without this a rescore silently inherits the old
       // judge's verdict about itself and hides fresh failures.
       warnings: [...prev.warnings.filter((w) => !w.startsWith('judge:')), ...judged.warnings],
-      frames: judged.frames,
-      judge: { backend: backend.name, model: backend.model, framesJudged: judged.framesJudged, degraded: judged.degraded },
+      // Re-scored cold frames, then the iteration frames untouched: they were
+      // never judged, and dropping them here would undo the run's own record of
+      // what happened after the window closed.
+      frames: [
+        ...judged.frames.map((f): ScoredFrame => ({ ...f, phase: 'cold' })),
+        ...prev.frames.filter((f) => !isCold(f)).map((f): ScoredFrame => ({ ...f, phase: 'iteration' })),
+      ],
+      judge: {
+        backend: backend.name,
+        model: backend.model,
+        framesJudged: judged.framesJudged,
+        degraded: judged.degraded,
+      },
       curve: computeMetrics(judged.frames, {
         horizonMs: brief.horizonSec * 1000,
         runEndMs: prev.curve.runEndMs,
         reviewableThreshold: brief.reviewableThreshold,
       }),
     };
-    await writeFile(join(dir, 'result.json'), JSON.stringify(next, null, 2));
+    await writeJsonAtomic(resultPath, next);
     await writeFile(join(dir, 'report.html'), renderHtml(next, dir));
     console.log(renderText(next));
     return;
@@ -412,7 +501,7 @@ async function main(): Promise<void> {
 
   const judgeBackend = cmd === 'floor'
     ? new NullBackend()
-    : pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
+    : judgeBackendFor(values.judge);
 
   const outRoot = values.out ?? 'runs';
   const repeats = Math.max(1, Number(values.repeat ?? 1));
@@ -487,7 +576,7 @@ async function main(): Promise<void> {
     const agg = aggregate(results);
     await mkdir(resolve(outRoot), { recursive: true });
     const aggPath = resolve(outRoot, `aggregate-${brief.id}-${slug(label)}.json`);
-    await writeFile(aggPath, JSON.stringify(agg, null, 2));
+    await writeJsonAtomic(aggPath, agg);
     console.log(renderAggregate(agg));
     console.log(`  aggregate: ${aggPath}\n`);
   }

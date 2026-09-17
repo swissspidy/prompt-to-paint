@@ -113,9 +113,24 @@ export type ScoreSource =
   | 'non-render'    // blank/error/unreachable, scored 0 without a model call
   | 'mechanical';   // no judge available; entity coverage used as a proxy
 
+/** Which window of the run a stored frame belongs to. */
+export type FramePhase =
+  | 'cold'       // the measured cold-start window; every headline number comes from these
+  | 'iteration'; // after the window closed, while follow-up edits were measured
+
 export interface ScoredFrame extends Frame {
   score: number;
   scoreSource: ScoreSource;
+  /**
+   * Cold-start frames are what the curve, the AUC and every headline number
+   * are computed from. Iteration frames are kept so a run can be replayed in
+   * full -- the edits are half of what a run shows -- but they are never
+   * scored against the cold-start rubric and never enter the curve, because
+   * "make the header blue" is a different experiment from the brief.
+   *
+   * Absent on results written before v0.4; read those as all-cold.
+   */
+  phase?: FramePhase;
   criteria?: Record<string, { met: boolean; note?: string }>;
   judgeNote?: string;
 }
@@ -319,7 +334,17 @@ export interface RunResult {
   frames: ScoredFrame[];
   phases: PhaseEvent[];
   agentEvents: AgentEvent[];
-  judge: { backend: string; model: string | null; framesJudged: number; degraded: boolean };
+  judge: {
+    backend: string;
+    model: string | null;
+    framesJudged: number;
+    degraded: boolean;
+    /**
+     * Written before judging, so an interrupted or failed scoring pass still
+     * leaves a replayable run on disk. `p2p rescore` clears it.
+     */
+    pending?: boolean;
+  };
   /**
    * Set when the agent process died before the harness stopped it. A run that
    * failed to launch must never be mistaken for an agent that built nothing.

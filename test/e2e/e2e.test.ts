@@ -10,9 +10,11 @@ import { runBenchmark } from '../../src/run.ts';
 import { ScriptedAdapter } from '../../src/adapters/scripted.ts';
 import { ExecAdapter } from '../../src/adapters/exec.ts';
 import { NullBackend } from '../../src/judge/backends.ts';
+import type { JudgeBackend } from '../../src/judge/backends.ts';
+import { coldFrames } from '../../src/phase.ts';
 import { findChromium } from '../../src/probe/browser.ts';
 import { serveStatic } from '../../src/static-server.ts';
-import type { Brief } from '../../src/types.ts';
+import type { Brief, RunResult } from '../../src/types.ts';
 
 const run = promisify(execFile);
 const hasBrowser = Boolean(findChromium());
@@ -209,6 +211,103 @@ test('an iteration whose check already passes is reported void, not fast', { ski
   }
 });
 
+test('iteration frames are kept for replay but never scored or counted', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-iterframes-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const page = (color: string): string =>
+      `<!doctype html><meta charset=utf-8><body><h1 style="color:${color}">DevConf 2026</h1>`
+      + '<ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul><footer>See you in Berlin</footer></body>';
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 40, target: { ...base.target, port: 5295 } },
+      adapter: new ScriptedAdapter({
+        steps: [{ atMs: 0, write: { path: 'index.html', content: page('#111111') } }],
+        // The edit the iteration measures: the heading goes blue.
+        iterationSteps: { '0': [{ atMs: 200, write: { path: 'index.html', content: page('#1544d6') } }] },
+      }),
+      runDir: dir, label: 'iter-frames', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    const cold = result.frames.filter((f) => f.phase === 'cold');
+    const iter = result.frames.filter((f) => f.phase === 'iteration');
+    assert.ok(cold.length > 0, 'the cold-start window was captured');
+    assert.ok(iter.length > 0, 'the iteration frames survived into the result');
+    assert.equal(cold.length + iter.length, result.frames.length, 'every frame carries a phase');
+
+    // The whole point: the edit is on the timeline, so a video of this run
+    // shows it. Before, the result stopped when the window closed.
+    assert.ok(
+      iter.every((f) => f.tMs > result.curve.runEndMs),
+      'iteration frames all sit after the measured window',
+    );
+    // ...and the numbers still describe the cold start alone.
+    assert.ok(
+      iter.every((f) => f.scoreSource !== 'judge' && f.scoreSource !== 'forward-fill'),
+      'no iteration frame is scored against the cold-start rubric',
+    );
+    assert.deepEqual(coldFrames(result).map((f) => f.index), cold.map((f) => f.index));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the run is on disk before it is scored, so an interrupted judge loses nothing', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-provisional-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const resultPath = join(dir, 'result.json');
+
+    /**
+     * Reads result.json the first time it is asked to score anything.
+     *
+     * Judging runs after teardown and can take minutes, so whatever is on disk
+     * at this moment is all a Ctrl-C would leave behind. It has to be a
+     * complete, replayable run.
+     */
+    class SpyBackend implements JudgeBackend {
+      readonly name = 'spy';
+      readonly model = 'spy';
+      readonly concurrency = 1;
+      onDisk: RunResult | null = null;
+      async ask(): Promise<string> {
+        this.onDisk ??= JSON.parse(await readFile(resultPath, 'utf8')) as RunResult;
+        throw new Error('this backend never returns a verdict');
+      }
+    }
+    const spy = new SpyBackend();
+
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 30, iterations: [], target: { ...base.target, port: 5296 } },
+      adapter: new ScriptedAdapter({
+        steps: [{
+          atMs: 0,
+          write: {
+            path: 'index.html',
+            content: '<!doctype html><meta charset=utf-8><body><h1>DevConf 2026</h1>'
+              + '<ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul><footer>See you in Berlin</footer></body>',
+          },
+        }],
+      }),
+      runDir: dir, label: 'provisional', judgeBackend: spy, settleMs: 2000, killPort: true,
+    });
+
+    const early = spy.onDisk;
+    assert.ok(early, 'result.json existed before the first frame was judged');
+    assert.equal(early.judge.pending, true, 'and says its scores are not final');
+    assert.deepEqual(
+      early.frames.map((f) => f.tMs),
+      result.frames.map((f) => f.tMs),
+      'the provisional timeline is the whole timeline, so the run can be replayed from it',
+    );
+    assert.ok(early.frames.some((f) => f.screenshotPath), 'with screenshots to replay');
+    // The finished file supersedes it: scoring was attempted, so it is no
+    // longer pending, even though this backend never returned a verdict.
+    assert.notEqual(result.judge.pending, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The control run: the toolchain measured with no model in the loop.
 // ---------------------------------------------------------------------------
@@ -265,6 +364,53 @@ test('the static server survives malformed and racing requests', async () => {
 // ---------------------------------------------------------------------------
 // The CLI itself, run the way a user runs it.
 // ---------------------------------------------------------------------------
+
+test('rescore finds its run directory whichever side of the flags it is on', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-rescore-args-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    await runBenchmark({
+      brief: { ...base, horizonSec: 30, iterations: [], target: { ...base.target, port: 5297 } },
+      adapter: new ScriptedAdapter({
+        steps: [{
+          atMs: 0,
+          write: {
+            path: 'index.html',
+            content: '<!doctype html><meta charset=utf-8><body><h1>DevConf 2026</h1>'
+              + '<ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul><footer>See you in Berlin</footer></body>',
+          },
+        }],
+      }),
+      briefPath: 'test/fixtures/calibration-brief.json',
+      runDir: dir, label: 'rescore-args', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    // Both orders have to reach the same run. The directory used to be found
+    // with `argv.find(a => !a.startsWith('-'))`, which happily returned an
+    // option's value: with the flags first this went looking for
+    // `none/result.json` and the run was never touched.
+    for (const args of [
+      ['src/cli.ts', 'rescore', dir, '--judge', 'none'],
+      ['src/cli.ts', 'rescore', '--judge', 'none', dir],
+      ['src/cli.ts', 'rescore', '--judge', 'none', '--brief', 'test/fixtures/calibration-brief.json', dir],
+    ]) {
+      const { stdout } = await run(process.execPath, args);
+      assert.match(stdout, /AUC \(headline\)/, args.join(' '));
+    }
+
+    // A directory with no result.json is a usage error, not a stack trace.
+    await assert.rejects(
+      () => run(process.execPath, ['src/cli.ts', 'rescore', '--judge', 'none', join(dir, 'nope')]),
+      (e: { stderr?: string }) => {
+        assert.match(e.stderr ?? '', /error: could not read/);
+        assert.doesNotMatch(e.stderr ?? '', /at async main/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test('the CLI runs from plain node with no loader', async () => {
   const { stdout: help } = await run(process.execPath, ['src/cli.ts', 'help']);

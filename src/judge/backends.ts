@@ -1,9 +1,14 @@
-import { spawn } from 'node:child_process';
-import { dirname } from 'node:path';
-import { sleep } from '../sleep.ts';
+import { generateText, type LanguageModel } from 'ai';
+
+/**
+ * Used whenever `--judge` is not given.
+ *
+ * Qualified like every other judge, so the default is spelled the same way the
+ * flag is and `result.json` never records an unattributed model name.
+ */
+export const DEFAULT_JUDGE = 'anthropic:claude-sonnet-5';
 
 export interface JudgeRequest {
-  imagePath: string;
   png: Buffer;
   prompt: string;
 }
@@ -17,133 +22,107 @@ export interface JudgeBackend {
   concurrency: number;
 }
 
-/** Direct Messages API. Preferred: parallel, cheap, and independent of CLI auth. */
-export class ApiBackend implements JudgeBackend {
-  readonly name = 'api';
-  readonly concurrency = 4;
-  readonly model: string;
-  private apiKey: string;
-  private baseUrl: string;
+/**
+ * Providers the AI SDK judge can address.
+ *
+ * Deliberately a closed list rather than a free-form package name: the value
+ * comes off the command line, and `await import(userInput)` is arbitrary code
+ * execution. Each entry names the package's default provider export and the
+ * environment variable that package reads its key from, so a missing key can
+ * be reported before the first frame is sent rather than sixty failures later.
+ */
+const AI_SDK_PROVIDERS: Record<string, { pkg: string; envKey: string }> = {
+  google: { pkg: '@ai-sdk/google', envKey: 'GOOGLE_GENERATIVE_AI_API_KEY' },
+  anthropic: { pkg: '@ai-sdk/anthropic', envKey: 'ANTHROPIC_API_KEY' },
+  openai: { pkg: '@ai-sdk/openai', envKey: 'OPENAI_API_KEY' },
+};
 
-  constructor(
-    model: string,
-    apiKey: string,
-    baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-  ) {
-    this.model = model;
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl;
+export const AI_SDK_PROVIDER_NAMES = Object.keys(AI_SDK_PROVIDERS);
+
+/**
+ * Split a `provider:model` judge into its parts, or return null if it is not one.
+ *
+ * Only a known provider prefix counts. A bare `claude-sonnet-5` is not a spec,
+ * and neither is a Bedrock id like `us.anthropic.claude-x:0`, whose colon
+ * belongs to the model name -- so an id that merely contains one is reported as
+ * unqualified rather than mistaken for a provider that does not exist.
+ */
+export function parseJudge(spec: string): { provider: string; model: string } | null {
+  const i = spec.indexOf(':');
+  if (i <= 0) return null;
+  const provider = spec.slice(0, i);
+  const model = spec.slice(i + 1);
+  if (!model || !(provider in AI_SDK_PROVIDERS)) return null;
+  return { provider, model };
+}
+
+/**
+ * Judge through the Vercel AI SDK: the only backend that talks to a model.
+ *
+ * One transport for every provider is the whole point. Gemini, GPT and Claude
+ * get the same rubric prompt and the same JSON contract, so a disagreement
+ * between two runs is a disagreement between two judges rather than between
+ * two hand-written clients. That does not make them interchangeable -- judges
+ * differ at the margin -- so `result.json` records which one scored a run, and
+ * a leaderboard should not mix them.
+ *
+ * Retries are the SDK's, which already backs off on 429s and 5xx.
+ */
+export class AiSdkBackend implements JudgeBackend {
+  readonly name = 'ai';
+  readonly concurrency = 4;
+  /** Qualified, because `gemini-2.5-flash` alone does not say who served it. */
+  readonly model: string;
+  private provider: string;
+  private modelId: string;
+  private loaded: Promise<LanguageModel> | null = null;
+
+  constructor(provider: string, modelId: string) {
+    this.provider = provider;
+    this.modelId = modelId;
+    this.model = `${provider}:${modelId}`;
   }
 
   /**
-   * Score one frame over HTTP, retrying 429s and 5xx with exponential backoff.
+   * Resolve the provider package once, on first use.
+   *
+   * Imported lazily so that installing the harness does not require every
+   * provider to be usable, and so `p2p briefs` does not pay for an SDK it will
+   * never call. The promise is cached rather than the model, so concurrent
+   * workers racing the first frame still import only once.
    */
+  private load(): Promise<LanguageModel> {
+    this.loaded ??= (async (): Promise<LanguageModel> => {
+      const entry = AI_SDK_PROVIDERS[this.provider]!;
+      const mod = (await import(entry.pkg)) as Record<string, unknown>;
+      const factory = mod[this.provider];
+      if (typeof factory !== 'function')
+        throw new Error(`${entry.pkg} does not export a "${this.provider}" provider`);
+      return (factory as (id: string) => LanguageModel)(this.modelId);
+    })();
+    return this.loaded;
+  }
+
+  /** Score one frame. */
   async ask(req: JudgeRequest): Promise<string> {
-    const body = {
-      model: this.model,
-      max_tokens: 1024,
+    const model = await this.load();
+    const { text } = await generateText({
+      model,
+      maxRetries: 4,
+      abortSignal: AbortSignal.timeout(120_000),
       messages: [
         {
           role: 'user',
           content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/png', data: req.png.toString('base64') },
-            },
+            // The tagged file part rather than the deprecated `image` part:
+            // same bytes, and it is what the SDK will keep supporting.
+            { type: 'file', mediaType: 'image/png', data: { type: 'data', data: req.png } },
             { type: 'text', text: req.prompt },
           ],
         },
       ],
-    };
-    let lastErr = 'unknown';
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/v1/messages`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': this.apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(120_000),
-        });
-        if (res.status === 429 || res.status >= 500) {
-          lastErr = `http-${res.status}`;
-          await sleep(1000 * 2 ** attempt);
-          continue;
-        }
-        if (!res.ok) throw new Error(`judge api ${res.status}: ${(await res.text()).slice(0, 300)}`);
-        const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-        return (json.content ?? [])
-          .filter((c) => c.type === 'text')
-          .map((c) => c.text ?? '')
-          .join('');
-      } catch (e) {
-        lastErr = String(e);
-        await sleep(1000 * 2 ** attempt);
-      }
-    }
-    throw new Error(`judge api failed after retries: ${lastErr}`);
-  }
-}
-
-/**
- * Judge through the local `claude` CLI.
- *
- * Slower and serialised, but it works wherever the CLI is already signed in,
- * which means the harness runs on a laptop without provisioning an API key.
- */
-export class CliBackend implements JudgeBackend {
-  readonly name = 'cli';
-  readonly concurrency = 2;
-  readonly model: string;
-  private bin: string;
-
-  constructor(model: string, bin = 'claude') {
-    this.model = model;
-    this.bin = bin;
-  }
-
-  /**
-   * Score one frame by asking the local CLI to read the screenshot off disk.
-   */
-  async ask(req: JudgeRequest): Promise<string> {
-    const prompt = `Read the image file at ${req.imagePath}, then answer.\n\n${req.prompt}`;
-    // The prompt goes over stdin, never as a positional argument: --add-dir and
-    // --allowedTools are both variadic, so a trailing positional gets swallowed
-    // as one of their values and the CLI exits complaining of no input.
-    const args = [
-      '-p',
-      '--output-format', 'json',
-      '--model', this.model,
-      '--allowedTools', 'Read',
-      '--add-dir', dirname(req.imagePath),
-    ];
-    return await new Promise<string>((resolve, reject) => {
-      const child = spawn(this.bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-      child.stdin.write(prompt);
-      child.stdin.end();
-      let out = '';
-      let err = '';
-      const timer = setTimeout(() => child.kill('SIGKILL'), 180_000);
-      child.stdout.on('data', (d) => (out += d));
-      child.stderr.on('data', (d) => (err += d));
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (code !== 0) return reject(new Error(`claude cli exited ${code}: ${err.slice(0, 300)}`));
-        try {
-          const parsed = JSON.parse(out) as { result?: string };
-          resolve(parsed.result ?? out);
-        } catch {
-          resolve(out);
-        }
-      });
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        reject(e);
-      });
     });
+    return text;
   }
 }
 
@@ -159,24 +138,30 @@ export class NullBackend implements JudgeBackend {
 }
 
 /**
- * Choose a judge backend.
+ * Choose a judge from the one value that names it.
  *
- * `auto` prefers the API when a key is present and falls back to the local
- * CLI, so the harness runs on a laptop without provisioning credentials.
+ * Every provider reaches the judge through the AI SDK, so a run scored by
+ * Gemini and one scored by Claude differ in the string on the command line and
+ * nowhere else in this code. That string is the provider and the model
+ * together -- `google:gemini-2.5-flash` -- because a model id alone does not
+ * say who served it, and a report that cannot name its judge cannot be put
+ * beside another one. `none` scores nothing.
  */
-export function pickBackend(opt: {
-  backend?: 'api' | 'cli' | 'none' | 'auto';
-  model?: string;
-}): JudgeBackend {
-  const model = opt.model ?? 'claude-sonnet-5';
-  const key = process.env.ANTHROPIC_API_KEY;
-  const choice = opt.backend ?? 'auto';
-  if (choice === 'api') {
-    if (!key) throw new Error('judge backend "api" requires ANTHROPIC_API_KEY');
-    return new ApiBackend(model, key);
-  }
-  if (choice === 'cli') return new CliBackend(model);
-  if (choice === 'none') return new NullBackend();
-  if (key) return new ApiBackend(model, key);
-  return new CliBackend(model);
+export function pickBackend(judge?: string): JudgeBackend {
+  const wanted = judge ?? DEFAULT_JUDGE;
+  if (wanted === 'none') return new NullBackend();
+
+  const spec = parseJudge(wanted);
+  if (!spec)
+    throw new Error(
+      `--judge "${wanted}" does not name a provider. Use <provider>:<model>, ` +
+        `e.g. ${DEFAULT_JUDGE}, or none. Providers: ${AI_SDK_PROVIDER_NAMES.join(', ')}.`,
+    );
+
+  // Refuse now rather than once per frame: a run that judges nothing takes the
+  // same minutes as one that judges everything, and only says so at the end.
+  const { envKey } = AI_SDK_PROVIDERS[spec.provider]!;
+  if (!process.env[envKey])
+    throw new Error(`judge provider "${spec.provider}" requires ${envKey}`);
+  return new AiSdkBackend(spec.provider, spec.model);
 }

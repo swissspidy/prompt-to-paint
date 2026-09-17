@@ -19,6 +19,10 @@
     "test:all": "npm run typecheck && npm test && npm run test:e2e"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.56",
+    "@ai-sdk/google": "^4.0.74",
+    "@ai-sdk/openai": "^4.0.69",
+    "ai": "^7.0.105",
     "playwright": "^1.63.0",
     "pngjs": "^7.0.0"
   },

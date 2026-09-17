@@ -2,6 +2,7 @@ import { relative, dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { FrameClass, RunResult } from '../types.ts';
 import { buildCurve } from '../metrics/curve.ts';
+import { coldFrames } from '../phase.ts';
 import { rank, assertComparable, type Ranked } from './compare.ts';
 import { spread } from './aggregate.ts';
 import { SERIES_LIGHT, SERIES_DARK } from './palette.ts';
@@ -176,7 +177,10 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
   const score: number[] = [];
   const cls: number[] = [];
 
-  for (const f of [...r.frames].sort((a, b) => a.tMs - b.tMs)) {
+  // Cold-start only: the scrubber is a side-by-side replay of the measured
+  // window, so an extra tail of iteration frames would desynchronise two runs
+  // that are otherwise directly comparable.
+  for (const f of [...coldFrames(r)].sort((a, b) => a.tMs - b.tMs)) {
     let idx = -1;
     if (f.screenshotPath) {
       const rel = relative(pageDir, f.screenshotPath).split(/[\\/]/).join('/');
@@ -209,7 +213,7 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
     shot,
     score,
     cls,
-    curve: buildCurve(r.frames, {
+    curve: buildCurve(coldFrames(r), {
       horizonMs: r.curve.horizonMs,
       runEndMs: r.curve.runEndMs,
       reviewableThreshold: 0,
