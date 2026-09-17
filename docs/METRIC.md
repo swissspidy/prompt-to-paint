@@ -254,7 +254,10 @@ It says four things:
    app. Telling every agent that the clock is running is the fair version of
    that instruction. `--no-render-early` drops this clause, which measures
    unprompted behaviour instead. That is a different experiment, and runs from
-   the two are not comparable.
+   the two may not be ranked in one table. They can still be compared, but only
+   pairwise: `p2p leaderboard` ranks each condition on its own and reports the
+   per-agent difference between them, which is what "how much was the
+   instruction worth" actually means.
 3. **To start the dev server in the background.** A server in the foreground
    never returns, so the agent's turn can never complete.
 4. **To create `.p2p-done` when finished.** See below.
@@ -333,7 +336,9 @@ and the output says so when the AUC range exceeds 0.15.
   — verbatim and identically. It is part of the measurement, not a hint to one
   agent, and it is saved with the run as `prompt.txt`. It also means these
   numbers describe agents that were told the clock is running; `--no-render-early`
-  measures the other thing, and the two are not comparable.
+  measures the other thing. Which one a run answers is recorded in
+  `result.json` as `protocol.renderEarly`, and the leaderboard keeps the two
+  rankings apart rather than merging them.
 - **Repeated screenshots share a file.** Every frame carries a screenshot,
   including the ones taken before anything was listening, but consecutive
   frames whose luminance hash and colour grid are both exactly equal point at

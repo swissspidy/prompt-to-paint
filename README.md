@@ -187,6 +187,27 @@ and this is where you notice.
 Runs must share a brief and a horizon; the command refuses to rank runs that do
 not, because AUC has the horizon in its denominator.
 
+### Told versus not told
+
+A run measured with `--no-render-early` answers a different question from one
+measured without it: whether the agent renders early *unprompted*, rather than
+how fast it does so *when asked*. Feed both to `p2p leaderboard` and it ranks
+each condition separately — never as one table, which would be a ranking of two
+different experiments — and adds a paired row per agent showing what the
+instruction was worth:
+
+```
+  What the instruction was worth  (same agent, same brief, told vs not told)
+  run                       AUC told  not told    delta  first render
+  ----------------------------------------------------------------------------
+  demo-agent                   0.937     0.691   +0.247  9.9s sooner
+```
+
+A large delta says the agent can render early but does not think to. A delta
+near zero is the more interesting result: the ranking would look the same
+without the instruction, so the headline number is measuring the agent rather
+than its instruction-following.
+
 ## What every agent is told, and how a run ends
 
 Every brief is handed to the agent with the same block appended, identically,
@@ -203,7 +224,8 @@ Each of those exists because leaving it out broke a run:
   blank page for the whole run, and a first frame that is already the finished
   app. Telling every agent the clock is running is the fair version of that
   instruction. `--no-render-early` drops the clause and measures unprompted
-  behaviour, which is a different experiment; the two are not comparable.
+  behaviour, which is a different experiment; the two are not comparable as one
+  ranking, but they are worth measuring together — see below.
 - **"Background the server"** because a dev server in the foreground never
   returns, so the agent's turn never completes.
 - **`.p2p-done`** because a turn that never completes left the horizon as the

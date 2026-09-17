@@ -542,6 +542,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     },
     agentFailure,
     endReason,
+    protocol: { renderEarly: !opts.noRenderEarly },
     artifacts: {
       videoPath: prober.videoPath,
       promptPath: join(opts.runDir, 'prompt.txt'),

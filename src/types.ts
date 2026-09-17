@@ -327,6 +327,18 @@ export interface RunResult {
   agentFailure: { exitCode: number | null; atMs: number; logPath: string } | null;
   /** Why the cold-start window closed. Absent on results written before v0.2. */
   endReason?: RunEndReason;
+  /**
+   * What the agent was told about how the run is observed.
+   *
+   * `renderEarly` is the whole comparison: with it the agent knows the clock is
+   * running and that a rough early page beats a perfect late one, and the number
+   * says how fast it renders when told to. Without it, the number says whether
+   * it does so unprompted. Those are different questions, and a result that does
+   * not record which one it answers cannot be placed next to another.
+   *
+   * Absent on results written before v0.3; every one of those was prompted.
+   */
+  protocol?: { renderEarly: boolean };
   /** Files and counts produced beside result.json. */
   artifacts?: {
     /** Session recording, when --video was on. */

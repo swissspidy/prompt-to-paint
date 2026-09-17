@@ -2,7 +2,8 @@ import { relative, dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { FrameClass, RunResult } from '../types.ts';
 import { buildCurve } from '../metrics/curve.ts';
-import { rank, assertComparable } from './compare.ts';
+import { rank, assertComparable, type Ranked } from './compare.ts';
+import { spread } from './aggregate.ts';
 import { SERIES_LIGHT, SERIES_DARK } from './palette.ts';
 
 const esc = (s: string): string =>
@@ -10,10 +11,127 @@ const esc = (s: string): string =>
 
 const secs = (ms: number | null): string => (ms === null ? '--' : `${(ms / 1000).toFixed(1)}s`);
 
+const signedAuc = (v: number): string => `${v >= 0 ? '+' : '\u2212'}${Math.abs(v).toFixed(3)}`;
+
+/**
+ * A time delta said in words rather than as a signed number.
+ *
+ * One of the two paired numbers is better when larger and the other when
+ * smaller, so a bare sign is exactly the kind of thing a reader gets backwards.
+ * Anything inside a poll interval is "same": the prober cannot resolve it.
+ */
+const sooner = (ms: number | null): string =>
+  ms === null ? '--' : Math.abs(ms) < 1000 ? 'same' : `${(Math.abs(ms) / 1000).toFixed(1)}s ${ms > 0 ? 'sooner' : 'later'}`;
+
 /** Inline JSON must not be able to close the script element that carries it. */
 const json = (v: unknown): string => JSON.stringify(v).replace(/</g, '\\u003c');
 
 const CLASS_CODE: Record<FrameClass, number> = { unreachable: 0, error: 1, blank: 2, render: 3 };
+
+/** Which experiment a run belongs to. */
+export type Condition = 'prompted' | 'unprompted';
+
+export const CONDITION_LABEL: Record<Condition, string> = {
+  prompted: 'Told the clock is running',
+  unprompted: 'Not told (unprompted behaviour)',
+};
+
+/**
+ * Whether this run was asked to render something early.
+ *
+ * Results written before the protocol was recorded all carried the clause, so
+ * an absent field means prompted rather than unknown.
+ */
+export function conditionOf(r: RunResult): Condition {
+  return r.protocol?.renderEarly === false ? 'unprompted' : 'prompted';
+}
+
+export interface OrderedRow {
+  condition: Condition;
+  /** Index into the runs array this was ordered from. */
+  index: number;
+  ranked: Ranked;
+}
+
+/**
+ * Rank within each condition, never across them.
+ *
+ * An agent told that a rough early page scores better is answering a different
+ * question from one that was not, so a single ordering over both would be a
+ * ranking of two different experiments -- exactly the kind of plausible table
+ * this project exists to refuse. Ranking inside each condition keeps every "#"
+ * meaningful, and the prompt effect below is where the two meet.
+ */
+export function orderByCondition(runs: RunResult[]): OrderedRow[] {
+  const order: Condition[] = ['prompted', 'unprompted'];
+  const rows: OrderedRow[] = [];
+  for (const condition of order) {
+    const picked = runs
+      .map((r, index) => ({ r, index }))
+      .filter((e) => conditionOf(e.r) === condition);
+    if (!picked.length) continue;
+    for (const ranked of rank(picked.map((e) => e.r))) {
+      rows.push({ condition, index: picked[ranked.index]!.index, ranked });
+    }
+  }
+  return rows;
+}
+
+export interface PromptEffect {
+  label: string;
+  runs: { prompted: number; unprompted: number };
+  aucPrompted: number;
+  aucUnprompted: number;
+  /** Prompted minus unprompted: positive means the instruction helped. */
+  aucDelta: number;
+  ttfnbrPromptedMs: number | null;
+  ttfnbrUnpromptedMs: number | null;
+  /** Unprompted minus prompted: positive means it rendered that much sooner. */
+  ttfnbrDeltaMs: number | null;
+}
+
+/**
+ * What the instruction was worth, for agents measured both ways.
+ *
+ * This is the only honest comparison across the two conditions, because it is
+ * paired: same agent, same brief, one difference. A large delta says the agent
+ * can render early but does not think to; a delta near zero says the ranking
+ * would look the same either way, which is the more interesting result and the
+ * one a merged table would have hidden.
+ *
+ * Both signs are oriented so that positive means the instruction helped, since
+ * one of the two underlying numbers is better when larger and the other when
+ * smaller. Repeats collapse to their median -- one run is not a measurement.
+ */
+export function promptEffects(runs: RunResult[]): PromptEffect[] {
+  const cells = new Map<string, Record<Condition, RunResult[]>>();
+  for (const r of runs) {
+    const label = r.label || r.adapter;
+    const cell = cells.get(label) ?? { prompted: [], unprompted: [] };
+    cell[conditionOf(r)].push(r);
+    cells.set(label, cell);
+  }
+
+  const effects: PromptEffect[] = [];
+  for (const [label, cell] of cells) {
+    if (!cell.prompted.length || !cell.unprompted.length) continue;
+    const aucP = spread(cell.prompted.map((r) => r.curve.auc)).median ?? 0;
+    const aucU = spread(cell.unprompted.map((r) => r.curve.auc)).median ?? 0;
+    const tP = spread(cell.prompted.map((r) => r.curve.ttfnbrMs)).median;
+    const tU = spread(cell.unprompted.map((r) => r.curve.ttfnbrMs)).median;
+    effects.push({
+      label,
+      runs: { prompted: cell.prompted.length, unprompted: cell.unprompted.length },
+      aucPrompted: aucP,
+      aucUnprompted: aucU,
+      aucDelta: aucP - aucU,
+      ttfnbrPromptedMs: tP,
+      ttfnbrUnpromptedMs: tU,
+      ttfnbrDeltaMs: tP !== null && tU !== null ? tU - tP : null,
+    });
+  }
+  return effects.sort((a, b) => b.aucDelta - a.aucDelta);
+}
 
 export interface LeaderboardTrack {
   label: string;
@@ -38,6 +156,7 @@ export interface LeaderboardTrack {
   curve: Array<[number, number]>;
   reportHref: string | null;
   videoHref: string | null;
+  condition: Condition;
 }
 
 /**
@@ -97,6 +216,7 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
     }).map((p): [number, number] => [p.tMs, Math.round(p.score * 100)]),
     reportHref: rel(join(runDir, 'report.html')),
     videoHref: rel(r.artifacts?.videoPath),
+    condition: conditionOf(r),
   };
 }
 
@@ -116,10 +236,14 @@ export function renderLeaderboard(
   assertComparable(runs);
   const pageDir = dirname(outPath);
   const horizonMs = runs[0]?.curve.horizonMs ?? 0;
-  const ranked = rank(runs);
-  // Ranked rows carry the index of the run they came from, so panels, table
-  // rows and series colours stay lined up even when several runs share a label.
-  const tracks = ranked.map((r) => buildTrack(runs[r.index]!, pageDir, opts.runDirs?.[r.index] ?? pageDir));
+  // Ranked within each condition, never across: rows carry the index of the run
+  // they came from, so panels, table rows and series colours stay lined up even
+  // when several runs share a label.
+  const rows = orderByCondition(runs);
+  const ranked = rows.map((row) => row.ranked);
+  const effects = promptEffects(runs);
+  const mixed = new Set(rows.map((row) => row.condition)).size > 1;
+  const tracks = rows.map((row) => buildTrack(runs[row.index]!, pageDir, opts.runDirs?.[row.index] ?? pageDir));
 
   const totalShots = tracks.reduce((n, t) => n + t.srcs.length, 0);
   const vars = (list: string[]): string => list.map((c, i) => `--series-${i + 1}: ${c};`).join(' ');
@@ -176,7 +300,9 @@ export function renderLeaderboard(
       <figcaption class="phead">
         <span class="rank">${i + 1}</span>
         <span class="plabel" style="color:var(--series-${slot(i)})">${esc(tr.label)}</span>
-        <span class="pauc">AUC ${tr.auc.toFixed(3)}</span>
+        <span class="pauc">AUC ${tr.auc.toFixed(3)}</span>${
+        mixed ? `<span class="ctag">${tr.condition === 'prompted' ? 'told' : 'not told'}</span>` : ''
+      }
       </figcaption>
       <div class="screen"><img alt="${esc(tr.label)} at the current time" decoding="async"/>
         <span class="badge"></span></div>
@@ -226,6 +352,11 @@ export function renderLeaderboard(
   .num { text-align:right; font-variant-numeric:tabular-nums; }
   .swatch { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:8px; }
   .moved { color:var(--series-2); font-weight:600; }
+  .cgroup td { font-weight:600; padding-top:16px; color:var(--text-secondary);
+    border-bottom:1px solid var(--border); }
+  .ctag { font-size:11px; padding:1px 6px; border-radius:99px; border:1px solid var(--border);
+    color:var(--text-secondary); margin-left:6px; }
+  .delta-up { color:var(--series-3); } .delta-flat { color:var(--text-secondary); }
   svg.chart { width:100%; height:auto; overflow:visible; display:block; }
   .grid { stroke:var(--grid); stroke-width:1; }
   .tick { fill:var(--text-muted); font-size:11px; }
@@ -304,10 +435,15 @@ export function renderLeaderboard(
 <table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
 <th class="num">First render</th><th class="num">First reviewable</th>
 <th class="num">By AUC</th><th class="num">By final</th><th>Window closed by</th></tr></thead><tbody>
-${ranked
-  .map((r, i) => {
-    const tr = tracks[i]!; // ranked and tracks are built in the same order
-    return `<tr>
+${rows
+  .map((row, i) => {
+    const r = row.ranked;
+    const tr = tracks[i]!; // rows, ranked and tracks are built in the same order
+    const head =
+      mixed && (i === 0 || rows[i - 1]!.condition !== row.condition)
+        ? `<tr class="cgroup"><td colspan="8">${esc(CONDITION_LABEL[row.condition])}</td></tr>`
+        : '';
+    return `${head}<tr>
   <td><span class="swatch" style="background:var(--series-${slot(i)})"></span>${esc(r.label)}</td>
   <td class="num"><b>${r.auc.toFixed(3)}</b></td><td class="num">${r.finalScore.toFixed(2)}</td>
   <td class="num">${secs(r.ttfnbrMs)}</td><td class="num">${secs(r.ttfrrMs)}</td>
@@ -323,6 +459,35 @@ ${ranked
       : 'Highlighted rows rank differently by trajectory than by final score — the disagreement the trajectory metric exists to surface.'
   } Playback shows the frames the scores were computed from, on one shared clock, so the ranking above and the pictures below cannot disagree.</p>
 </section>
+${
+    effects.length
+      ? `<section class="panel"><h2>What the instruction was worth</h2>
+<table><thead><tr><th>Run</th><th class="num">AUC told</th><th class="num">AUC not told</th>
+<th class="num">&Delta; AUC</th><th class="num">First render told</th>
+<th class="num">not told</th><th>Effect on first render</th></tr></thead><tbody>
+${effects
+  .map(
+    (e) => `<tr>
+  <td>${esc(e.label)}${
+      e.runs.prompted > 1 || e.runs.unprompted > 1
+        ? ` <span class="ctag">medians of ${e.runs.prompted}/${e.runs.unprompted}</span>`
+        : ''
+    }</td>
+  <td class="num">${e.aucPrompted.toFixed(3)}</td><td class="num">${e.aucUnprompted.toFixed(3)}</td>
+  <td class="num ${Math.abs(e.aucDelta) < 0.02 ? 'delta-flat' : 'delta-up'}"><b>${signedAuc(e.aucDelta)}</b></td>
+  <td class="num">${secs(e.ttfnbrPromptedMs)}</td><td class="num">${secs(e.ttfnbrUnpromptedMs)}</td>
+  <td>${sooner(e.ttfnbrDeltaMs)}</td></tr>`,
+  )
+  .join('')}
+</tbody></table>
+<p class="note">Paired: the same agent on the same brief, with one difference &mdash; whether the
+protocol asked for an early rough render. Positive means the instruction helped. A delta near zero
+is the more interesting result, because it says the ranking would look the same without the
+instruction; a large one says the agent can render early but does not think to. The two rankings
+above are separate on purpose and must not be read as one table.</p>
+</section>`
+      : ''
+  }
 
 </div>
 <script id="tracks" type="application/json">${json(tracks)}</script>
@@ -466,22 +631,51 @@ ${ranked
  */
 export function renderLeaderboardText(runs: RunResult[]): string {
   assertComparable(runs);
-  const rows = rank(runs);
-  const reason = new Map(runs.map((r) => [r.label || r.adapter, r.endReason ?? 'unknown']));
+  const rows = orderByCondition(runs);
+  const effects = promptEffects(runs);
+  const mixed = new Set(rows.map((row) => row.condition)).size > 1;
   const L: string[] = [''];
-  L.push(
-    '  ' + '#'.padEnd(3) + 'run'.padEnd(24) + 'AUC'.padStart(7) + 'final'.padStart(8) +
-      'first'.padStart(9) + 'reviewable'.padStart(12) + '  ended by',
-  );
-  L.push('  ' + '-'.repeat(76));
-  for (const [i, r] of rows.entries()) {
+
+  for (const [i, row] of rows.entries()) {
+    if (i === 0 || rows[i - 1]!.condition !== row.condition) {
+      // A heading per condition, and a separate 1..n, because the two are
+      // different experiments and one continuous ranking over both would be a
+      // number nobody can act on.
+      if (i > 0) L.push('');
+      if (mixed) L.push(`  ${CONDITION_LABEL[row.condition]}`);
+      L.push(
+        '  ' + '#'.padEnd(3) + 'run'.padEnd(24) + 'AUC'.padStart(7) + 'final'.padStart(8) +
+          'first'.padStart(9) + 'reviewable'.padStart(12) + '  ended by',
+      );
+      L.push('  ' + '-'.repeat(76));
+    }
+    const r = row.ranked;
     L.push(
-      '  ' + String(i + 1).padEnd(3) + r.label.slice(0, 23).padEnd(24) +
+      '  ' + String(r.rankAuc).padEnd(3) + r.label.slice(0, 23).padEnd(24) +
         r.auc.toFixed(3).padStart(7) + r.finalScore.toFixed(2).padStart(8) +
         secs(r.ttfnbrMs).padStart(9) + secs(r.ttfrrMs).padStart(12) +
-        '  ' + (reason.get(r.label) ?? 'unknown'),
+        '  ' + (runs[row.index]?.endReason ?? 'unknown'),
     );
   }
+
+  if (effects.length) {
+    L.push('');
+    L.push('  What the instruction was worth  (same agent, same brief, told vs not told)');
+    L.push(
+      '  ' + 'run'.padEnd(24) + 'AUC told'.padStart(10) + 'not told'.padStart(10) +
+        'delta'.padStart(9) + '  first render',
+    );
+    L.push('  ' + '-'.repeat(76));
+    for (const e of effects) {
+      L.push(
+        '  ' + e.label.slice(0, 23).padEnd(24) + e.aucPrompted.toFixed(3).padStart(10) +
+          e.aucUnprompted.toFixed(3).padStart(10) + signedAuc(e.aucDelta).padStart(9) +
+          '  ' + sooner(e.ttfnbrDeltaMs),
+      );
+    }
+    L.push('  Positive means the instruction helped.');
+  }
+
   L.push('');
   return L.join('\n');
 }
