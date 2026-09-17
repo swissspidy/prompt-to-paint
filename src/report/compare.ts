@@ -1,5 +1,6 @@
 import type { RunResult } from '../types.ts';
 import { buildCurve } from '../metrics/curve.ts';
+import { coldFrames } from '../phase.ts';
 import { SERIES_LIGHT, SERIES_DARK } from './palette.ts';
 
 const esc = (s: string): string =>
@@ -137,7 +138,7 @@ export function renderCompareHtml(runs: RunResult[]): string {
   const y = (s: number) => M.t + (1 - s) * PH;
 
   const series = runs.map((r, i) => {
-    const pts = buildCurve(r.frames, {
+    const pts = buildCurve(coldFrames(r), {
       horizonMs: r.curve.horizonMs, runEndMs: r.curve.runEndMs, reviewableThreshold: 0,
     });
     let prev = pts[0]?.score ?? 0;

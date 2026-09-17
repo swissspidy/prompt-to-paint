@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
-import { pickBackend, NullBackend } from './judge/backends.ts';
+import { pickBackend, NullBackend, DEFAULT_JUDGE_MODEL, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
+import type { JudgeChoice } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
@@ -19,7 +20,7 @@ import {
 import { aggregate, renderAggregate } from './report/aggregate.ts';
 import { Progress } from './progress.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
-import type { Adapter, RunResult } from './types.ts';
+import type { Adapter, RunResult, ScoredFrame } from './types.ts';
 
 /**
  * Bundled briefs live with the package, not in whatever directory the command
@@ -53,8 +54,11 @@ Options for run:
   --adapter    claude-code | pi | antigravity | exec | scripted  (default claude-code)
   --model      model passed to the agent
   --label      name for this run in reports      (default: adapter[+model])
-  --judge      api | cli | none | auto           (default auto)
-  --judge-model                                  (default claude-sonnet-5)
+  --judge      api | cli | ai | none | auto      (default auto)
+  --judge-model                                  (default ${DEFAULT_JUDGE_MODEL})
+               a bare id is an Anthropic model; <provider>:<model> judges
+               through the AI SDK, e.g. google:gemini-2.5-flash
+               (providers: ${AI_SDK_PROVIDER_NAMES.join(' | ')})
   --out        output directory                  (default runs/)
   --poll       cold-start poll interval in ms    (default 1000)
   --iter-poll  iteration poll interval in ms     (default 250)
@@ -67,12 +71,6 @@ Options for run:
   --quiet-for  end the window after N seconds with nothing changing (default 120, 0 off)
   --stop-after-render  end the window N ms after the app first renders
   --no-render-early    drop the "render something early" clause from the protocol
-
-Options for video:
-  --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
-  --fps        output frame rate                 (default 30)
-  --to-horizon hold the last frame to the brief's horizon, so two runs' videos
-               are the same length and can be played side by side
   --headed     show the prober's browser window while the agent works
   --video      record the session to video.webm (Playwright screencast)
   --no-progress  no live status line
@@ -84,6 +82,22 @@ Options for video:
   --print-timeout  agy print timeout (default 30m; agy's own default is 5m)
   --bin        override the agent binary name/path
   --repeat N   run N times and report a median with its full range
+
+Options for floor:
+  --template   toolchain template, see "p2p floors"  (default vite-react)
+  --port       port the template serves on           (default 5173)
+  --horizon    horizon in seconds                    (default 300)
+  plus the observation options from run (--out, --poll, --settle, --headed, ...)
+
+Options for rescore:
+  --brief      score against this brief   (default: the one the run recorded)
+  --judge, --judge-model                  as for run
+
+Options for video:
+  --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
+  --fps        output frame rate                 (default 30)
+  --to-horizon hold the last frame to the brief's horizon, so two runs' videos
+               are the same length and can be played side by side
 
 Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
@@ -305,8 +319,14 @@ async function main(): Promise<void> {
     // bundled brief of that id.
     const briefPath = values.brief ?? prev.briefPath ?? bundledBrief(prev.brief);
     const brief = await loadBrief(briefPath);
-    const backend = pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
-    const judged = await judgeRun(prev.frames, brief, { backend });
+    const backend = pickBackend({ backend: values.judge as JudgeChoice, model: values['judge-model'] });
+    // Only the cold-start frames are scored, exactly as during the run. A
+    // result written before phases existed has none tagged, so fall back to the
+    // window the curve recorded; without that, rescoring an old run would judge
+    // its iteration frames against the cold-start rubric and quietly move AUC.
+    const isCold = (f: ScoredFrame): boolean =>
+      f.phase ? f.phase === 'cold' : f.tMs <= prev.curve.runEndMs;
+    const judged = await judgeRun(prev.frames.filter(isCold), brief, { backend });
     const next: RunResult = {
       ...prev,
       // Spreading prev would keep the old brief id and path, so the report
@@ -318,8 +338,19 @@ async function main(): Promise<void> {
       // the run itself. Without this a rescore silently inherits the old
       // judge's verdict about itself and hides fresh failures.
       warnings: [...prev.warnings.filter((w) => !w.startsWith('judge:')), ...judged.warnings],
-      frames: judged.frames,
-      judge: { backend: backend.name, model: backend.model, framesJudged: judged.framesJudged, degraded: judged.degraded },
+      // Re-scored cold frames, then the iteration frames untouched: they were
+      // never judged, and dropping them here would undo the run's own record of
+      // what happened after the window closed.
+      frames: [
+        ...judged.frames.map((f): ScoredFrame => ({ ...f, phase: 'cold' })),
+        ...prev.frames.filter((f) => !isCold(f)).map((f): ScoredFrame => ({ ...f, phase: 'iteration' })),
+      ],
+      judge: {
+        backend: backend.name,
+        model: backend.model,
+        framesJudged: judged.framesJudged,
+        degraded: judged.degraded,
+      },
       curve: computeMetrics(judged.frames, {
         horizonMs: brief.horizonSec * 1000,
         runEndMs: prev.curve.runEndMs,
@@ -412,7 +443,7 @@ async function main(): Promise<void> {
 
   const judgeBackend = cmd === 'floor'
     ? new NullBackend()
-    : pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
+    : pickBackend({ backend: values.judge as JudgeChoice, model: values['judge-model'] });
 
   const outRoot = values.out ?? 'runs';
   const repeats = Math.max(1, Number(values.repeat ?? 1));

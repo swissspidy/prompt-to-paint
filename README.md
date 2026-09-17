@@ -122,6 +122,13 @@ event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
 was given), `phases.jsonl` and `agent.log`. With `--video`, also `video.webm`.
 
+`result.json` holds the whole run: cold-start frames and, when the brief has
+iterations, the frames captured while those edits landed. Each carries a
+`phase`. **Only `cold` frames are judged, charted or ranked** — an edit like
+"make the header blue" answers a different question from the brief, and scoring
+it against the brief's rubric would blend two measurements into one number. The
+iteration frames are kept so the run can be replayed in full.
+
 **`frames/` is not the timeline and cannot be replayed as one.** Consecutive
 identical screenshots share a file, so a forty-observation run can hold four
 PNGs; stitching the directory listing gives a four-frame video in which a blank
@@ -250,19 +257,39 @@ late improvement, so a `quiet` run says so in its caveats.
 
 Frames are scored against per-brief rubrics of binary, screenshot-answerable
 criteria — "are three columns visible", not "rate this 0-10" — so scores are
-auditable and reasonably stable. Three backends:
+auditable and reasonably stable. Four backends:
 
 | backend | when |
 |---|---|
 | `api` | `ANTHROPIC_API_KEY` is set. Parallel and cheap; the default when available. |
 | `cli` | falls back to a signed-in local `claude`. No key needed. |
+| `ai` | any provider the [AI SDK](https://ai-sdk.dev) speaks. Selected by a `<provider>:<model>` judge model. |
 | `none` | no model. Scores degrade to entity coverage, and every report says so. |
+
+```bash
+# judge with Gemini instead of Claude -- needs GOOGLE_GENERATIVE_AI_API_KEY
+npm run p2p -- run --brief briefs/todo-app.json --judge-model google:gemini-2.5-flash
+```
+
+Providers are `google`, `anthropic` and `openai`, each reading its own SDK
+environment variable. A qualified model selects the AI SDK on its own, so
+`--judge ai` is only needed to be explicit; a bare id like `claude-sonnet-5`
+still means the Anthropic backends. Naming a provider whose key is missing fails
+before the run starts rather than once per frame, and `result.json` records the
+judge as `google:gemini-2.5-flash` rather than a bare model name — **different
+judges disagree at the margin, so a leaderboard should not mix them.**
 
 Judging runs **after** the run finishes, from saved screenshots — scoring during
 the run would put model latency inside the window being measured. Only visually
 distinct frames cost a call; the rest inherit by forward-fill. `p2p rescore`
 re-scores a finished run without re-running any agent, which is also how you
-measure judge variance.
+measure judge variance, and how you score a run whose judging was interrupted.
+
+Because judging happens after teardown, the browser closes minutes before the
+scores land. `result.json` is therefore written **twice**: once with the
+complete timeline and provisional scores (`judge.pending: true`), and again with
+the real scores when the judge returns. An interrupted or failed scoring pass
+leaves a run that still replays and still rescores, rather than no run at all.
 
 ## Which agents this works with
 

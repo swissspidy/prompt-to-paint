@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
+import { parseJudgeModel, pickBackend } from '../src/judge/backends.ts';
 import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
@@ -98,4 +99,85 @@ test('the judge prompt states the rubric and forbids crediting the unseen', () =
   assert.ok(p.includes('renders'));
   assert.ok(p.includes('columns'));
   assert.ok(/only what is visible/i.test(p));
+});
+
+// ---------------------------------------------------------------------------
+// Backend selection
+// ---------------------------------------------------------------------------
+
+/** Run with exactly these judge keys set, then put the environment back. */
+function withKeys<T>(keys: Record<string, string | undefined>, fn: () => T): T {
+  const names = ['ANTHROPIC_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'OPENAI_API_KEY'];
+  const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+  try {
+    for (const n of names) {
+      const v = keys[n];
+      if (v === undefined) delete process.env[n];
+      else process.env[n] = v;
+    }
+    return fn();
+  } finally {
+    for (const n of names) {
+      if (saved[n] === undefined) delete process.env[n];
+      else process.env[n] = saved[n];
+    }
+  }
+}
+
+test('parseJudgeModel splits only known provider prefixes', () => {
+  assert.deepEqual(parseJudgeModel('google:gemini-2.5-flash'), { provider: 'google', model: 'gemini-2.5-flash' });
+  assert.deepEqual(parseJudgeModel('openai:gpt-5'), { provider: 'openai', model: 'gpt-5' });
+  // A bare model, and a model whose own name contains a colon, are not specs.
+  assert.equal(parseJudgeModel('claude-sonnet-5'), null);
+  assert.equal(parseJudgeModel('us.anthropic.claude-x:0'), null);
+  assert.equal(parseJudgeModel('nosuchprovider:x'), null);
+  assert.equal(parseJudgeModel('google:'), null);
+});
+
+test('a provider-qualified model picks the AI SDK backend, even under auto', () => {
+  withKeys({ GOOGLE_GENERATIVE_AI_API_KEY: 'k' }, () => {
+    for (const backend of ['ai', 'auto'] as const) {
+      const b = pickBackend({ backend, model: 'google:gemini-2.5-flash' });
+      assert.equal(b.name, 'ai');
+      // Qualified, so a report can never claim the wrong judge served a run.
+      assert.equal(b.model, 'google:gemini-2.5-flash');
+    }
+  });
+});
+
+test('auto still prefers the Anthropic API, then the CLI, for a bare model', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
+    assert.equal(pickBackend({ backend: 'auto' }).name, 'api');
+  });
+  withKeys({}, () => {
+    const b = pickBackend({ backend: 'auto' });
+    assert.equal(b.name, 'cli');
+    assert.equal(b.model, 'claude-sonnet-5');
+  });
+});
+
+test('a judge that cannot be served is refused up front, not once per frame', () => {
+  withKeys({}, () => {
+    // Named provider, missing key: say so before the run, not sixty times after.
+    assert.throws(() => pickBackend({ backend: 'ai', model: 'google:g' }), /GOOGLE_GENERATIVE_AI_API_KEY/);
+    assert.throws(() => pickBackend({ backend: 'api' }), /ANTHROPIC_API_KEY/);
+    // "ai" without a provider cannot be resolved to one.
+    assert.throws(() => pickBackend({ backend: 'ai', model: 'gemini-2.5-flash' }), /<provider>:<model>/);
+  });
+});
+
+test('a provider prefix on an Anthropic-only backend is an error, not a silent swap', () => {
+  withKeys({ ANTHROPIC_API_KEY: 'k', GOOGLE_GENERATIVE_AI_API_KEY: 'k' }, () => {
+    assert.throws(
+      () => pickBackend({ backend: 'api', model: 'google:gemini-2.5-flash' }),
+      /names the google provider/,
+    );
+  });
+});
+
+test('the null backend needs no credentials at all', () => {
+  withKeys({}, () => {
+    const b = pickBackend({ backend: 'none', model: 'google:g' });
+    assert.equal(b.name, 'none');
+  });
 });

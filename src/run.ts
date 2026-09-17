@@ -4,13 +4,14 @@ import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type {
   Adapter, AgentEvent, AgentRunHandle, Brief, Frame, RunEndReason, RunResult, IterationResult,
+  ScoredFrame,
 } from './types.ts';
 import { Prober } from './probe/prober.ts';
 import { entityCoverage } from './probe/entities.ts';
 import { setupShims } from './decompose/shims.ts';
 import { parsePhaseLog, attributeAgentStream, decompose } from './decompose/attribute.ts';
 import { computeMetrics } from './metrics/curve.ts';
-import { judgeRun } from './judge/judge.ts';
+import { judgeRun, mechanicalScores } from './judge/judge.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
@@ -68,6 +69,14 @@ export interface RunOptions {
  * this the run had no way to end except the horizon.
  */
 export const DONE_SENTINEL = '.p2p-done';
+
+/**
+ * Extra observation after the final iteration lands, before teardown.
+ *
+ * Short on purpose: it is outside every measured window, so it buys the last
+ * edit's finished state without touching a single number.
+ */
+export const ITERATION_SETTLE_MS = 3000;
 
 export interface ProtocolOptions {
   /**
@@ -169,6 +178,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   let activeWallMs = 0;
   let observationOnlyMs = 0;
   let cleaned = false;
+  let lastIterationOk = false;
   let endReason: RunEndReason = 'horizon';
 
   // Shared by every branch of the end-of-window race below. The losing branches
@@ -239,8 +249,14 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     if (cleaned) return;
     cleaned = true;
     stopping = true;
-    if (handle) await handle.stop().catch(() => undefined);
+    // The prober stops first. Killing the agent usually takes its dev server
+    // with it, and handle.stop() waits up to five seconds for that to happen,
+    // so probing through it appended frames of a torn-down app to the
+    // timeline: the tail of frames/ was a dead page rather than the finished
+    // one. Those are not observations of the run, they are observations of the
+    // teardown.
     await prober.stop().catch(() => undefined);
+    if (handle) await handle.stop().catch(() => undefined);
     try {
       staticServer?.close();
     } catch { /* already closed */ }
@@ -383,6 +399,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
             intervalMs: opts.iterationPollMs ?? 250,
           });
           iterations.push(res);
+          lastIterationOk = res.ok;
           if (res.baselineAlreadyPassing) {
             warnings.push(
               `Iteration "${spec.id}" is void: its check already passed before the prompt was sent, so it cannot measure this edit. Fix the check in the brief.`,
@@ -391,6 +408,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
             warnings.push(`Iteration "${spec.id}" never landed within its timeout.`);
           }
         }
+        // An iteration returns the moment its predicate has held for a couple
+        // of frames, which is mid-edit: the agent is usually still settling the
+        // layout. Without this the run tore down on that frame and the last
+        // screenshot of the last edit was never taken.
+        if (lastIterationOk) await sleep(ITERATION_SETTLE_MS);
       }
     }
   } finally {
@@ -409,28 +431,19 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
 
   // The cold-start curve must not see the iteration edits: turning the header
   // blue is a different experiment, and scoring those frames against the
-  // original brief would blend two measurements into one number.
+  // original brief would blend two measurements into one number. The iteration
+  // frames are still kept -- see assemble() -- they just never reach the curve.
   const coldFrames = prober.frames.filter((f) => f.tMs <= coldEndMs);
-
-  log(`judging ${coldFrames.length} cold-start frames`);
-  const judged = await judgeRun(coldFrames, brief, {
-    backend: opts.judgeBackend,
-    onProgress: (d, t) => d % 5 === 0 && log(`  judged ${d}/${t}`),
-  });
-  warnings.push(...judged.warnings);
+  const iterationFrames = prober.frames.filter((f) => f.tMs > coldEndMs);
 
   // "Ready" means actually serving the app. The prober keeps retrying a 4xx or
   // 5xx, so counting the first error response as ready would cut dev-server
   // boot short and start the first-paint window before anything could paint.
   const serverReadyMs =
     prober.frames.find((f) => f.httpStatus !== null && f.httpStatus < 400)?.tMs ?? null;
-  const firstPaintMs = judged.frames.find((f) => f.class === 'render')?.tMs ?? null;
-
-  const curve = computeMetrics(judged.frames, {
-    horizonMs,
-    runEndMs: coldEndMs,
-    reviewableThreshold: brief.reviewableThreshold,
-  });
+  // Classification does not depend on scoring, so this is the same answer the
+  // judged frames would give, available before the judge has run.
+  const firstPaintMs = coldFrames.find((f) => f.class === 'render')?.tMs ?? null;
 
   // Compare like with like: the agent's self-reported API time for the
   // cold-start turn, not the whole session. Reading it off the final result
@@ -506,13 +519,25 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   // stored is for eyeballing why a frame scored as it did. Keeping 20KB of DOM
   // text per frame would make result.json hundreds of megabytes on a long run.
   const STORED_TEXT = 4000;
-  const slimFrames = judged.frames.map((f) =>
+  const slim = (f: ScoredFrame): ScoredFrame =>
     f.text.length > STORED_TEXT
       ? { ...f, text: `${f.text.slice(0, STORED_TEXT)}\n...[truncated ${f.text.length - STORED_TEXT} chars]` }
-      : f,
-  );
+      : f;
 
-  const result: RunResult = {
+  const resultPath = join(opts.runDir, 'result.json');
+
+  /**
+   * Build the result from whatever scoring is available.
+   *
+   * Everything above this point is judge-independent, so the same assembly
+   * serves the provisional write and the final one; only the frame scores and
+   * the judge block differ between them.
+   */
+  const assemble = (
+    scoredCold: ScoredFrame[],
+    judge: RunResult['judge'],
+    judgeWarnings: string[],
+  ): RunResult => ({
     schema: 1,
     runId,
     brief: brief.id,
@@ -523,7 +548,13 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     t0Epoch,
     wallMs,
     url,
-    curve,
+    // Cold frames only, always: the headline numbers describe the cold-start
+    // window and nothing else.
+    curve: computeMetrics(scoredCold, {
+      horizonMs,
+      runEndMs: coldEndMs,
+      reviewableThreshold: brief.reviewableThreshold,
+    }),
     decomposition: {
       ...decomposition,
       notes: [
@@ -537,15 +568,17 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       ],
     },
     iterations,
-    frames: slimFrames,
+    // The whole timeline, tagged by phase. The iteration frames carry
+    // mechanical scores and are excluded from every metric, but without them
+    // the run could only ever be replayed up to the moment the window closed --
+    // so a video of a run with iterations stopped before the edits it measured.
+    frames: [
+      ...scoredCold.map((f): ScoredFrame => ({ ...f, phase: 'cold' })),
+      ...mechanicalScores(iterationFrames).map((f): ScoredFrame => ({ ...f, phase: 'iteration' })),
+    ].map(slim),
     phases,
     agentEvents,
-    judge: {
-      backend: opts.judgeBackend.name,
-      model: opts.judgeBackend.model,
-      framesJudged: judged.framesJudged,
-      degraded: judged.degraded,
-    },
+    judge,
     agentFailure,
     endReason,
     protocol: { renderEarly: !opts.noRenderEarly },
@@ -555,9 +588,67 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       distinctShots: prober.distinctShots,
       repeatedShots: prober.repeatedShots,
     },
-    warnings,
+    warnings: [...warnings, ...judgeWarnings],
+  });
+
+  const writeResult = async (r: RunResult): Promise<void> => {
+    await writeFile(resultPath, JSON.stringify(r, null, 2));
   };
 
-  await writeFile(join(opts.runDir, 'result.json'), JSON.stringify(result, null, 2));
+  // Write the run out before scoring it.
+  //
+  // Judging happens after teardown and can take minutes -- the CLI judge shells
+  // out once per frame -- so the browser closes long before result.json used to
+  // appear. Anything that interrupted that gap took the entire run with it:
+  // the screenshots survived on disk but the timeline behind them did not, and
+  // result.json is the only place it lives, so `p2p video` and `p2p rescore`
+  // were both dead ends for a run that had already finished. Writing first
+  // costs one extra file write and makes the run recoverable from here on.
+  const provisional = assemble(
+    mechanicalScores(coldFrames),
+    {
+      backend: opts.judgeBackend.name,
+      model: opts.judgeBackend.model,
+      framesJudged: 0,
+      degraded: true,
+      pending: true,
+    },
+    [
+      'judge: scores in this file are provisional -- the scoring pass had not finished when it ' +
+        `was written. The timeline is complete, so the run can be replayed; run \`p2p rescore ${opts.runDir}\` to score it.`,
+    ],
+  );
+  await writeResult(provisional);
+
+  log(`judging ${coldFrames.length} cold-start frames`);
+  let judged;
+  try {
+    judged = await judgeRun(coldFrames, brief, {
+      backend: opts.judgeBackend,
+      onProgress: (d, t) => d % 5 === 0 && log(`  judged ${d}/${t}`),
+    });
+  } catch (e) {
+    // The run itself succeeded; only the scoring of it failed. Keep the
+    // provisional file rather than throwing the measurement away.
+    provisional.warnings.push(
+      `judge: the scoring pass failed (${String(e).slice(0, 200)}), so the scores here are entity ` +
+        `coverage, not rubric correctness. The timeline is intact; fix the judge and run ` +
+        `\`p2p rescore ${opts.runDir}\`.`,
+    );
+    await writeResult(provisional);
+    return provisional;
+  }
+
+  const result = assemble(
+    judged.frames,
+    {
+      backend: opts.judgeBackend.name,
+      model: opts.judgeBackend.model,
+      framesJudged: judged.framesJudged,
+      degraded: judged.degraded,
+    },
+    judged.warnings,
+  );
+  await writeResult(result);
   return result;
 }

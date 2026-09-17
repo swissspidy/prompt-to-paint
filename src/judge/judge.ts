@@ -165,6 +165,21 @@ async function loadCache(path: string): Promise<Record<string, JudgeVerdict>> {
 }
 
 /**
+ * Score frames without a model, from entity coverage alone.
+ *
+ * The honest fallback whenever no judge looked at a frame -- no backend, a
+ * scoring pass that has not run yet, or one that failed. `scoreSource` says so
+ * per frame, so a report can never present these as rubric scores.
+ */
+export function mechanicalScores(frames: Frame[]): ScoredFrame[] {
+  return frames.map((f) => ({
+    ...f,
+    score: f.class === 'render' ? f.entityCoverage : 0,
+    scoreSource: f.class === 'render' ? ('mechanical' as const) : ('non-render' as const),
+  }));
+}
+
+/**
  * Scores every frame, running strictly after the run has finished.
  *
  * Post-hoc is not an implementation convenience: judging during the run would
@@ -184,16 +199,7 @@ export async function judgeRun(
     warnings.push(
       'judge: no backend configured. Scores are entity coverage, not rubric correctness, and AUC is not comparable to judged runs.',
     );
-    return {
-      frames: frames.map((f) => ({
-        ...f,
-        score: f.class === 'render' ? f.entityCoverage : 0,
-        scoreSource: f.class === 'render' ? ('mechanical' as const) : ('non-render' as const),
-      })),
-      framesJudged: 0,
-      degraded: true,
-      warnings,
-    };
+    return { frames: mechanicalScores(frames), framesJudged: 0, degraded: true, warnings };
   }
 
   const cacheDir = opts.cacheDir ?? join(process.cwd(), '.p2p-cache');
