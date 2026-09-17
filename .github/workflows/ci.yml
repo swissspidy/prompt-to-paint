@@ -2,33 +2,44 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
-# A superseded run tells you nothing useful; stop it and keep the latest.
+# Branches are covered by the pull_request trigger, so pushing to one does not
+# also run this workflow against the branch head: same commits, same result,
+# twice the runners. A superseded run tells you nothing useful either; stop it
+# and keep the latest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes anywhere: it checks out code, runs tests, and uploads an
+# artefact through the runner rather than the API. Denying everything at the top
+# means a job has to name what it needs, and a future job cannot silently
+# inherit write access to the repository.
+permissions: {}
+
 jobs:
   test:
-    name: node ${{ matrix.node }}
+    name: tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        # 22.18 is the floor: the first release that strips types without a
-        # flag, which is what lets this project run with no build step and no
-        # loader. 24 guards against the newer runtime changing that behaviour.
-        node: ['22.18', '22', '24']
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: ${{ matrix.node }}
+          # No step in this job pushes anything, and a token left behind in
+          # .git/config is readable by everything that runs afterwards --
+          # including whatever the dependency tree brought with it.
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # The same file `nvm use` reads, so CI and a contributor's checkout
+          # cannot drift apart, and the next LTS cutover needs no edit here.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -56,11 +67,31 @@ jobs:
 
       - name: Upload artefacts from failed runs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: p2p-failure-node-${{ matrix.node }}
+          name: p2p-failure
           path: |
             runs/
             /tmp/p2p-*/
           retention-days: 7
           if-no-files-found: ignore
+
+  workflows:
+    name: workflow audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Audit workflows with zizmor
+        # Hardening that is not enforced decays: the next hand-edited workflow
+        # reintroduces a floating tag or a default-permissions job and nobody
+        # notices. Pinned so a new zizmor release cannot turn a green build red
+        # on its own -- Dependabot proposes that bump like any other.
+        # Offline by choice: the online audits want a token, and this job is
+        # deliberately not given one.
+        run: pipx run zizmor==1.30.1 --persona=auditor --no-online-audits .github/workflows

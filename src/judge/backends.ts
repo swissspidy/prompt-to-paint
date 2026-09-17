@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
+import { sleep } from '../sleep.ts';
 
 export interface JudgeRequest {
   imagePath: string;
@@ -15,8 +16,6 @@ export interface JudgeBackend {
   /** Safe parallelism for this backend. */
   concurrency: number;
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Direct Messages API. Preferred: parallel, cheap, and independent of CLI auth. */
 export class ApiBackend implements JudgeBackend {

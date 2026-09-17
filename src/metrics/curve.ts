@@ -28,10 +28,14 @@ export interface CurvePoint {
  *    integral without penalising the agent for having stopped.
  */
 export function buildCurve(frames: ScoredFrame[], opts: CurveOptions): CurvePoint[] {
-  const sorted = [...frames].sort((a, b) => a.tMs - b.tMs);
+  return pointsFrom([...frames].sort((a, b) => a.tMs - b.tMs), opts.horizonMs);
+}
+
+/** The step function itself, from frames already in time order. */
+function pointsFrom(sorted: ScoredFrame[], horizonMs: number): CurvePoint[] {
   const pts: CurvePoint[] = [{ tMs: 0, score: 0 }];
   for (const f of sorted) {
-    if (f.tMs > opts.horizonMs) break;
+    if (f.tMs > horizonMs) break;
     pts.push({ tMs: f.tMs, score: f.score });
   }
   return pts;
@@ -58,7 +62,9 @@ export function integrate(points: CurvePoint[], horizonMs: number): number {
 export function computeMetrics(frames: ScoredFrame[], opts: CurveOptions): CurveMetrics {
   const sorted = [...frames].sort((a, b) => a.tMs - b.tMs);
   const inHorizon = sorted.filter((f) => f.tMs <= opts.horizonMs);
-  const points = buildCurve(sorted, opts);
+  // Already in order, so the curve is built from these directly rather than
+  // handed back to buildCurve, which would sort the same frames a second time.
+  const points = pointsFrom(inHorizon, opts.horizonMs);
   const auc = integrate(points, opts.horizonMs);
 
   const firstRender = inHorizon.find((f) => f.class === 'render');

@@ -23,6 +23,13 @@ const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page'];
 const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.json`);
 
+/**
+ * Labels end up in path names, and a label is whatever the user typed --
+ * `claude-code:claude-opus-5` by default. One definition so a run directory and
+ * the aggregate file beside it can never disagree about the spelling.
+ */
+const slug = (label: string): string => label.replace(/[^\w.-]/g, '_');
+
 const USAGE = `
 prompt-to-paint -- how long until an agent renders something you can react to
 
@@ -240,7 +247,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < repeats; i++) {
     const runDir = resolve(
       outRoot,
-      `${brief.id}-${label.replace(/[^\w.-]/g, '_')}-${Date.now().toString(36)}${repeats > 1 ? `-r${i + 1}` : ''}`,
+      `${brief.id}-${slug(label)}-${Date.now().toString(36)}${repeats > 1 ? `-r${i + 1}` : ''}`,
     );
     await mkdir(runDir, { recursive: true });
     if (repeats > 1) console.log(`\n  === run ${i + 1} of ${repeats} ===`);
@@ -276,7 +283,7 @@ async function main(): Promise<void> {
   if (results.length > 1) {
     const agg = aggregate(results);
     await mkdir(resolve(outRoot), { recursive: true });
-    const aggPath = resolve(outRoot, `aggregate-${brief.id}-${label.replace(/[^\w.-]/g, '_')}.json`);
+    const aggPath = resolve(outRoot, `aggregate-${brief.id}-${slug(label)}.json`);
     await writeFile(aggPath, JSON.stringify(agg, null, 2));
     console.log(renderAggregate(agg));
     console.log(`  aggregate: ${aggPath}\n`);

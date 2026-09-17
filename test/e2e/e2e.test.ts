@@ -5,14 +5,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadBrief } from '../src/brief.ts';
-import { runBenchmark } from '../src/run.ts';
-import { ScriptedAdapter } from '../src/adapters/scripted.ts';
-import { ExecAdapter } from '../src/adapters/exec.ts';
-import { NullBackend } from '../src/judge/backends.ts';
-import { findChromium } from '../src/probe/browser.ts';
-import { serveStatic } from '../src/static-server.ts';
-import type { Brief } from '../src/types.ts';
+import { loadBrief } from '../../src/brief.ts';
+import { runBenchmark } from '../../src/run.ts';
+import { ScriptedAdapter } from '../../src/adapters/scripted.ts';
+import { ExecAdapter } from '../../src/adapters/exec.ts';
+import { NullBackend } from '../../src/judge/backends.ts';
+import { findChromium } from '../../src/probe/browser.ts';
+import { serveStatic } from '../../src/static-server.ts';
+import type { Brief } from '../../src/types.ts';
 
 const run = promisify(execFile);
 const hasBrowser = Boolean(findChromium());
@@ -166,7 +166,7 @@ test('an agent binary that does not exist fails the run instead of the harness',
   const dir = await tmp('p2p-enoent-');
   try {
     const base = await loadBrief('test/fixtures/calibration-brief.json');
-    const { PiAdapter } = await import('../src/adapters/pi.ts');
+    const { PiAdapter } = await import('../../src/adapters/pi.ts');
     const result = await runBenchmark({
       brief: { ...base, horizonSec: 10, iterations: [], target: { ...base.target, port: 5290 } },
       adapter: new PiAdapter({ bin: '/nonexistent/definitely-not-an-agent' }),
@@ -216,7 +216,7 @@ test('an iteration whose check already passes is reported void, not fast', { ski
 test('the floor control measures a toolchain with no agent', { skip: needsBrowser, timeout: 180_000 }, async () => {
   const dir = await tmp('p2p-floor-');
   try {
-    const { FLOOR_TEMPLATES, floorBrief } = await import('../src/floor.ts');
+    const { FLOOR_TEMPLATES, floorBrief } = await import('../../src/floor.ts');
     const template = FLOOR_TEMPLATES.static!;
     const port = 5293;
     const brief = floorBrief(template, port, 60);
@@ -275,6 +275,40 @@ test('the CLI runs from plain node with no loader', async () => {
 
   const { stdout: floors } = await run(process.execPath, ['src/cli.ts', 'floors']);
   assert.match(floors, /vite-react/);
+});
+
+test('a run that beats its horizon does not wait it out', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-exit-');
+  try {
+    const base = JSON.parse(await readFile('test/fixtures/calibration-brief.json', 'utf8'));
+    // A horizon far longer than the scripted timeline needs: it is finished at 9s.
+    const brief = { ...base, horizonSec: 90, target: { port: 5294, serveStatic: true } };
+    delete brief.iterations;
+    const briefPath = join(dir, 'brief.json');
+    await writeFile(briefPath, JSON.stringify(brief));
+
+    const started = Date.now();
+    await run(process.execPath, [
+      'src/cli.ts', 'run', '--brief', briefPath,
+      '--adapter', 'scripted', '--script', 'test/fixtures/calibration-timeline.json',
+      '--judge', 'none', '--out', join(dir, 'runs'),
+      '--settle', '1000', '--no-iterate', '--kill-port',
+    ], { maxBuffer: 1 << 22 });
+    const elapsed = Date.now() - started;
+
+    // What this pins is not speed but exit: the cold-start window races the
+    // agent's first turn against the horizon, and the branch that loses keeps
+    // its timer. A pending timer holds Node's event loop open, so the CLI used
+    // to print its report and then sit idle for the rest of the horizon -- eight
+    // minutes on the bundled todo-app brief.
+    assert.ok(
+      elapsed < 45_000,
+      `the CLI took ${(elapsed / 1000).toFixed(1)}s for a run whose work was done at ~10s; ` +
+        'the losing branch of the cold-start race is holding the process open.',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('bundled briefs resolve from the package, not the working directory', async () => {
