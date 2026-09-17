@@ -71,6 +71,46 @@ const OBSERVE = `(() => {
   };
 })()`;
 
+export interface CaptureAttempt {
+  buf: Buffer | null;
+  /** The last error, when every attempt failed. Null on success. */
+  error: string | null;
+  attempts: number;
+}
+
+/**
+ * Take a screenshot, retrying the refusals that are not answers.
+ *
+ * Chromium answers `Page.captureScreenshot` with "Unable to capture screenshot"
+ * when its compositor has no frame to hand over yet. That is most likely in the
+ * moments right after a navigation fails -- which is to say, over the whole
+ * stretch before anything is serving, the part of a run this harness exists to
+ * measure. It is transient: the next attempt milliseconds later succeeds. It is
+ * also not a timeout, so waiting longer does not help and retrying does.
+ *
+ * The attempts share the original budget rather than each getting it, so a page
+ * that is genuinely slow to paint cannot turn one overrunning capture into
+ * three.
+ */
+export async function captureWithRetry(
+  take: (timeoutMs: number) => Promise<Buffer>,
+  opts: { budgetMs: number; attempts?: number; wait?: (ms: number) => Promise<void> },
+): Promise<CaptureAttempt> {
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const perAttempt = Math.max(500, Math.floor(opts.budgetMs / attempts));
+  const wait = opts.wait ?? sleep;
+  let error: string | null = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return { buf: await take(perAttempt), error: null, attempts: i + 1 };
+    } catch (e) {
+      error = String(e).slice(0, 200);
+      if (i < attempts - 1) await wait(50 * (i + 1));
+    }
+  }
+  return { buf: null, error, attempts };
+}
+
 /**
  * Polls a URL and turns it into a timeline of frames.
  *
@@ -100,6 +140,7 @@ export class Prober {
   private lastShot: { dhash: string; colorSig: string; screenshotPath: string } | null = null;
   private distinct = 0;
   private duplicates = 0;
+  private failedShots: string[] = [];
   private video: string | null = null;
 
   readonly frames: Frame[] = [];
@@ -142,6 +183,18 @@ export class Prober {
   /** Frames whose screenshot was identical to the one before it. */
   get repeatedShots(): number {
     return this.duplicates;
+  }
+
+  /**
+   * Captures the browser refused outright, one message each.
+   *
+   * A frame with no picture used to be indistinguishable from one the prober
+   * never tried to take, because the failure was caught and dropped. It is the
+   * kind of thing that only shows up much later, as a hole in a filmstrip or a
+   * blank stretch in a video, with nothing anywhere saying why.
+   */
+  get shotFailures(): string[] {
+    return this.failedShots;
   }
 
   /** Where the session recording landed, once the run has stopped. */
@@ -255,15 +308,17 @@ export class Prober {
     colorSig: string | null;
     screenshotPath: string | null;
   }> {
-    let buf: Buffer;
-    try {
-      buf = await this.page!.screenshot({
-        type: 'png',
-        timeout: Math.max(3000, this.intervalMs * 2),
-      });
-    } catch {
+    const shot = await captureWithRetry(
+      (timeout) => this.page!.screenshot({ type: 'png', timeout }),
+      { budgetMs: Math.max(3000, this.intervalMs * 2) },
+    );
+    if (!shot.buf) {
+      // Recorded rather than dropped: the frame still belongs on the timeline,
+      // but the run has to be able to say why it has no picture.
+      this.failedShots.push(shot.error ?? 'unknown');
       return { inkRatio: 0, dhash: null, colorSig: null, screenshotPath: null };
     }
+    const buf = shot.buf;
     const a = analyzeShot(buf);
     const prev = this.lastShot;
     if (prev && prev.dhash === a.dhash && prev.colorSig === a.colorSig) {

@@ -491,6 +491,12 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     );
   if (prober.skippedTicks > 0)
     warnings.push(`${prober.skippedTicks} poll ticks were skipped because a capture overran the interval.`);
+  if (prober.shotFailures.length)
+    warnings.push(
+      `${prober.shotFailures.length} frame(s) have no screenshot: the browser refused to capture one ` +
+        `even after retries (first: ${prober.shotFailures[0]}). Those frames are still on the timeline, ` +
+        `but they are holes in the filmstrip and in any video built from it.`,
+    );
   if (prober.reloadCount > prober.frames.length * 0.25)
     warnings.push(
       `The prober reloaded ${prober.reloadCount} times across ${prober.frames.length} frames. The served document changes on nearly every request (a per-request nonce or timestamp), so reload-driven timings here are unreliable.`,

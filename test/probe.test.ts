@@ -4,6 +4,7 @@ import { PNG } from 'pngjs';
 import { classify } from '../src/probe/classify.ts';
 import { entityCoverage } from '../src/probe/entities.ts';
 import { decodeGray, dhash, hamming, inkRatio, colorSignature, colorDelta } from '../src/probe/pixels.ts';
+import { captureWithRetry } from '../src/probe/prober.ts';
 
 const base = { reachable: true, httpStatus: 200, overlayHit: null, mediaBoxes: 0, inkRatio: 0.3 };
 
@@ -114,4 +115,66 @@ test('colorDelta is zero for identical frames and ignores missing signatures', (
   const sig = colorSignature(png(() => [10, 20, 30]));
   assert.deepEqual(colorDelta(sig, sig), { mean: 0, max: 0 });
   assert.deepEqual(colorDelta(sig, null), { mean: 0, max: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Screenshot retries: the browser's refusals are not all answers.
+// ---------------------------------------------------------------------------
+
+const shot = Buffer.from('png');
+const noWait = async (): Promise<void> => undefined;
+
+test('a screenshot that succeeds first time is not retried', async () => {
+  let calls = 0;
+  const r = await captureWithRetry(async () => { calls++; return shot; }, { budgetMs: 3000, wait: noWait });
+  assert.equal(r.buf, shot);
+  assert.equal(r.error, null);
+  assert.equal(calls, 1);
+});
+
+test('a transient refusal is retried rather than recorded as a missing frame', async () => {
+  // Chromium answers "Unable to capture screenshot" when its compositor has
+  // nothing to hand over yet, which is most likely in the moments after a
+  // navigation fails -- exactly the frames before anything is serving.
+  let calls = 0;
+  const r = await captureWithRetry(
+    async () => {
+      if (++calls < 3) throw new Error('Protocol error (Page.captureScreenshot): Unable to capture screenshot');
+      return shot;
+    },
+    { budgetMs: 3000, wait: noWait },
+  );
+  assert.equal(r.buf, shot);
+  assert.equal(r.attempts, 3);
+});
+
+test('a refusal that never clears is reported, not swallowed', async () => {
+  const r = await captureWithRetry(
+    async () => { throw new Error('still broken'); },
+    { budgetMs: 3000, wait: noWait },
+  );
+  assert.equal(r.buf, null);
+  assert.match(r.error ?? '', /still broken/);
+  assert.equal(r.attempts, 3);
+});
+
+test('the attempts share one budget instead of each getting it', async () => {
+  // Otherwise a page that is genuinely slow to paint turns one overrunning
+  // capture into three, and the poll interval is blown by 3x rather than 1x.
+  const budgets: number[] = [];
+  await captureWithRetry(
+    async (timeoutMs) => { budgets.push(timeoutMs); throw new Error('nope'); },
+    { budgetMs: 3000, attempts: 3, wait: noWait },
+  );
+  assert.deepEqual(budgets, [1000, 1000, 1000]);
+  assert.ok(budgets.reduce((a, b) => a + b, 0) <= 3000);
+});
+
+test('a tiny budget still leaves each attempt enough time to answer', async () => {
+  const budgets: number[] = [];
+  await captureWithRetry(
+    async (timeoutMs) => { budgets.push(timeoutMs); throw new Error('nope'); },
+    { budgetMs: 100, attempts: 3, wait: noWait },
+  );
+  assert.deepEqual(budgets, [500, 500, 500]);
 });
