@@ -1,0 +1,68 @@
+# Weekly, and grouped by what actually has to move together.
+#
+# Ungrouped updates on a five-dependency project are mostly noise: a package and
+# its @types stubs land in separate pull requests, each needing its own CI run,
+# and a version skew between the two shows up as a typecheck failure in whichever
+# one merges first. Grouping them means one pull request that is either green or
+# red as a unit.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+      prefix-development: deps(dev)
+    groups:
+      # The browser driver. Playwright's version is also what decides which
+      # Chromium build the end-to-end tests can drive.
+      playwright:
+        patterns:
+          - playwright
+          - '@playwright/*'
+      # Runtime packages travel with their type definitions.
+      pngjs:
+        patterns:
+          - pngjs
+          - '@types/pngjs'
+      # The typechecker and the Node types it checks against: a @types/node bump
+      # can need a newer tsc, so they are proposed together.
+      typescript:
+        patterns:
+          - typescript
+          - '@types/node'
+      # Whatever gets added later still arrives as one pull request a week
+      # rather than one per package.
+      other:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - playwright
+          - '@playwright/*'
+          - pngjs
+          - '@types/pngjs'
+          - typescript
+          - '@types/node'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      # The workflows pin actions by commit hash, which is what zizmor enforces
+      # in CI. That only stays current if something proposes the new hash, so
+      # this is the other half of that policy, not housekeeping.
+      actions:
+        patterns:
+          - '*'
