@@ -212,10 +212,12 @@ export async function judgeRun(
   let done = 0;
   let calls = 0;
 
-  const queue = [...targets];
+  // Workers pull by index rather than shifting a copy of the list: nothing
+  // yields between the read and the increment, so each target is taken once.
+  let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
-      const idx = queue.shift();
+      const idx = targets[next++];
       if (idx === undefined) return;
       const frame = byIndex.get(idx);
       if (!frame?.screenshotPath || !frame.dhash) continue;

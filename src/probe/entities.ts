@@ -2,15 +2,38 @@ import type { Entity } from '../types.ts';
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
 
+/**
+ * Compiled matchers, keyed by the alias they came from.
+ *
+ * `entityCoverage` runs inside every capture -- four times a second during an
+ * iteration -- and a brief's aliases do not change between frames, so compiling
+ * the same handful of patterns over and over was spending time in the one place
+ * the harness cannot afford it: a capture that overruns its tick drops the
+ * frame, and the dropped frame is the resolution the metric is quoted at.
+ *
+ * A `null` entry is an alias that normalises to nothing and can never match.
+ */
+const MATCHERS = new Map<string, RegExp | string | null>();
+
 /** Word-boundary match for alphanumeric aliases, substring for the rest. */
-function aliasPresent(haystack: string, alias: string): boolean {
+function matcherFor(alias: string): RegExp | string | null {
   const a = norm(alias);
-  if (!a) return false;
+  if (!a) return null;
   if (/^[a-z0-9 ]+$/.test(a)) {
-    const re = new RegExp(`(^|[^a-z0-9])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
-    return re.test(haystack);
+    // No `g` flag: a stateful regex would carry lastIndex between frames.
+    return new RegExp(`(^|[^a-z0-9])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
   }
-  return haystack.includes(a);
+  return a;
+}
+
+function aliasPresent(haystack: string, alias: string): boolean {
+  let m = MATCHERS.get(alias);
+  if (m === undefined) {
+    m = matcherFor(alias);
+    MATCHERS.set(alias, m);
+  }
+  if (m === null) return false;
+  return typeof m === 'string' ? haystack.includes(m) : m.test(haystack);
 }
 
 export interface Coverage {
