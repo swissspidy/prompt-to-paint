@@ -49,6 +49,12 @@ export function integrate(points: CurvePoint[], horizonMs: number): number {
   return area / horizonMs;
 }
 
+/**
+ * Derive every headline number from the scored frames.
+ *
+ * Frames past the horizon are excluded rather than clamped, so a late
+ * improvement cannot retroactively raise a run's score.
+ */
 export function computeMetrics(frames: ScoredFrame[], opts: CurveOptions): CurveMetrics {
   const sorted = [...frames].sort((a, b) => a.tMs - b.tMs);
   const inHorizon = sorted.filter((f) => f.tMs <= opts.horizonMs);

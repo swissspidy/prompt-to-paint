@@ -10,6 +10,13 @@ export interface Spread {
   missing: number;
 }
 
+/**
+ * Median, range, and how many runs the value never happened in.
+ *
+ * Runs where the thing never happened are counted separately rather than
+ * averaged away, since treating them as missing would flatter an agent that
+ * failed outright.
+ */
 export function spread(values: Array<number | null>): Spread {
   const present = values.filter((v): v is number => v !== null).sort((a, b) => a - b);
   const missing = values.length - present.length;
@@ -32,6 +39,9 @@ export interface Aggregate {
   runIds: string[];
 }
 
+/**
+ * Summarise repeated runs of one agent on one brief.
+ */
 export function aggregate(runs: RunResult[]): Aggregate {
   const bucketMedians: Record<string, number> = {};
   for (const b of BUCKET_ORDER) {
@@ -53,6 +63,9 @@ export function aggregate(runs: RunResult[]): Aggregate {
 const fmtMs = (v: number | null): string => (v === null ? '--' : `${(v / 1000).toFixed(1)}s`);
 const fmtN = (v: number | null): string => (v === null ? '--' : v.toFixed(3));
 
+/**
+ * Format one metric row with its range and any never-happened count.
+ */
 function line(name: string, s: Spread, fmt: (v: number | null) => string): string {
   const range = s.median === null ? '' : `  [${fmt(s.min)} .. ${fmt(s.max)}]`;
   const miss = s.missing ? `  (${s.missing}/${s.n} never happened)` : '';

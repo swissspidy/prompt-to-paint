@@ -18,6 +18,9 @@ interface RGBA {
   data: Buffer | Uint8Array;
 }
 
+/**
+ * Convert decoded RGBA to a luminance plane.
+ */
 function toGray(png: RGBA): Gray {
   const { width: w, height: h } = png;
   const data = new Uint8Array(w * h);
@@ -71,6 +74,10 @@ export function dhash(gray: Gray): string {
   return hex;
 }
 
+/**
+ * Bit distance between two difference hashes, saturating at 64 when they
+ * cannot be compared.
+ */
 export function hamming(a: string, b: string): number {
   if (a.length !== b.length) return 64;
   let d = 0;
@@ -152,6 +159,9 @@ export function colorSignature(buf: Buffer, grid = 16): string {
   return colorSignatureFrom(PNG.sync.read(buf), grid);
 }
 
+/**
+ * Build the colour grid from already-decoded pixels.
+ */
 function colorSignatureFrom(src: RGBA, grid: number): string {
   const out = Buffer.alloc(grid * grid * 3);
   for (let gy = 0; gy < grid; gy++) {

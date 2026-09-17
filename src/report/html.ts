@@ -12,6 +12,10 @@ const secs = (ms: number | null): string =>
 const W = 880, H = 260, M = { l: 46, r: 18, t: 14, b: 34 };
 const PW = W - M.l - M.r, PH = H - M.t - M.b;
 
+/**
+ * The correctness curve, with the held tail drawn differently from observed
+ * samples because it is an assumption rather than a measurement.
+ */
 function curveChart(r: RunResult): string {
   const pts = buildCurve(r.frames, {
     horizonMs: r.curve.horizonMs,
@@ -86,6 +90,9 @@ function curveChart(r: RunResult): string {
   <div id="tip" class="tip" hidden></div>`;
 }
 
+/**
+ * Latency buckets as one bar, with direct labels on the larger segments.
+ */
 function stackedBar(buckets: Record<Bucket, number>, totalMs: number, id: string): string {
   if (totalMs <= 0) return '<p class="muted">No time to attribute.</p>';
   const segs = BUCKET_ORDER.filter((b) => buckets[b] > 0);
@@ -101,6 +108,9 @@ function stackedBar(buckets: Record<Bucket, number>, totalMs: number, id: string
     .join('')}</div>`;
 }
 
+/**
+ * The agent-versus-toolchain summary, the chart the hypothesis turns on.
+ */
 function sideSplit(r: RunResult): string {
   const totals = { agent: 0, toolchain: 0, unknown: 0 };
   for (const b of BUCKET_ORDER) totals[BUCKET_SIDE[b]] += r.decomposition.buckets[b];
@@ -117,6 +127,10 @@ function sideSplit(r: RunResult): string {
     </div>`;
 }
 
+/**
+ * The same buckets as a table, which is also the relief the palette's light
+ * mode contrast requires.
+ */
 function decompTable(r: RunResult): string {
   const rows = BUCKET_ORDER.map(
     (b) => `<tr><td><i class="swatch" style="background:${bucketVar(b)}"></i>${BUCKET_LABEL[b]}</td>
@@ -129,6 +143,9 @@ function decompTable(r: RunResult): string {
     <tfoot><tr><td>Wall clock (cold start)</td><td class="num">${secs(r.decomposition.wallMs)}</td><td class="num">100%</td><td></td></tr></tfoot></table>`;
 }
 
+/**
+ * Iteration timings, labelled with how the follow-up was delivered.
+ */
 function iterationTable(r: RunResult): string {
   if (!r.iterations.length) return '<p class="muted">No iterations were run.</p>';
   const restart = r.iterations.some((it) => it.mode === 'restart');
@@ -147,6 +164,9 @@ function iterationTable(r: RunResult): string {
       .join('')}</tbody></table>`;
 }
 
+/**
+ * The judged frames in order, so a surprising curve can be eyeballed.
+ */
 function filmstrip(r: RunResult, outDir: string): string {
   const judged = r.frames.filter((f) => f.scoreSource === 'judge' && f.screenshotPath);
   if (!judged.length) return '<p class="muted">No frames were judged.</p>';
@@ -159,6 +179,12 @@ function filmstrip(r: RunResult, outDir: string): string {
     .join('')}</div>`;
 }
 
+/**
+ * Render the full run report as a single self-contained page.
+ *
+ * Screenshots are referenced relatively rather than inlined, so the report
+ * stays small and lives beside the frames it points at.
+ */
 export function renderHtml(r: RunResult, outDir: string): string {
   const vars = (list: string[]): string => list.map((c, i) => `--series-${i + 1}: ${c};`).join('\n    ');
   const warn = r.warnings.length

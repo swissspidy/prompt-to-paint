@@ -5,6 +5,9 @@ const secs = (ms: number | null): string => (ms === null ? '  --  ' : `${(ms / 1
 const bar = (frac: number, width = 24): string =>
   '#'.repeat(Math.round(frac * width)).padEnd(width, '.');
 
+/**
+ * The terminal summary, leading with any failure that invalidates the run.
+ */
 export function renderText(r: RunResult): string {
   const L: string[] = [];
   L.push(`\n  ${r.brief} / ${r.label}  (${r.adapter})`);

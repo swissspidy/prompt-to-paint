@@ -105,6 +105,9 @@ export class PiAdapter implements Adapter {
     this.opts = opts;
   }
 
+  /**
+   * Launch `pi` in RPC mode and submit the brief as the first prompt.
+   */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = ['--mode', 'rpc'];
     if (this.opts.provider) args.push('--provider', this.opts.provider);

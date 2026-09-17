@@ -24,6 +24,9 @@ export interface JudgeSummary {
   warnings: string[];
 }
 
+/**
+ * Build the rubric prompt sent with each judged frame.
+ */
 export function buildJudgePrompt(brief: Brief): string {
   const criteria = brief.rubric
     .map((c) => `- ${c.id}: ${c.description}`)
@@ -81,6 +84,12 @@ export function parseVerdict(raw: string): JudgeVerdict | null {
   return null;
 }
 
+/**
+ * Weighted fraction of rubric criteria met.
+ *
+ * A criterion the judge omitted counts as unmet rather than dropping out of
+ * the denominator, so forgetting one cannot inflate the score.
+ */
 export function scoreFromVerdict(brief: Brief, v: JudgeVerdict): number {
   let got = 0;
   let total = 0;
@@ -143,6 +152,9 @@ export function selectFramesToJudge(
   return [...keep].sort((a, b) => a - b);
 }
 
+/**
+ * Read the verdict cache, treating any corruption as a cold cache.
+ */
 async function loadCache(path: string): Promise<Record<string, JudgeVerdict>> {
   if (!existsSync(path)) return {};
   try {

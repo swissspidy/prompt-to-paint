@@ -54,10 +54,16 @@ export class ExecAdapter implements Adapter {
     this.opts = opts;
   }
 
+  /**
+   * Restart unless the caller states that `iterationCommand` really resumes.
+   */
   get iterationMode(): IterationMode {
     return this.opts.iterationMode ?? 'restart';
   }
 
+  /**
+   * Run the command, treating its exit as the end of a turn.
+   */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const log = createWriteStream(ctx.logPath, { flags: 'a' });
     let turnsCompleted = 0;

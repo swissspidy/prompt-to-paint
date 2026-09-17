@@ -31,6 +31,9 @@ const name = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const log = process.env.P2P_PHASE_LOG;
 
+/**
+ * Locate the real binary, skipping the shim directory itself.
+ */
 function findReal() {
   const parts = (process.env.PATH || '').split(path.delimiter);
   for (const dir of parts) {

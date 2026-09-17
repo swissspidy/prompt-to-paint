@@ -36,6 +36,9 @@ export class ApiBackend implements JudgeBackend {
     this.baseUrl = baseUrl;
   }
 
+  /**
+   * Score one frame over HTTP, retrying 429s and 5xx with exponential backoff.
+   */
   async ask(req: JudgeRequest): Promise<string> {
     const body = {
       model: this.model,
@@ -103,6 +106,9 @@ export class CliBackend implements JudgeBackend {
     this.bin = bin;
   }
 
+  /**
+   * Score one frame by asking the local CLI to read the screenshot off disk.
+   */
   async ask(req: JudgeRequest): Promise<string> {
     const prompt = `Read the image file at ${req.imagePath}, then answer.\n\n${req.prompt}`;
     // The prompt goes over stdin, never as a positional argument: --add-dir and
@@ -147,11 +153,18 @@ export class NullBackend implements JudgeBackend {
   readonly name = 'none';
   readonly model = null;
   readonly concurrency = 1;
+  /** Always throws: callers must fall back to mechanical scoring. */
   async ask(): Promise<string> {
     throw new Error('no judge backend configured');
   }
 }
 
+/**
+ * Choose a judge backend.
+ *
+ * `auto` prefers the API when a key is present and falls back to the local
+ * CLI, so the harness runs on a laptop without provisioning credentials.
+ */
 export function pickBackend(opt: {
   backend?: 'api' | 'cli' | 'none' | 'auto';
   model?: string;

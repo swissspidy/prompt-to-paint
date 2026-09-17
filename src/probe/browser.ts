@@ -52,6 +52,9 @@ function defaultCacheDir(): string | undefined {
   return join(homedir(), '.cache', 'ms-playwright');
 }
 
+/**
+ * Find the newest Chromium build under a browsers directory.
+ */
 function scanBrowsersDir(root: string | undefined): string | undefined {
   if (!root || !existsSync(root)) return undefined;
   let best: { build: number; path: string } | undefined;

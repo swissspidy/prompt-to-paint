@@ -40,6 +40,9 @@ export class ClaudeCodeAdapter implements Adapter {
     this.opts = opts;
   }
 
+  /**
+   * Launch `claude` and submit the brief as the first stream-json message.
+   */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = [
       '-p',
@@ -168,6 +171,12 @@ export class ClaudeCodeAdapter implements Adapter {
     };
   }
 
+  /**
+   * Map one Claude Code stream event onto the harness vocabulary.
+   *
+   * Tool boundaries are inferred from the tool_use blocks inside an assistant
+   * message, since the stream does not mark them independently.
+   */
   private translate(ev: StreamEvent, tMs: number): AgentEvent[] {
     if (ev.type === 'assistant') {
       const out: AgentEvent[] = [{ tMs, type: 'assistant', raw: ev }];

@@ -37,5 +37,9 @@ export const BUCKET_SIDE: Record<Bucket, 'agent' | 'toolchain' | 'unknown'> = {
   residual: 'unknown',
 };
 
+/**
+ * CSS variable for a bucket's colour, fixed per bucket so two reports can be
+ * read side by side.
+ */
 export const bucketVar = (b: Bucket): string =>
   b === 'residual' ? 'var(--muted-fill)' : `var(--series-${BUCKET_ORDER.indexOf(b) + 1})`;

@@ -51,6 +51,13 @@ export function protocolSuffix(url: string): string {
   return `\n\nWhen the app is ready to look at, serve it at ${url} and leave the server running. Do not stop the server when you are done.`;
 }
 
+/**
+ * Run one agent against one brief and produce every number in the report.
+ *
+ * The run is measured, then torn down, then analysed. Judging happens after
+ * cleanup on purpose: it can take minutes, and nothing it does should sit
+ * inside the window being measured or hold the browser open.
+ */
 export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   const { brief, adapter } = opts;
   const log = opts.onLog ?? (() => {});

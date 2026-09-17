@@ -93,6 +93,9 @@ export class Prober {
     this.opts = opts;
   }
 
+  /**
+   * Current poll interval; iteration runs finer than cold start.
+   */
   get intervalMs(): number {
     return this.opts.intervalMs ?? 1000;
   }
@@ -102,6 +105,9 @@ export class Prober {
     return this.intervalMs;
   }
 
+  /**
+   * Ticks dropped because a capture overran the interval.
+   */
   get skippedTicks(): number {
     return this.skipped;
   }
@@ -111,6 +117,9 @@ export class Prober {
     return this.reloads;
   }
 
+  /**
+   * Launch the browser and begin polling.
+   */
   async start(): Promise<void> {
     await mkdir(this.opts.framesDir, { recursive: true });
     this.browser = await chromium.launch({
@@ -133,6 +142,10 @@ export class Prober {
     this.schedule();
   }
 
+  /**
+   * Queue the next tick after the current one settles, never on a fixed timer,
+   * so captures cannot pile up.
+   */
   private schedule(): void {
     if (!this.running) return;
     this.timer = setTimeout(() => {
@@ -164,6 +177,9 @@ export class Prober {
     }
   }
 
+  /**
+   * A frame recording that the capture itself failed.
+   */
   private errorFrame(tMs: number, reason: string, captureMs: number): Frame {
     return {
       index: this.index++,
@@ -185,6 +201,10 @@ export class Prober {
     };
   }
 
+  /**
+   * Take one observation: navigate if needed, screenshot, read the DOM, and
+   * classify what a person would be looking at.
+   */
   private async capture(tMs: number): Promise<Frame> {
     const page = this.page!;
     const startedAt = Date.now();
@@ -377,6 +397,10 @@ export class Prober {
     return this.frames.at(-1) ?? null;
   }
 
+  /**
+   * Stop polling and close the browser, letting an in-flight capture finish so
+   * the last frame is not truncated.
+   */
   async stop(): Promise<void> {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);

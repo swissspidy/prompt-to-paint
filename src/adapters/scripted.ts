@@ -38,6 +38,9 @@ export class ScriptedAdapter implements Adapter {
     this.opts = opts;
   }
 
+  /**
+   * Begin replaying the timeline against the workdir.
+   */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     let turnsCompleted = 0;
     let waiters: Array<{ after: number; resolve: () => void }> = [];

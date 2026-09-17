@@ -71,6 +71,9 @@ export function assertComparable(runs: RunResult[]): void {
   }
 }
 
+/**
+ * Terminal ranking table, showing where the orderings disagree.
+ */
 export function renderCompareText(runs: RunResult[]): string {
   assertComparable(runs);
   const rows = rank(runs);
@@ -96,6 +99,9 @@ export function renderCompareText(runs: RunResult[]): string {
   return L.join('\n');
 }
 
+/**
+ * Comparison page with the curves overlaid and the rankings side by side.
+ */
 export function renderCompareHtml(runs: RunResult[]): string {
   assertComparable(runs);
   const W = 900, H = 320, M = { l: 48, r: 120, t: 16, b: 34 };

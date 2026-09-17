@@ -98,6 +98,9 @@ export class AntigravityAdapter implements Adapter {
     return this.sawSteps ? 'turns-only' : 'none';
   }
 
+  /**
+   * Launch `agy` and submit the brief as the first stream-json message.
+   */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
     if (this.opts.model) args.push('--model', this.opts.model);

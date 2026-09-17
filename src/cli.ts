@@ -59,11 +59,13 @@ Options for run:
   --repeat N   run N times and report a median with its full range
 `;
 
+/** Print a usage error and exit, without a stack trace the user cannot act on. */
 function fail(msg: string): never {
   console.error(`\n  error: ${msg}\n`);
   process.exit(1);
 }
 
+/** Parse argv, dispatch the subcommand, and write whatever reports it produces. */
 async function main(): Promise<void> {
   const cmd = process.argv[2];
   const argv = process.argv.slice(3);

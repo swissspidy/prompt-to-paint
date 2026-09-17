@@ -3,6 +3,9 @@ import type { Brief } from './types.ts';
 
 class BriefError extends Error {}
 
+/**
+ * Assert a brief invariant, naming the source file in the failure.
+ */
 function need<T>(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new BriefError(msg);
 }
@@ -53,6 +56,12 @@ export function parseBrief(raw: unknown, source: string): Brief {
   } as Brief;
 }
 
+/**
+ * Read and validate a brief from disk.
+ *
+ * JSON errors are re-thrown with the path attached: a brief is usually being
+ * edited by hand, so the file matters as much as the parse error.
+ */
 export async function loadBrief(path: string): Promise<Brief> {
   const text = await readFile(path, 'utf8');
   let parsed: unknown;

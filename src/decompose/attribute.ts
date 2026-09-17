@@ -5,6 +5,12 @@ export interface Interval {
   end: number;
 }
 
+/**
+ * Merge overlapping and touching intervals.
+ *
+ * Every bucket total goes through this, so two tools running at once are
+ * charged as one span of wall clock rather than counted twice.
+ */
 export function union(intervals: Interval[]): Interval[] {
   const sorted = intervals.filter((i) => i.end > i.start).sort((a, b) => a.start - b.start);
   const out: Interval[] = [];
@@ -16,6 +22,12 @@ export function union(intervals: Interval[]): Interval[] {
   return out;
 }
 
+/**
+ * Remove `cut` from `base`, splitting intervals where a hole falls inside one.
+ *
+ * This is what makes the bucket priority order work: each bucket keeps only
+ * what no higher-priority bucket already claimed.
+ */
 export function subtract(base: Interval[], cut: Interval[]): Interval[] {
   let acc = union(base);
   for (const c of union(cut)) {
@@ -30,6 +42,9 @@ export function subtract(base: Interval[], cut: Interval[]): Interval[] {
   return acc;
 }
 
+/**
+ * Total duration covered, counting overlapping time once.
+ */
 export const total = (intervals: Interval[]): number =>
   union(intervals).reduce((s, i) => s + (i.end - i.start), 0);
 
@@ -95,6 +110,12 @@ interface RawShimRecord {
   depth?: number;
 }
 
+/**
+ * Turn the shims' append-only log into paired phase events.
+ *
+ * Records are matched by id, and a torn line is skipped rather than failing
+ * the run: the log is appended to concurrently by unrelated processes.
+ */
 export function parsePhaseLog(text: string, t0Epoch: number): PhaseEvent[] {
   const starts = new Map<string, RawShimRecord>();
   const ends = new Map<string, RawShimRecord>();
@@ -178,6 +199,13 @@ function attributeExplicit(events: AgentEvent[], endMs: number): StreamAttributi
   return { model: subtract(active, tool), tool: union(tool) };
 }
 
+/**
+ * Split an agent's event stream into thinking and tool execution.
+ *
+ * Prefers explicit tool spans when the agent reports them, falls back to
+ * inferring spans from message boundaries, and attributes nothing at all when
+ * the stream shows no agent activity.
+ */
 export function attributeAgentStream(events: AgentEvent[], endMs: number): StreamAttribution {
   // An adapter that exposes no assistant events cannot tell us what the agent
   // was doing, and guessing is worse than admitting it. Without this guard a
@@ -233,6 +261,9 @@ export function attributeAgentStream(events: AgentEvent[], endMs: number): Strea
   return { model: union(model), tool: union(tool) };
 }
 
+/**
+ * Count tool_use blocks in an assistant message, for the inference path.
+ */
 function countToolUses(e: AgentEvent): number {
   const msg = (e.raw as { message?: { content?: unknown } } | undefined)?.message;
   const content = msg?.content;
