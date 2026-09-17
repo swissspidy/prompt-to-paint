@@ -1,7 +1,7 @@
-import { chromium, type Browser, type Page } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { analyzeShot } from './pixels.ts';
 import { classify, ERROR_SELECTORS } from './classify.ts';
 import { findChromium } from './browser.ts';
@@ -18,6 +18,17 @@ export interface ProberOptions {
   serverDownGrace?: number;
   /** Explicit Chromium binary. Defaults to P2P_CHROMIUM, then autodetection. */
   executablePath?: string;
+  /**
+   * Show the browser window. Costs nothing measurable and is the only way to
+   * watch a run happen, but needs a display, so it is off by default.
+   */
+  headed?: boolean;
+  /**
+   * Record the whole session to this path as WebM. Chromium screencasts the
+   * page continuously, which is more browser work than the poll alone, so this
+   * is opt-in and the report says when it was on.
+   */
+  videoPath?: string;
   /**
    * Consecutive non-rendering frames tolerated before the prober reloads a
    * live page. Gives a booting app time to paint before we refresh it.
@@ -60,6 +71,46 @@ const OBSERVE = `(() => {
   };
 })()`;
 
+export interface CaptureAttempt {
+  buf: Buffer | null;
+  /** The last error, when every attempt failed. Null on success. */
+  error: string | null;
+  attempts: number;
+}
+
+/**
+ * Take a screenshot, retrying the refusals that are not answers.
+ *
+ * Chromium answers `Page.captureScreenshot` with "Unable to capture screenshot"
+ * when its compositor has no frame to hand over yet. That is most likely in the
+ * moments right after a navigation fails -- which is to say, over the whole
+ * stretch before anything is serving, the part of a run this harness exists to
+ * measure. It is transient: the next attempt milliseconds later succeeds. It is
+ * also not a timeout, so waiting longer does not help and retrying does.
+ *
+ * The attempts share the original budget rather than each getting it, so a page
+ * that is genuinely slow to paint cannot turn one overrunning capture into
+ * three.
+ */
+export async function captureWithRetry(
+  take: (timeoutMs: number) => Promise<Buffer>,
+  opts: { budgetMs: number; attempts?: number; wait?: (ms: number) => Promise<void> },
+): Promise<CaptureAttempt> {
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const perAttempt = Math.max(500, Math.floor(opts.budgetMs / attempts));
+  const wait = opts.wait ?? sleep;
+  let error: string | null = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return { buf: await take(perAttempt), error: null, attempts: i + 1 };
+    } catch (e) {
+      error = String(e).slice(0, 200);
+      if (i < attempts - 1) await wait(50 * (i + 1));
+    }
+  }
+  return { buf: null, error, attempts };
+}
+
 /**
  * Polls a URL and turns it into a timeline of frames.
  *
@@ -71,6 +122,7 @@ const OBSERVE = `(() => {
  */
 export class Prober {
   private browser: Browser | null = null;
+  private context: BrowserContext | null = null;
   private page: Page | null = null;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -85,6 +137,11 @@ export class Prober {
   private everRendered = false;
   private lastDocHash: string | null = null;
   private reloads = 0;
+  private lastShot: { dhash: string; colorSig: string; screenshotPath: string } | null = null;
+  private distinct = 0;
+  private duplicates = 0;
+  private failedShots: string[] = [];
+  private video: string | null = null;
 
   readonly frames: Frame[] = [];
 
@@ -118,23 +175,56 @@ export class Prober {
     return this.reloads;
   }
 
+  /** Screenshots actually written. Frames that repeat one share its file. */
+  get distinctShots(): number {
+    return this.distinct;
+  }
+
+  /** Frames whose screenshot was identical to the one before it. */
+  get repeatedShots(): number {
+    return this.duplicates;
+  }
+
+  /**
+   * Captures the browser refused outright, one message each.
+   *
+   * A frame with no picture used to be indistinguishable from one the prober
+   * never tried to take, because the failure was caught and dropped. It is the
+   * kind of thing that only shows up much later, as a hole in a filmstrip or a
+   * blank stretch in a video, with nothing anywhere saying why.
+   */
+  get shotFailures(): string[] {
+    return this.failedShots;
+  }
+
+  /** Where the session recording landed, once the run has stopped. */
+  get videoPath(): string | null {
+    return this.video;
+  }
+
   /**
    * Launch the browser and begin polling.
    */
   async start(): Promise<void> {
     await mkdir(this.opts.framesDir, { recursive: true });
     this.browser = await chromium.launch({
-      headless: true,
+      headless: !this.opts.headed,
       executablePath: findChromium(this.opts.executablePath),
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     });
-    const context = await this.browser.newContext({
-      viewport: this.opts.viewport ?? { width: 1280, height: 800 },
+    const viewport = this.opts.viewport ?? { width: 1280, height: 800 };
+    // Playwright names the recording itself and only finalises it when the
+    // context closes, so it is written to a scratch directory here and moved
+    // to the requested path in stop().
+    const videoDir = this.opts.videoPath ? join(this.opts.framesDir, '..', '.video') : undefined;
+    this.context = await this.browser.newContext({
+      viewport,
       deviceScaleFactor: 1,
       ignoreHTTPSErrors: true,
       reducedMotion: 'reduce',
+      ...(videoDir ? { recordVideo: { dir: videoDir, size: viewport } } : {}),
     });
-    this.page = await context.newPage();
+    this.page = await this.context.newPage();
     this.page.on('console', (m) => {
       if (m.type() === 'error') this.consoleErrors.push(m.text().slice(0, 300));
     });
@@ -181,9 +271,9 @@ export class Prober {
   /**
    * A frame recording that the capture itself failed.
    */
-  private errorFrame(tMs: number, reason: string, captureMs: number): Frame {
+  private errorFrame(tMs: number, reason: string, captureMs: number, index = this.index++): Frame {
     return {
-      index: this.index++,
+      index,
       tMs,
       class: 'unreachable',
       reason: `capture-failed:${reason.slice(0, 120)}`,
@@ -203,12 +293,58 @@ export class Prober {
   }
 
   /**
+   * Screenshot the page, analyse it, and put it on disk.
+   *
+   * Consecutive frames that look identical share one file. An agent that
+   * finishes early and leaves its dev server up produces hundreds of identical
+   * PNGs otherwise -- most of a run directory's size, and a filmstrip nobody
+   * can read. The test is exact equality of both the luminance hash and the
+   * colour grid, which is stricter than the near-miss threshold the judge uses
+   * to decide a frame does not need re-scoring.
+   */
+  private async shoot(index: number): Promise<{
+    inkRatio: number;
+    dhash: string | null;
+    colorSig: string | null;
+    screenshotPath: string | null;
+  }> {
+    const shot = await captureWithRetry(
+      (timeout) => this.page!.screenshot({ type: 'png', timeout }),
+      { budgetMs: Math.max(3000, this.intervalMs * 2) },
+    );
+    if (!shot.buf) {
+      // Recorded rather than dropped: the frame still belongs on the timeline,
+      // but the run has to be able to say why it has no picture.
+      this.failedShots.push(shot.error ?? 'unknown');
+      return { inkRatio: 0, dhash: null, colorSig: null, screenshotPath: null };
+    }
+    const buf = shot.buf;
+    const a = analyzeShot(buf);
+    const prev = this.lastShot;
+    if (prev && prev.dhash === a.dhash && prev.colorSig === a.colorSig) {
+      this.duplicates++;
+      return { ...a, screenshotPath: prev.screenshotPath };
+    }
+    const screenshotPath = join(this.opts.framesDir, `f${String(index).padStart(5, '0')}.png`);
+    await writeFile(screenshotPath, buf);
+    this.distinct++;
+    this.lastShot = { dhash: a.dhash, colorSig: a.colorSig, screenshotPath };
+    return { ...a, screenshotPath };
+  }
+
+  /**
    * Take one observation: navigate if needed, screenshot, read the DOM, and
    * classify what a person would be looking at.
+   *
+   * Every frame carries a screenshot, including the ones taken before anything
+   * is listening. Those frames are the first minutes of a run -- exactly the
+   * window this harness exists to measure -- and skipping them meant the
+   * filmstrip opened on the finished app, as if it had appeared instantly.
    */
   private async capture(tMs: number): Promise<Frame> {
     const page = this.page!;
     const startedAt = Date.now();
+    const index = this.index++;
 
     // Server liveness is probed out-of-band so we never have to re-navigate
     // just to learn the server's status -- re-navigating would destroy HMR
@@ -249,17 +385,23 @@ export class Prober {
         this.live = res === null || res.status() < 400;
         if (!this.live) {
           return {
-            ...this.errorFrame(tMs, `http-${res!.status()}`, Date.now() - startedAt),
+            ...this.errorFrame(tMs, `http-${res!.status()}`, 0, index),
+            ...(await this.shoot(index)),
             class: 'error',
             reason: `http-${res!.status()}`,
             httpStatus: res!.status(),
+            captureMs: Date.now() - startedAt,
           };
         }
       } catch {
+        // Chromium paints its own "site can't be reached" page here, which is
+        // an honest picture of what a person would see: nothing yet.
         return {
-          ...this.errorFrame(tMs, 'not-listening', Date.now() - startedAt),
+          ...this.errorFrame(tMs, 'not-listening', 0, index),
+          ...(await this.shoot(index)),
           reason: 'unreachable:not-listening',
           httpStatus: status,
+          captureMs: Date.now() - startedAt,
         };
       }
     }
@@ -274,29 +416,15 @@ export class Prober {
       try {
         obs = (await page.evaluate(OBSERVE)) as PageObservation;
       } catch (e) {
-        return this.errorFrame(tMs, `evaluate:${e}`, Date.now() - startedAt);
+        return {
+          ...this.errorFrame(tMs, `evaluate:${e}`, 0, index),
+          ...(await this.shoot(index)),
+          captureMs: Date.now() - startedAt,
+        };
       }
     }
 
-    let shot: Buffer | null = null;
-    try {
-      shot = await page.screenshot({ type: 'png', timeout: Math.max(3000, this.intervalMs * 2) });
-    } catch {
-      shot = null;
-    }
-
-    let ink = 0;
-    let hash: string | null = null;
-    let sig: string | null = null;
-    let screenshotPath: string | null = null;
-    if (shot) {
-      const a = analyzeShot(shot);
-      ink = a.inkRatio;
-      hash = a.dhash;
-      sig = a.colorSig;
-      screenshotPath = join(this.opts.framesDir, `f${String(this.index).padStart(5, '0')}.png`);
-      await writeFile(screenshotPath, shot);
-    }
+    const { inkRatio: ink, dhash: hash, colorSig: sig, screenshotPath } = await this.shoot(index);
 
     if (status === null) this.serverFails++;
     else this.serverFails = 0;
@@ -337,7 +465,7 @@ export class Prober {
     const an = this.opts.analyze?.(obs.text) ?? { entityCoverage: 0, entitiesFound: [] };
 
     return {
-      index: this.index++,
+      index,
       tMs,
       class: cls.class,
       reason: cls.reason,
@@ -401,14 +529,32 @@ export class Prober {
   /**
    * Stop polling and close the browser, letting an in-flight capture finish so
    * the last frame is not truncated.
+   *
+   * The context is closed before the browser because that is what finalises a
+   * video recording; closing the browser out from under it leaves a truncated
+   * file. A recording that cannot be saved is reported as absent, never as a
+   * failed run.
    */
   async stop(): Promise<void> {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     // Let an in-flight capture finish so the last frame is not truncated.
     for (let i = 0; i < 50 && this.capturing; i++) await sleep(50);
+    const recording = this.opts.videoPath ? this.page?.video() ?? null : null;
+    await this.context?.close().catch(() => undefined);
+    if (recording && this.opts.videoPath) {
+      try {
+        const src = await recording.path();
+        await rename(src, this.opts.videoPath);
+        this.video = this.opts.videoPath;
+        await rm(dirname(src), { recursive: true, force: true }).catch(() => undefined);
+      } catch {
+        this.video = null;
+      }
+    }
     await this.browser?.close().catch(() => undefined);
     this.browser = null;
+    this.context = null;
     this.page = null;
   }
 }

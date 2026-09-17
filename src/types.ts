@@ -286,6 +286,21 @@ export interface IterationResult {
   ok: boolean;
 }
 
+/**
+ * Why the cold-start observation window closed.
+ *
+ * Travels with the result because it changes how the tail of the curve should
+ * be read. `turn` and `signal` mean the agent said it was finished; `quiet`
+ * means it stopped doing anything observable and we inferred it; `horizon`
+ * means it never stopped, and the run was cut off mid-flight.
+ */
+export type RunEndReason =
+  | 'turn'      // the adapter saw the agent complete its first turn
+  | 'signal'    // the agent created the done sentinel in its workdir
+  | 'quiet'     // page, agent stream and toolchain all idle long enough
+  | 'rendered'  // stop-after-render was set and the app rendered
+  | 'horizon';  // the brief's horizon ran out first
+
 export interface RunResult {
   schema: 1;
   runId: string;
@@ -310,5 +325,29 @@ export interface RunResult {
    * failed to launch must never be mistaken for an agent that built nothing.
    */
   agentFailure: { exitCode: number | null; atMs: number; logPath: string } | null;
+  /** Why the cold-start window closed. Absent on results written before v0.2. */
+  endReason?: RunEndReason;
+  /**
+   * What the agent was told about how the run is observed.
+   *
+   * `renderEarly` is the whole comparison: with it the agent knows the clock is
+   * running and that a rough early page beats a perfect late one, and the number
+   * says how fast it renders when told to. Without it, the number says whether
+   * it does so unprompted. Those are different questions, and a result that does
+   * not record which one it answers cannot be placed next to another.
+   *
+   * Absent on results written before v0.3; every one of those was prompted.
+   */
+  protocol?: { renderEarly: boolean };
+  /** Files and counts produced beside result.json. */
+  artifacts?: {
+    /** Session recording, when --video was on. */
+    videoPath?: string | null;
+    /** The exact text handed to the agent, protocol suffix included. */
+    promptPath?: string;
+    /** Screenshots actually written; repeats share one file. */
+    distinctShots?: number;
+    repeatedShots?: number;
+  };
   warnings: string[];
 }

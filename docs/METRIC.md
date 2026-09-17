@@ -237,6 +237,67 @@ Where the element is uncertain, scan candidates by geometry -- a wide, short box
 near the top -- rather than betting on one selector, and accept a range of
 blues rather than one hex value, since agents pick their own shade.
 
+## The protocol suffix
+
+Every brief is handed to the agent with the same block appended, verbatim, for
+every agent. It is part of the measurement, not a hint given to one of them.
+The exact text sent is saved as `prompt.txt` in the run directory.
+
+It says four things:
+
+1. **Where to serve, and to leave the server running.** So a run is never lost
+   to a port mismatch.
+2. **That a browser is already watching, and to render something early.** The
+   first version of this suffix said "when the app is ready to look at, serve
+   it" — which asks for exactly the behaviour the metric exists to catch: a
+   blank page for the whole run and a first frame that is already the finished
+   app. Telling every agent that the clock is running is the fair version of
+   that instruction. `--no-render-early` drops this clause, which measures
+   unprompted behaviour instead. That is a different experiment, and runs from
+   the two may not be ranked in one table. They can still be compared, but only
+   pairwise: `p2p leaderboard` ranks each condition on its own and reports the
+   per-agent difference between them, which is what "how much was the
+   instruction worth" actually means.
+3. **To start the dev server in the background.** A server in the foreground
+   never returns, so the agent's turn can never complete.
+4. **To create `.p2p-done` when finished.** See below.
+
+## How the observation window ends
+
+The cold-start window closes on whichever of these comes first. The reason is
+recorded as `endReason` in the result and printed by `p2p leaderboard`, because
+a run the agent finished and a run that was cut off are not the same
+measurement and nothing else in the numbers distinguishes them.
+
+| `endReason` | what happened |
+|---|---|
+| `turn` | the adapter saw the agent complete its first turn |
+| `signal` | the agent created `.p2p-done` in its workdir |
+| `quiet` | page, agent stream and toolchain were all idle for `--quiet-for` |
+| `rendered` | `--stop-after-render` was set and the app rendered |
+| `horizon` | the brief's horizon ran out first |
+
+**`signal` exists because `turn` cannot be relied on.** An agent whose last act
+is starting a dev server holds that tool call open forever and never completes a
+turn, so the only end condition left was the horizon — which meant minutes of
+screenshotting an app that had been finished the whole time. A sentinel file
+works for every adapter, including the ones whose event stream this harness can
+only partly read.
+
+**`quiet` is the backstop for an agent that ignores the sentinel.** Three
+signals have to idle together for the full window (default 120s, `--quiet-for 0`
+to disable): no visible change on the page, no agent event, and no shimmed
+command running. Any one alone has a false positive that would cut a working run
+short — the page sits unchanged through a long install, the agent goes quiet
+while a build runs — so all three are required, and something must already have
+rendered.
+
+Ending early does not change the AUC: the curve holds its last value to the
+horizon either way (convention 3 above). What it can miss is a late improvement,
+so a `quiet` run says so in its caveats. The quiescence window itself is
+excluded from the latency denominator on the same grounds as the settle window:
+it is defined as a stretch in which nothing happened.
+
 ## Port hygiene
 
 A run **refuses to start** if anything is already answering on the target port,
@@ -271,8 +332,21 @@ and the output says so when the AUC range exceeds 0.15.
   shadow DOM, or cross-origin iframes. A brief whose content is image-rendered
   will under-report coverage and therefore over-report TTFRR.
 - **The protocol suffix modifies the prompt.** Every agent is told where to
-  serve, verbatim and identically, so a run is never lost to a port mismatch.
-  It is part of the measurement, not a hint to one agent.
+  serve, to render early, to background its server and how to signal completion
+  — verbatim and identically. It is part of the measurement, not a hint to one
+  agent, and it is saved with the run as `prompt.txt`. It also means these
+  numbers describe agents that were told the clock is running; `--no-render-early`
+  measures the other thing. Which one a run answers is recorded in
+  `result.json` as `protocol.renderEarly`, and the leaderboard keeps the two
+  rankings apart rather than merging them.
+- **Repeated screenshots share a file.** Every frame carries a screenshot,
+  including the ones taken before anything was listening, but consecutive
+  frames whose luminance hash and colour grid are both exactly equal point at
+  one file in `frames/`. The timeline in `result.json` is complete; the
+  directory holds one copy per distinct visual state. This means `frames/`
+  cannot be replayed as a timeline: stitching the directory listing gives every
+  distinct state equal screen time regardless of how long it was actually on
+  screen. `p2p video` rebuilds the real one from `result.json`.
 - **The prober reloads a non-rendering page** after 4 stale polls, and stops
   reloading once anything has rendered. A page that would have painted at 10s
   can be refreshed at ~4s and restart its boot; this is visible in the frame log.
