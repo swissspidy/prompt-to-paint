@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { Adapter, AgentContext, AgentRunHandle, IterationMode } from '../types.js';
+import type { Adapter, AgentContext, AgentRunHandle, IterationMode, StreamFidelity } from '../types.js';
 import { withShimPath } from '../decompose/shims.js';
 
 export interface ExecOptions {
@@ -35,6 +35,7 @@ const fill = (tpl: string, prompt: string, workdir: string): string =>
  */
 export class ExecAdapter implements Adapter {
   readonly name = 'exec';
+  readonly streamFidelity: StreamFidelity = 'none';
   constructor(private opts: ExecOptions) {}
 
   get iterationMode(): IterationMode {

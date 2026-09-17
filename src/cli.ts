@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadBrief } from './brief.js';
 import { runBenchmark } from './run.js';
-import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter } from './adapters/index.js';
+import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.js';
 import { pickBackend, NullBackend } from './judge/backends.js';
 import { judgeRun } from './judge/judge.js';
 import { computeMetrics } from './metrics/curve.js';
@@ -26,7 +26,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p floors                                list toolchain-floor templates
 
 Options for run:
-  --adapter    claude-code | exec | scripted     (default claude-code)
+  --adapter    claude-code | pi | antigravity | exec | scripted  (default claude-code)
   --model      model passed to the agent
   --label      name for this run in reports      (default: adapter[+model])
   --judge      api | cli | none | auto           (default auto)
@@ -42,6 +42,11 @@ Options for run:
   --keep-server leave the agent's dev server running after the run
   --unsafe     pass --dangerously-skip-permissions to claude-code (non-root sandboxes only)
   --permission-mode <mode>  permission mode for claude-code (default acceptEdits)
+  --provider   provider for pi (pi defaults to google)
+  --tools      comma-separated tool allowlist for pi
+  --effort     low | medium | high, for antigravity
+  --print-timeout  agy print timeout (default 30m; agy's own default is 5m)
+  --bin        override the agent binary name/path
   --repeat N   run N times and report a median with its full range
 `;
 
@@ -95,6 +100,8 @@ async function main(): Promise<void> {
       'no-iterate': { type: 'boolean' }, unsafe: { type: 'boolean' },
       'kill-port': { type: 'boolean' }, 'keep-server': { type: 'boolean' },
       repeat: { type: 'string' }, 'permission-mode': { type: 'string' },
+      provider: { type: 'string' }, tools: { type: 'string' }, effort: { type: 'string' },
+      'print-timeout': { type: 'string' }, bin: { type: 'string' },
     },
   });
 
@@ -164,6 +171,29 @@ async function main(): Promise<void> {
       if (!values.unsafe && !values['permission-mode'])
         console.log('  note: running with --permission-mode acceptEdits. An agent that needs to run\n' +
                     '        commands will stall on approval. Use --unsafe in a non-root sandbox.');
+    } else if (kind === 'pi') {
+      adapter = new PiAdapter({
+        bin: values.bin,
+        provider: values.provider,
+        model: values.model,
+        tools: values.tools,
+      });
+      label ||= values.model ? `pi:${values.model}` : 'pi';
+      if (!values.model)
+        console.log('  note: pi defaults to the google provider. Pass --provider and --model\n' +
+                    '        for a reproducible run.');
+    } else if (kind === 'antigravity') {
+      adapter = new AntigravityAdapter({
+        bin: values.bin,
+        model: values.model,
+        effort: values.effort,
+        skipPermissions: values.unsafe,
+        printTimeout: values['print-timeout'],
+      });
+      label ||= values.model ? `antigravity:${values.model}` : 'antigravity';
+      if (!values.unsafe)
+        console.log('  note: agy soft-denies tools needing approval. Without --unsafe the agent\n' +
+                    '        cannot write files or run commands.');
     } else if (kind === 'exec') {
       if (!values.command) fail('--adapter exec needs --command');
       adapter = new ExecAdapter({ command: values.command });

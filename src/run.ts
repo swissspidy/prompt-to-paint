@@ -220,11 +220,21 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     (coldResult?.raw as { duration_api_ms?: number } | undefined)?.duration_api_ms ?? null;
 
   const stream = attributeAgentStream(agentEvents, coldEndMs);
+  // An adapter whose stream shows turns but not tool boundaries cannot support
+  // a model-versus-tool split, so that time is left unattributed rather than
+  // all booked as thinking.
+  const fidelity = adapter.streamFidelity ?? 'none';
+  const sawActivity = agentEvents.some((e) => e.type === 'assistant' || e.type === 'tool_use');
+  if (fidelity === 'turns-only' && sawActivity) {
+    warnings.push(
+      `The ${adapter.name} adapter could see this run's turns but not its tool boundaries, so thinking and tool time are not separated and land in the residual. The toolchain phases from the shims are unaffected.`,
+    );
+  }
   const decomposition = decompose({
     wallMs: activeWallMs,
     phases,
-    stream,
-    hasStream: agentEvents.some((e) => e.type === 'assistant'),
+    stream: fidelity === 'full' ? stream : { model: [], tool: [] },
+    hasStream: fidelity === 'full' && sawActivity,
     serverReadyMs,
     firstPaintMs,
     reportedApiMs,
@@ -233,6 +243,14 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   if (iterations.some((i) => i.mode === 'restart')) {
     warnings.push(
       'Iteration timings come from re-running the agent, not from continuing a live session, so they include process startup and however long the agent takes to re-read the project. They are not comparable to live-session iteration numbers from another adapter.',
+    );
+  }
+  const erroredTurns = agentEvents.filter((e) => e.type === 'assistant' && e.subtype === 'error');
+  if (erroredTurns.length) {
+    warnings.unshift(
+      `AGENT REPORTED ERRORS: ${erroredTurns.length} turn(s) ended in an error (first: ${
+        erroredTurns[0]?.text ?? 'unknown'
+      }). These numbers describe a failed run, not agent performance.`,
     );
   }
   if (agentFailure) {

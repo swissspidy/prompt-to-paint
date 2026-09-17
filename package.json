@@ -13,7 +13,7 @@
   },
   "scripts": {
     "p2p": "tsx src/cli.ts",
-    "test": "tsx --test test/curve.test.ts test/decompose.test.ts test/judge.test.ts test/probe.test.ts test/shims.test.ts test/aggregate.test.ts",
+    "test": "tsx --test test/curve.test.ts test/decompose.test.ts test/judge.test.ts test/probe.test.ts test/shims.test.ts test/aggregate.test.ts test/adapters.test.ts",
     "typecheck": "tsc --noEmit",
     "test:integration": "tsx --test test/integration.test.ts",
     "test:all": "tsx --test test/*.test.ts"

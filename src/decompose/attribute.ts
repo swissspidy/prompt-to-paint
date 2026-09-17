@@ -140,6 +140,44 @@ export interface StreamAttribution {
  * requested has reported back. Parallel tool calls close as a batch, since the
  * agent is blocked until the slowest one returns.
  */
+/**
+ * Attribution from explicit tool spans.
+ *
+ * Some agents report exactly when each tool started and finished, keyed by id.
+ * That is strictly better than inferring spans from message boundaries: it
+ * handles overlapping tools without guessing, and it does not depend on a tool
+ * result arriving in any particular order. Everything inside the agent's active
+ * window that is not a tool is thinking.
+ */
+function attributeExplicit(events: AgentEvent[], endMs: number): StreamAttribution {
+  const open = new Map<string, number>();
+  const tool: Interval[] = [];
+  let first = Number.POSITIVE_INFINITY;
+  let last = 0;
+
+  for (const e of events) {
+    first = Math.min(first, e.tMs);
+    last = Math.max(last, e.tMs);
+    if (e.type === 'tool_use' && e.toolId) open.set(e.toolId, e.tMs);
+    else if (e.type === 'tool_result' && e.toolId) {
+      const start = open.get(e.toolId);
+      if (start !== undefined) {
+        tool.push({ start, end: e.tMs });
+        open.delete(e.toolId);
+      }
+    }
+  }
+  // A tool still open when the stream ended ran until the run ended.
+  for (const start of open.values()) tool.push({ start, end: endMs });
+
+  if (!Number.isFinite(first)) return { model: [], tool: [] };
+  // Only the window the agent was actually alive for. Time before its first
+  // event is startup, and time after its last is the harness watching an idle
+  // app; charging either to the model would overstate it.
+  const active: Interval[] = [{ start: first, end: Math.max(first, last) }];
+  return { model: subtract(active, tool), tool: union(tool) };
+}
+
 export function attributeAgentStream(events: AgentEvent[], endMs: number): StreamAttribution {
   // An adapter that exposes no assistant events cannot tell us what the agent
   // was doing, and guessing is worse than admitting it. Without this guard a
@@ -147,6 +185,11 @@ export function attributeAgentStream(events: AgentEvent[], endMs: number): Strea
   // has its entire run charged to "model thinking", which is exactly the
   // misattribution this harness exists to avoid. Returning nothing sends the
   // time to `residual`, where the coverage warning can flag it honestly.
+  const hasExplicitSpans =
+    events.some((e) => e.type === 'tool_use' && e.toolId) &&
+    events.some((e) => e.type === 'tool_result' && e.toolId);
+  if (hasExplicitSpans) return attributeExplicit(events, endMs);
+
   if (!events.some((e) => e.type === 'assistant')) return { model: [], tool: [] };
 
   const model: Interval[] = [];

@@ -140,42 +140,72 @@ measure judge variance.
 
 ## Which agents this works with
 
-The harness talks to agents through adapters, and support comes in tiers. The
-curve, both latency numbers, and every toolchain phase the shims catch are
-valid at every tier -- what degrades is the model/tool split and the meaning of
-the iteration timings.
+The harness talks to agents through adapters. The curve, both latency numbers,
+and every toolchain phase the shims catch are valid for any agent that can be
+started from a command line. What varies is how much of the agent's internals
+its event stream exposes, and whether a follow-up prompt continues a session or
+restarts the process.
 
-| | curve + TTFR | toolchain phases | model vs tool split | iteration |
-|---|---|---|---|---|
-| `claude-code` | yes | yes | yes | live session |
-| `exec` (any CLI agent) | yes | yes | **no** -- lands in residual | **restart** by default |
-| `scripted` | yes | yes | synthetic | live session |
-
-Anything with a non-interactive mode runs today through `exec`:
+| adapter | curve + TTFR | toolchain phases | model vs tool split | iteration | verified |
+|---|---|---|---|---|---|
+| `claude-code` | yes | yes | inferred from messages | live session | full run |
+| `pi` | yes | yes | **exact** tool spans | live session | wire format + harness run |
+| `antigravity` | yes | yes | best-effort, self-reported | live session | docs only |
+| `exec` (any CLI) | yes | yes | none → residual | restart | full run |
+| `scripted` | yes | yes | synthetic | live session | full run |
 
 ```bash
-npm run p2p -- run --brief briefs/todo-app.json --adapter exec   --command 'some-agent exec --cd {{WORKDIR}} {{PROMPT}}'
+npm run p2p -- run --brief briefs/todo-app.json --adapter pi \
+  --provider anthropic --model claude-sonnet-5
+
+npm run p2p -- run --brief briefs/todo-app.json --adapter antigravity \
+  --model gemini-3.8-flash-high --unsafe
+
+npm run p2p -- run --brief briefs/todo-app.json --adapter exec \
+  --command 'some-agent exec --cd {{WORKDIR}} {{PROMPT}}'
 ```
 
-Two things to know before comparing across agents:
+**Pi** runs through `--mode rpc`, which is bidirectional, so follow-up prompts
+go into the live session. Its `tool_execution_start`/`_end` events are keyed by
+call id, giving *exact* tool spans rather than the boundaries this harness has
+to infer for agents that only emit messages — the best decomposition of any
+adapter here. Note Pi defaults to the `google` provider; pass `--provider` and
+`--model` for a reproducible run.
 
-**The model/tool split needs a per-agent event stream.** `exec` has none, so
-that time lands in `residual` and the report states the gap is structural
-rather than a shim failure. Giving an agent full decomposition means teaching
-the harness to read its event stream -- roughly the 130 lines of
-`src/adapters/claude-code.ts`, most of which is process plumbing rather than
-parsing. Any agent that emits JSONL turn events can be supported this way.
+**Antigravity** runs through `agy --input-format stream-json --output-format
+stream-json`, so follow-ups reuse the warmed conversation. Its outer events
+(`init`, `step_update`, `result`) are documented but the contents of a step are
+not, so the adapter probes for tool boundaries and **reports what it actually
+found**: if it cannot identify them it declares `turns-only` fidelity and that
+time goes to the residual rather than being booked as thinking. The harness also
+raises `--print-timeout` to 30m, since `agy` defaults to 5m — well under a
+realistic greenfield build.
 
-**Iteration numbers are only comparable within a mode.** `exec` re-runs the
-command for a follow-up, so its iteration timings include startup and context
-re-read; `claude-code` injects into the live session. The result records which,
-and the report refuses to present them as equivalent. If your agent's CLI can
-resume a session, pass that as `iterationCommand` and set
-`iterationMode: 'live-session'`.
+### What "verified" means above
+
+Being specific, because this matters more than the table:
+
+- `claude-code`, `exec`, `scripted` — run end to end against real binaries.
+- `pi` — flags checked against `@earendil-works/pi-coding-agent@0.85.1`, the RPC
+  wire format captured from the running binary, and a full harness run
+  completed. That run had no provider credentials, so the model never did any
+  work; everything around it (spawn, prompt submission, turn completion,
+  error reporting) is exercised.
+- `antigravity` — written from the published headless docs. **Not run against a
+  binary**, because Antigravity ships through Google's installer rather than
+  npm. Treat the first run as a smoke test and read `agent.log` if the stream
+  looks empty.
+
+Capturing the Pi wire format immediately found two bugs that the docs alone
+would not have: `message_end` fires for the user's own prompt as well as the
+assistant's reply, and a failed turn still streams cleanly with
+`stopReason: "error"` — which without a check would have reported an auth
+failure as an agent that simply built nothing. Expect the Antigravity adapter
+to need the same treatment on first contact with a real binary.
 
 **An IDE-only agent with no headless mode cannot be driven by this harness at
-all.** That is a hard limit, not a missing feature: the whole design assumes
-something that can be started from a command line and handed a prompt.
+all.** That is a hard limit: the design assumes something startable from a
+command line and handed a prompt.
 
 ## Running the actual experiment
 

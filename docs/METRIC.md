@@ -134,6 +134,14 @@ install > build > devserver_boot > model > tool_overhead > first_paint
   the report says outright that the split is not trustworthy, which is what
   happens when an agent shells out through a command the shims do not wrap.
 
+Adapters declare a **stream fidelity**, and only `full` earns a model/tool
+split. `turns-only` means the agent's activity is visible but its tool
+boundaries are not — the Antigravity adapter reports this when it cannot
+identify tool events in a step payload — and that time goes to the residual
+with a note. Guessing would be worse: an unidentified tool span silently
+becomes "thinking", which is the exact distortion the priority ordering above
+is designed to prevent.
+
 An adapter that exposes no event stream (the `exec` wrapper, and the floor
 control, which has no model at all) gets **nothing** attributed to `model` or
 `tool_overhead`. That time goes to `residual`, and the report says the gap is
@@ -174,9 +182,9 @@ against the original brief would blend two measurements into one number.
 How the follow-up is delivered depends on the adapter, and it changes what the
 number means, so every iteration result records its `mode`.
 
-- **`live-session`** (the `claude-code` adapter, via stream-json on stdin): the
-  prompt goes into the running session, so what is measured is the edit loop a
-  person sits in.
+- **`live-session`** (`claude-code` via stream-json on stdin, `pi` via RPC mode,
+  `antigravity` via `--input-format stream-json`): the prompt goes into the
+  running session, so what is measured is the edit loop a person sits in.
 - **`restart`** (the `exec` adapter by default): the command is re-run. The
   timings then also contain process startup and however long the agent spends
   re-reading the project before it can act. That is a real cost of using that

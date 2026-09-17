@@ -224,10 +224,21 @@ export interface AgentContext {
  */
 export type IterationMode = 'live-session' | 'restart' | 'none';
 
+/**
+ * How much of the agent's internals its event stream exposes.
+ *
+ * `turns-only` is the important one: it means we can see the agent working but
+ * cannot tell thinking from tool execution. That time goes to the residual,
+ * because a split we cannot substantiate is worse than an admitted gap.
+ */
+export type StreamFidelity = 'full' | 'turns-only' | 'none';
+
 export interface Adapter {
   name: string;
   /** Defaults to 'restart' when an adapter does not declare one. */
   readonly iterationMode?: IterationMode;
+  /** May be computed at the end of a run from what was actually parsed. */
+  readonly streamFidelity?: StreamFidelity;
   start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle>;
 }
 

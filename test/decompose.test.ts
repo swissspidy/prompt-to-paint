@@ -199,3 +199,44 @@ test('iteration mode defaults to restart, so a cold re-run is never read as a li
     'live-session',
   );
 });
+
+test('explicit tool spans are used when an agent reports them', () => {
+  // Pi reports tool_execution_start/end keyed by id, which beats inferring
+  // spans from message boundaries: overlapping tools need no guessing.
+  const events: AgentEvent[] = [
+    { tMs: 1_000, type: 'assistant' },
+    { tMs: 2_000, type: 'tool_use', toolId: 'a', toolName: 'bash' },
+    { tMs: 2_500, type: 'tool_use', toolId: 'b', toolName: 'read' },
+    { tMs: 4_000, type: 'tool_result', toolId: 'b' },
+    { tMs: 9_000, type: 'tool_result', toolId: 'a' },
+    { tMs: 10_000, type: 'assistant' },
+  ];
+  const { model, tool } = attributeAgentStream(events, 20_000);
+  // Overlapping spans [2s,9s] and [2.5s,4s] union to 7s, not 8.5s.
+  assert.equal(total(tool), 7_000);
+  // Active window is 1s..10s; the rest of it is thinking.
+  assert.equal(total(model), 2_000);
+});
+
+test('explicit attribution ignores time outside the agent active window', () => {
+  // Startup before the first event and harness idle after the last must not be
+  // charged to the model.
+  const events: AgentEvent[] = [
+    { tMs: 30_000, type: 'assistant' },
+    { tMs: 31_000, type: 'tool_use', toolId: 'x' },
+    { tMs: 33_000, type: 'tool_result', toolId: 'x' },
+  ];
+  const { model, tool } = attributeAgentStream(events, 120_000);
+  assert.equal(total(tool), 2_000);
+  assert.equal(total(model), 1_000, 'not 30s of startup, not 87s of trailing idle');
+});
+
+test('an unclosed tool span runs to the end of the run', () => {
+  const events: AgentEvent[] = [
+    { tMs: 1_000, type: 'tool_use', toolId: 'a' },
+    { tMs: 2_000, type: 'tool_result', toolId: 'a' },
+    { tMs: 3_000, type: 'tool_use', toolId: 'b' }, // killed mid-flight
+  ];
+  const { tool } = attributeAgentStream(events, 10_000);
+  assert.equal(total(tool), 1_000 + 7_000);
+});
