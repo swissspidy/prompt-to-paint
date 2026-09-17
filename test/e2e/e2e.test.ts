@@ -5,14 +5,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadBrief } from '../src/brief.ts';
-import { runBenchmark } from '../src/run.ts';
-import { ScriptedAdapter } from '../src/adapters/scripted.ts';
-import { ExecAdapter } from '../src/adapters/exec.ts';
-import { NullBackend } from '../src/judge/backends.ts';
-import { findChromium } from '../src/probe/browser.ts';
-import { serveStatic } from '../src/static-server.ts';
-import type { Brief } from '../src/types.ts';
+import { loadBrief } from '../../src/brief.ts';
+import { runBenchmark } from '../../src/run.ts';
+import { ScriptedAdapter } from '../../src/adapters/scripted.ts';
+import { ExecAdapter } from '../../src/adapters/exec.ts';
+import { NullBackend } from '../../src/judge/backends.ts';
+import { findChromium } from '../../src/probe/browser.ts';
+import { serveStatic } from '../../src/static-server.ts';
+import type { Brief } from '../../src/types.ts';
 
 const run = promisify(execFile);
 const hasBrowser = Boolean(findChromium());
@@ -166,7 +166,7 @@ test('an agent binary that does not exist fails the run instead of the harness',
   const dir = await tmp('p2p-enoent-');
   try {
     const base = await loadBrief('test/fixtures/calibration-brief.json');
-    const { PiAdapter } = await import('../src/adapters/pi.ts');
+    const { PiAdapter } = await import('../../src/adapters/pi.ts');
     const result = await runBenchmark({
       brief: { ...base, horizonSec: 10, iterations: [], target: { ...base.target, port: 5290 } },
       adapter: new PiAdapter({ bin: '/nonexistent/definitely-not-an-agent' }),
@@ -216,7 +216,7 @@ test('an iteration whose check already passes is reported void, not fast', { ski
 test('the floor control measures a toolchain with no agent', { skip: needsBrowser, timeout: 180_000 }, async () => {
   const dir = await tmp('p2p-floor-');
   try {
-    const { FLOOR_TEMPLATES, floorBrief } = await import('../src/floor.ts');
+    const { FLOOR_TEMPLATES, floorBrief } = await import('../../src/floor.ts');
     const template = FLOOR_TEMPLATES.static!;
     const port = 5293;
     const brief = floorBrief(template, port, 60);
