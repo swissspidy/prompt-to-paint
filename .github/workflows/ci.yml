@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A superseded run tells you nothing useful; stop it and keep the latest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.18 is the floor: the first release that strips types without a
+        # flag, which is what lets this project run with no build step and no
+        # loader. 24 guards against the newer runtime changing that behaviour.
+        node: ['22.18', '22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        # erasableSyntaxOnly is enforced here: syntax Node cannot strip fails
+        # the build rather than only the run.
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Install Chromium
+        # The end-to-end tests drive a real browser, which is the only way to
+        # exercise the thing this project actually measures.
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        # A skipped browser suite would otherwise report success and test
+        # nothing at all; this makes that a red build.
+        env:
+          P2P_REQUIRE_BROWSER: '1'
+        run: npm run test:e2e
+
+      - name: Upload artefacts from failed runs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2p-failure-node-${{ matrix.node }}
+          path: |
+            runs/
+            /tmp/p2p-*/
+          retention-days: 7
+          if-no-files-found: ignore

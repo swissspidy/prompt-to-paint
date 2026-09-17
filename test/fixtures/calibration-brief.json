@@ -1,0 +1,26 @@
+{
+  "id": "calibration",
+  "title": "Calibration: a known signal",
+  "prompt": "(calibration fixture -- the scripted adapter ignores this)",
+  "horizonSec": 30,
+  "reviewableThreshold": 0.5,
+  "target": { "port": 5199, "serveStatic": true },
+  "entities": [
+    { "id": "title", "aliases": ["DevConf 2026"] },
+    { "id": "footer", "aliases": ["See you in Berlin"] },
+    { "id": "speaker", "aliases": ["Ada Lovelace"] },
+    { "id": "time", "aliases": ["09:00"] }
+  ],
+  "rubric": [
+    { "id": "renders", "description": "The page shows something.", "weight": 1 }
+  ],
+  "iterations": [
+    {
+      "id": "header-blue",
+      "prompt": "make the heading blue",
+      "description": "calibration edit",
+      "check": "(() => { const h = document.querySelector('h1'); if (!h) return false; const m = getComputedStyle(h).color.match(/\\d+/g); if (!m) return false; const [r,g,b] = m.map(Number); return b > 90 && b > r + 25 && b > g + 15; })()",
+      "confirmFrames": 1
+    }
+  ]
+}

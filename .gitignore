@@ -1,0 +1,5 @@
+node_modules/
+runs/
+.p2p-cache/
+*.log
+.DS_Store
