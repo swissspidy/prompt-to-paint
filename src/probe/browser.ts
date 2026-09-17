@@ -1,5 +1,7 @@
 import { readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { chromium } from 'playwright';
 
 const CANDIDATES = [
   ['chrome-linux', 'chrome'],
@@ -23,9 +25,35 @@ export function findChromium(explicit?: string): string | undefined {
   if (explicit) return explicit;
   if (process.env.P2P_CHROMIUM) return process.env.P2P_CHROMIUM;
 
-  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
-  if (!root || !existsSync(root)) return undefined;
+  // A pre-provisioned browsers directory, which is what CI images and this
+  // project's own container use.
+  const fromDir = scanBrowsersDir(process.env.PLAYWRIGHT_BROWSERS_PATH);
+  if (fromDir) return fromDir;
 
+  // Ask Playwright where it installed its own browser. `npx playwright install`
+  // with no PLAYWRIGHT_BROWSERS_PATH set -- the ordinary case on a CI runner or
+  // a laptop -- lands in a per-user cache that the scan above never sees.
+  try {
+    const own = chromium.executablePath();
+    if (own && existsSync(own)) return own;
+  } catch {
+    // Playwright throws when it has no browser registered; fall through.
+  }
+
+  return scanBrowsersDir(defaultCacheDir());
+}
+
+/** Playwright's per-user cache, by platform. */
+function defaultCacheDir(): string | undefined {
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Caches', 'ms-playwright');
+  if (process.platform === 'win32') {
+    return process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'ms-playwright') : undefined;
+  }
+  return join(homedir(), '.cache', 'ms-playwright');
+}
+
+function scanBrowsersDir(root: string | undefined): string | undefined {
+  if (!root || !existsSync(root)) return undefined;
   let best: { build: number; path: string } | undefined;
   for (const entry of readdirSync(root)) {
     const m = /^chromium-(\d+)$/.exec(entry);

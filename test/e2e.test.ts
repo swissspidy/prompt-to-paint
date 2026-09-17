@@ -17,6 +17,23 @@ import type { Brief } from '../src/types.ts';
 const run = promisify(execFile);
 const hasBrowser = Boolean(findChromium());
 const needsBrowser = hasBrowser ? false : 'no chromium available';
+
+/**
+ * A skipped suite must not be a green build.
+ *
+ * The browser tests are the only ones that exercise what this project actually
+ * measures. When Chromium cannot be found they skip, the run reports success,
+ * and nothing is being tested -- which is the exact failure this harness spends
+ * its time detecting in other people's runs. CI sets P2P_REQUIRE_BROWSER=1 so
+ * that a silent skip is a red build instead.
+ */
+test('a browser is available wherever one is required', () => {
+  if (process.env.P2P_REQUIRE_BROWSER !== '1') return;
+  assert.ok(
+    hasBrowser,
+    'P2P_REQUIRE_BROWSER=1 but no Chromium was found, so the end-to-end tests would have skipped and reported success.',
+  );
+});
 const S = 1000;
 
 async function tmp(prefix: string): Promise<string> {
