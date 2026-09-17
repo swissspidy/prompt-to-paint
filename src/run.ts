@@ -169,6 +169,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
           prober,
           handle,
           t0Epoch,
+          mode: adapter.iterationMode ?? 'restart',
           intervalMs: opts.iterationPollMs ?? 250,
         });
         iterations.push(res);
@@ -229,6 +230,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     reportedApiMs,
   });
 
+  if (iterations.some((i) => i.mode === 'restart')) {
+    warnings.push(
+      'Iteration timings come from re-running the agent, not from continuing a live session, so they include process startup and however long the agent takes to re-read the project. They are not comparable to live-session iteration numbers from another adapter.',
+    );
+  }
   if (agentFailure) {
     const f = agentFailure as NonNullable<RunResult['agentFailure']>;
     warnings.unshift(

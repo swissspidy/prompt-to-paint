@@ -131,7 +131,11 @@ function decompTable(r: RunResult): string {
 
 function iterationTable(r: RunResult): string {
   if (!r.iterations.length) return '<p class="muted">No iterations were run.</p>';
-  return `<table class="data"><thead><tr><th>Edit</th><th class="num">First visible change</th><th class="num">Correct change</th><th class="num">Agent done</th><th class="num">Broken for</th></tr></thead><tbody>
+  const restart = r.iterations.some((it) => it.mode === 'restart');
+  const note = restart
+    ? `<p class="muted" style="font-size:13px;margin:0 0 10px">These follow-ups <b>re-ran the agent</b> rather than continuing a live session, so the timings include process startup and context re-read. Not comparable to live-session numbers.</p>`
+    : `<p class="muted" style="font-size:13px;margin:0 0 10px">Follow-ups were injected into the same live session.</p>`;
+  return `${note}<table class="data"><thead><tr><th>Edit</th><th class="num">First visible change</th><th class="num">Correct change</th><th class="num">Agent done</th><th class="num">Broken for</th></tr></thead><tbody>
     ${r.iterations
       .map(
         (it) => `<tr><td>${esc(it.prompt)}${it.ok ? '' : ' <span class="bad">never landed</span>'}</td>

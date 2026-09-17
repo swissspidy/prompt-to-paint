@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Adapter, AgentContext, AgentRunHandle } from '../types.js';
+import type { Adapter, AgentContext, AgentRunHandle, IterationMode } from '../types.js';
 import { withShimPath } from '../decompose/shims.js';
 
 export interface ScriptedStep {
@@ -30,6 +30,7 @@ export interface ScriptedOptions {
  */
 export class ScriptedAdapter implements Adapter {
   readonly name = 'scripted';
+  readonly iterationMode: IterationMode = 'live-session';
   constructor(private opts: ScriptedOptions) {}
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {

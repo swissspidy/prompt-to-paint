@@ -35,7 +35,10 @@ export function renderText(r: RunResult): string {
 
   if (r.iterations.length) {
     L.push('');
-    L.push('  Iteration (prompt -> visible change)');
+    const modes = [...new Set(r.iterations.map((i) => i.mode))].join('/');
+    L.push(`  Iteration (prompt -> visible change)   [${modes}]`);
+    if (r.iterations.some((i) => i.mode === 'restart'))
+      L.push('    note: restart mode -- these include agent startup and context re-read');
     for (const it of r.iterations) {
       L.push(`    ${it.id.padEnd(16)} first change ${secs(it.timeToFirstChangeMs).padStart(7)}   correct ${secs(it.timeToCorrectChangeMs).padStart(7)}${it.brokenMs > 0 ? `   broken ${secs(it.brokenMs)}` : ''}${it.ok ? '' : '   NEVER LANDED'}`);
     }

@@ -138,6 +138,45 @@ distinct frames cost a call; the rest inherit by forward-fill. `p2p rescore`
 re-scores a finished run without re-running any agent, which is also how you
 measure judge variance.
 
+## Which agents this works with
+
+The harness talks to agents through adapters, and support comes in tiers. The
+curve, both latency numbers, and every toolchain phase the shims catch are
+valid at every tier -- what degrades is the model/tool split and the meaning of
+the iteration timings.
+
+| | curve + TTFR | toolchain phases | model vs tool split | iteration |
+|---|---|---|---|---|
+| `claude-code` | yes | yes | yes | live session |
+| `exec` (any CLI agent) | yes | yes | **no** -- lands in residual | **restart** by default |
+| `scripted` | yes | yes | synthetic | live session |
+
+Anything with a non-interactive mode runs today through `exec`:
+
+```bash
+npm run p2p -- run --brief briefs/todo-app.json --adapter exec   --command 'some-agent exec --cd {{WORKDIR}} {{PROMPT}}'
+```
+
+Two things to know before comparing across agents:
+
+**The model/tool split needs a per-agent event stream.** `exec` has none, so
+that time lands in `residual` and the report states the gap is structural
+rather than a shim failure. Giving an agent full decomposition means teaching
+the harness to read its event stream -- roughly the 130 lines of
+`src/adapters/claude-code.ts`, most of which is process plumbing rather than
+parsing. Any agent that emits JSONL turn events can be supported this way.
+
+**Iteration numbers are only comparable within a mode.** `exec` re-runs the
+command for a follow-up, so its iteration timings include startup and context
+re-read; `claude-code` injects into the live session. The result records which,
+and the report refuses to present them as equivalent. If your agent's CLI can
+resume a session, pass that as `iterationCommand` and set
+`iterationMode: 'live-session'`.
+
+**An IDE-only agent with no headless mode cannot be driven by this harness at
+all.** That is a hard limit, not a missing feature: the whole design assumes
+something that can be started from a command line and handed a prompt.
+
 ## Running the actual experiment
 
 The interesting hypothesis is that on greenfield tasks the toolchain dominates

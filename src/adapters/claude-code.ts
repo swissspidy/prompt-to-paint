@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { Adapter, AgentContext, AgentEvent, AgentRunHandle } from '../types.js';
+import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.js';
 
 export interface ClaudeCodeOptions {
   bin?: string;
@@ -30,6 +30,8 @@ interface StreamEvent {
  */
 export class ClaudeCodeAdapter implements Adapter {
   readonly name = 'claude-code';
+  // stream-json on stdin keeps one session alive across turns.
+  readonly iterationMode: IterationMode = 'live-session';
   constructor(private opts: ClaudeCodeOptions = {}) {}
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {

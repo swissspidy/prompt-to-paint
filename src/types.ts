@@ -211,8 +211,23 @@ export interface AgentContext {
   logPath: string;
 }
 
+/**
+ * How an adapter delivers a follow-up prompt.
+ *
+ * This decides what the iteration numbers mean, so it travels with the result.
+ * A `live-session` edit measures the loop a person sits in. A `restart` re-runs
+ * the agent from scratch, so its timings also contain process startup and
+ * whatever re-reading of the project the agent does before it can act -- often
+ * seconds, and not the thing the metric is supposed to be about. The two are
+ * not comparable, and a report that showed them side by side without saying so
+ * would be quietly wrong.
+ */
+export type IterationMode = 'live-session' | 'restart' | 'none';
+
 export interface Adapter {
   name: string;
+  /** Defaults to 'restart' when an adapter does not declare one. */
+  readonly iterationMode?: IterationMode;
   start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle>;
 }
 
@@ -240,6 +255,8 @@ export interface CurveMetrics {
 
 export interface IterationResult {
   id: string;
+  /** How the follow-up was delivered. Decides what these timings include. */
+  mode: IterationMode;
   prompt: string;
   promptSentMs: number;
   /** First visually distinct frame after the prompt. Loop responsiveness. */

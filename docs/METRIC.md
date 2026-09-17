@@ -171,9 +171,21 @@ Measured separately from cold start, and excluded from the cold-start curve —
 turning the header blue is a different experiment, and scoring those frames
 against the original brief would blend two measurements into one number.
 
-Follow-up prompts are injected into the **same live session** (via stream-json
-on stdin), so what is measured is the edit loop rather than process startup and
-context re-read.
+How the follow-up is delivered depends on the adapter, and it changes what the
+number means, so every iteration result records its `mode`.
+
+- **`live-session`** (the `claude-code` adapter, via stream-json on stdin): the
+  prompt goes into the running session, so what is measured is the edit loop a
+  person sits in.
+- **`restart`** (the `exec` adapter by default): the command is re-run. The
+  timings then also contain process startup and however long the agent spends
+  re-reading the project before it can act. That is a real cost of using that
+  agent, but it is a different quantity, and the report says so rather than
+  printing it next to a live-session number as though they were the same thing.
+
+If a CLI can resume a session, put its resume flag in `iterationCommand` and
+declare `iterationMode: 'live-session'`; the harness takes that claim at face
+value, so only make it when it is true.
 
 Three numbers, because they answer different questions:
 

@@ -1,4 +1,4 @@
-import type { AgentRunHandle, Frame, IterationResult, IterationSpec } from './types.js';
+import type { AgentRunHandle, Frame, IterationMode, IterationResult, IterationSpec } from './types.js';
 import type { Prober } from './probe/prober.js';
 import { hamming, colorDelta } from './probe/pixels.js';
 
@@ -14,6 +14,8 @@ export interface IterateOptions {
    * turn has ended and the change has not appeared, it is not going to.
    */
   postTurnGraceMs?: number;
+  /** How the follow-up is delivered; recorded so the timings can be read right. */
+  mode?: IterationMode;
   /** dhash distance counting as a visible change. Lower than the judge's. */
   changeThreshold?: number;
   /** Worst-cell colour distance counting as a visible change (0..255). */
@@ -124,6 +126,7 @@ export async function runIteration(
 
   return {
     id: spec.id,
+    mode: opts.mode ?? 'restart',
     prompt: spec.prompt,
     promptSentMs,
     timeToFirstChangeMs,

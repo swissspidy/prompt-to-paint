@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { Adapter, AgentContext, AgentRunHandle } from '../types.js';
+import type { Adapter, AgentContext, AgentRunHandle, IterationMode } from '../types.js';
 import { withShimPath } from '../decompose/shims.js';
 
 export interface ExecOptions {
@@ -8,6 +8,12 @@ export interface ExecOptions {
   command: string;
   /** Command for follow-up prompts. Defaults to `command`. */
   iterationCommand?: string;
+  /**
+   * Set to 'live-session' only if `iterationCommand` genuinely resumes the
+   * previous session (a --resume/--continue flag). Left alone, a follow-up is
+   * a cold restart and the report says so.
+   */
+  iterationMode?: IterationMode;
   shell?: string;
 }
 
@@ -17,14 +23,23 @@ const fill = (tpl: string, prompt: string, workdir: string): string =>
 /**
  * Runs any agent that is a command line.
  *
- * There is no event stream to mine, so model and tool time cannot be separated:
- * that time lands in the residual bucket and the report says coverage is low.
+ * Two fidelity limits, both reported rather than hidden. There is no event
+ * stream to mine, so model and tool time cannot be separated and that time
+ * lands in the residual bucket. And a follow-up prompt re-runs the command
+ * rather than continuing a session, so iteration timings include process
+ * startup and context re-read unless the caller supplies an `iterationCommand`
+ * that resumes and says so via `iterationMode`.
+ *
  * Wall clock, the curve, and every phase the shims catch stay fully valid, so a
  * third-party agent is still comparable on the headline number.
  */
 export class ExecAdapter implements Adapter {
   readonly name = 'exec';
   constructor(private opts: ExecOptions) {}
+
+  get iterationMode(): IterationMode {
+    return this.opts.iterationMode ?? 'restart';
+  }
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const log = createWriteStream(ctx.logPath, { flags: 'a' });

@@ -179,3 +179,23 @@ test('a missing event stream is explained, not blamed on the shims', () => {
   });
   assert.ok(withStream.notes.some((n) => n.includes('shims do not wrap')));
 });
+
+test('iteration mode defaults to restart, so a cold re-run is never read as a live edit', async () => {
+  // Claiming live-session timings for a cold restart would understate an
+  // agent's real edit latency by however long it takes to boot and re-read the
+  // project, with nothing in the output to reveal it.
+  const { ExecAdapter } = await import('../src/adapters/exec.js');
+  const { ClaudeCodeAdapter } = await import('../src/adapters/claude-code.js');
+  const { ScriptedAdapter } = await import('../src/adapters/scripted.js');
+
+  assert.equal(new ExecAdapter({ command: 'x' }).iterationMode, 'restart');
+  assert.equal(new ClaudeCodeAdapter().iterationMode, 'live-session');
+  assert.equal(new ScriptedAdapter({ steps: [] }).iterationMode, 'live-session');
+
+  // Opt in only when the command genuinely resumes.
+  assert.equal(
+    new ExecAdapter({ command: 'x', iterationCommand: 'x --resume', iterationMode: 'live-session' })
+      .iterationMode,
+    'live-session',
+  );
+});
