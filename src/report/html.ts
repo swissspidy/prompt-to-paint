@@ -1,7 +1,7 @@
 import { relative, dirname } from 'node:path';
-import type { Bucket, RunResult } from '../types.js';
-import { buildCurve } from '../metrics/curve.js';
-import { BUCKET_ORDER, BUCKET_LABEL, BUCKET_SIDE, bucketVar, SERIES_LIGHT, SERIES_DARK } from './palette.js';
+import type { Bucket, RunResult } from '../types.ts';
+import { buildCurve } from '../metrics/curve.ts';
+import { BUCKET_ORDER, BUCKET_LABEL, BUCKET_SIDE, bucketVar, SERIES_LIGHT, SERIES_DARK } from './palette.ts';
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

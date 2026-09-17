@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { AgentRunHandle } from '../types.js';
+import type { AgentRunHandle } from '../types.ts';
+import { describeSpawnError } from './spawn-error.ts';
 
 export interface StreamingProcessOptions {
   bin: string;
@@ -78,19 +79,38 @@ export function startStreamingProcess(opts: StreamingProcessOptions): StreamingP
   child.stderr?.on('data', (c: Buffer) => rawLog.write(c));
 
   const done = new Promise<{ exitCode: number | null; reportedApiMs: number | null }>((resolve) => {
-    child.on('close', (code) => {
+    const finish = (code: number | null): void => {
       rawLog.end();
       // Never leave a caller blocked on a turn that can no longer happen.
       waiters.forEach((w) => w.resolve());
       waiters = [];
       resolve({ exitCode: code, reportedApiMs });
+    };
+    child.on('close', finish);
+    // An executable that cannot start emits 'error' and never 'close'. Without
+    // this the event is unhandled and takes the whole harness down instead of
+    // recording a failed run.
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      rawLog.write(`\n${describeSpawnError(err, opts.bin)}\n`);
+      finish(127);
     });
   });
 
+  // A process that failed to spawn still has a stdin stream, and writing to it
+  // raises EPIPE. That failure is already recorded by the 'error' handler
+  // above, so surfacing it again here would turn a recorded failed run into a
+  // thrown exception that takes down the whole benchmark.
+  child.stdin?.on('error', () => undefined);
+
   const writeRaw = (line: string): Promise<void> =>
-    new Promise<void>((res, rej) => {
-      if (!child.stdin || child.stdin.destroyed) return res();
-      child.stdin.write(line.endsWith('\n') ? line : `${line}\n`, (e) => (e ? rej(e) : res()));
+    new Promise<void>((res) => {
+      const stdin = child.stdin;
+      if (!stdin || stdin.destroyed || stdin.writableEnded) return res();
+      try {
+        stdin.write(line.endsWith('\n') ? line : `${line}\n`, () => res());
+      } catch {
+        res();
+      }
     });
 
   return {

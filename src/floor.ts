@@ -1,4 +1,4 @@
-import type { Brief } from './types.js';
+import type { Brief } from './types.ts';
 
 /**
  * Toolchain-floor controls: the same measurement with no model in the loop.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spread } from '../src/report/aggregate.js';
+import { spread } from '../src/report/aggregate.ts';
 
 test('spread reports median, range, and how often the thing never happened', () => {
   const s = spread([1, 5, 3]);

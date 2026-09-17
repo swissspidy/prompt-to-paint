@@ -1,4 +1,4 @@
-import type { CurveMetrics, ScoredFrame } from '../types.js';
+import type { CurveMetrics, ScoredFrame } from '../types.ts';
 
 export interface CurveOptions {
   horizonMs: number;

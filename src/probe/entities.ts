@@ -1,4 +1,4 @@
-import type { Entity } from '../types.js';
+import type { Entity } from '../types.ts';
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
 

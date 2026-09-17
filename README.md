@@ -80,6 +80,12 @@ blue" — into the **same live session** and times it:
 
 ## Quickstart
 
+Requires **Node 22.18 or newer** — the first release that strips TypeScript
+types without a flag. There is no build step, no bundler and no loader: the CLI
+is run directly with `node src/cli.ts`, and `tsconfig.json` sets
+`erasableSyntaxOnly` so syntax Node cannot strip fails typechecking rather than
+only failing at runtime.
+
 ```bash
 npm install
 npx playwright install chromium     # or set P2P_CHROMIUM to an existing binary
@@ -281,6 +287,25 @@ afterthought.
 Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
+
+## Tests
+
+```bash
+npm run typecheck    # also enforces that Node can strip every construct used
+npm test             # unit tests, no browser needed
+npm run test:e2e     # real browser, real runs, real CLI invocations
+npm run test:all     # all of the above, the same order CI uses
+```
+
+The end-to-end suite is the one that matters. It drives a real Chromium against
+real runs and asserts on the metric itself: the calibration recovers a curve
+whose AUC was integrated by hand, a stand-in third-party CLI agent is measured
+through `exec`, and the failure modes are checked for being *loud* — a crashed
+agent, a missing binary, and an iteration whose check was already satisfied all
+have to report themselves rather than return a tidy zero. It also runs the CLI
+the way a person does, as a subprocess.
+
+CI runs all of it on Node 22.18, 22 and 24.
 
 ## Caveats worth knowing before you quote a number
 

@@ -2,10 +2,10 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { analyzeShot } from './pixels.js';
-import { classify, ERROR_SELECTORS } from './classify.js';
-import { findChromium } from './browser.js';
-import type { Frame } from '../types.js';
+import { analyzeShot } from './pixels.ts';
+import { classify, ERROR_SELECTORS } from './classify.ts';
+import { findChromium } from './browser.ts';
+import type { Frame } from '../types.ts';
 
 export interface ProberOptions {
   url: string;
@@ -87,7 +87,11 @@ export class Prober {
 
   readonly frames: Frame[] = [];
 
-  constructor(private opts: ProberOptions) {}
+  private opts: ProberOptions;
+
+  constructor(opts: ProberOptions) {
+    this.opts = opts;
+  }
 
   get intervalMs(): number {
     return this.opts.intervalMs ?? 1000;

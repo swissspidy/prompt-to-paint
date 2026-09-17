@@ -1,4 +1,4 @@
-import type { FrameClass } from '../types.js';
+import type { FrameClass } from '../types.ts';
 
 /** Dev-server and framework error overlays. Unambiguous when present. */
 export const ERROR_SELECTORS = [

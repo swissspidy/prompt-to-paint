@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const child = spawn(
-  process.execPath,
-  [join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(root, 'src', 'cli.ts'), ...process.argv.slice(2)],
-  { stdio: 'inherit', cwd: process.cwd() },
-);
-child.on('close', (code) => process.exit(code ?? 1));
+// Node strips the types itself (>=22.18), so there is no loader to install and
+// nothing here depends on a devDependency being present at runtime.
+import '../src/cli.ts';

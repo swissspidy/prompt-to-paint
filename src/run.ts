@@ -2,17 +2,17 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import type { Adapter, AgentEvent, Brief, RunResult, IterationResult } from './types.js';
-import { Prober } from './probe/prober.js';
-import { entityCoverage } from './probe/entities.js';
-import { setupShims } from './decompose/shims.js';
-import { parsePhaseLog, attributeAgentStream, decompose } from './decompose/attribute.js';
-import { computeMetrics } from './metrics/curve.js';
-import { judgeRun } from './judge/judge.js';
-import type { JudgeBackend } from './judge/backends.js';
-import { runIteration } from './iterate.js';
-import { serveStatic } from './static-server.js';
-import { ensureFreePort, killPort } from './port.js';
+import type { Adapter, AgentEvent, AgentRunHandle, Brief, RunResult, IterationResult } from './types.ts';
+import { Prober } from './probe/prober.ts';
+import { entityCoverage } from './probe/entities.ts';
+import { setupShims } from './decompose/shims.ts';
+import { parsePhaseLog, attributeAgentStream, decompose } from './decompose/attribute.ts';
+import { computeMetrics } from './metrics/curve.ts';
+import { judgeRun } from './judge/judge.ts';
+import type { JudgeBackend } from './judge/backends.ts';
+import { runIteration } from './iterate.ts';
+import { serveStatic } from './static-server.ts';
+import { ensureFreePort, killPort } from './port.ts';
 
 export interface RunOptions {
   brief: Brief;
@@ -70,12 +70,6 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   const shims = await setupShims(opts.runDir);
   const t0Epoch = Date.now();
 
-  let staticServer: Server | null = null;
-  if (brief.target?.serveStatic) {
-    staticServer = await serveStatic(workdir, port);
-    log(`serving ${workdir} statically on ${url}`);
-  }
-
   const prober = new Prober({
     url,
     framesDir,
@@ -86,105 +80,155 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       return { entityCoverage: c.coverage, entitiesFound: c.found };
     },
   });
-  await prober.start();
 
   const agentEvents: AgentEvent[] = [];
   const agentLogPath = join(opts.runDir, 'agent.log');
-  const handle = await adapter.start(brief.prompt + protocolSuffix(url), {
-    workdir,
-    env: shims.env,
-    t0Epoch,
-    onEvent: (e) => agentEvents.push(e),
-    logPath: agentLogPath,
-  });
+  const iterations: IterationResult[] = [];
 
-  // An agent that dies on its own -- bad flags, refused permissions, a crash --
-  // produces a run that looks exactly like an agent which built nothing: a
-  // clean 0.000 with no errors. Catching the early exit is what separates
-  // "measured a failure" from "measured nothing".
+  let staticServer: Server | null = null;
+  let handle: AgentRunHandle | null = null;
   let agentFailure: RunResult['agentFailure'] = null;
   let stopping = false;
-  void handle.done.then(({ exitCode }) => {
-    if (!stopping && exitCode !== 0) {
-      agentFailure = { exitCode, atMs: Date.now() - t0Epoch, logPath: agentLogPath };
+  let coldEndMs = 0;
+  let activeWallMs = 0;
+  let observationOnlyMs = 0;
+  let cleaned = false;
+
+  /**
+   * Stop everything this run started.
+   *
+   * Runs before the analysis rather than after it, because judging can take
+   * minutes and there is no reason to hold Chromium, the agent and its dev
+   * server open through it. Each step is independently guarded so one failure
+   * cannot strand the rest, and the whole thing is idempotent so the success
+   * path and the failure path can both call it.
+   */
+  const cleanup = async (): Promise<void> => {
+    if (cleaned) return;
+    cleaned = true;
+    stopping = true;
+    if (handle) await handle.stop().catch(() => undefined);
+    await prober.stop().catch(() => undefined);
+    try {
+      staticServer?.close();
+    } catch { /* already closed */ }
+    // Terminating the agent does not reliably take its dev server with it, and
+    // a survivor would corrupt the next run against this port.
+    if (!opts.keepServer) await killPort(port).catch(() => undefined);
+  };
+
+  try {
+    if (brief.target?.serveStatic) {
+      staticServer = await serveStatic(workdir, port);
+      log(`serving ${workdir} statically on ${url}`);
     }
-  });
 
-  // The cold-start window closes when the agent finishes its first turn, or at
-  // the horizon, whichever comes first. Probing until the horizon regardless
-  // would multiply benchmark wall time for no extra signal, since the curve
-  // holds its last value anyway.
-  type EndReason = 'turn' | 'horizon' | 'rendered';
-  const races: Array<Promise<EndReason>> = [
-    handle.waitForTurn(0).then((): EndReason => 'turn'),
-    sleep(horizonMs).then((): EndReason => 'horizon'),
-  ];
-  if (opts.stopAfterRenderMs !== undefined) {
-    const settleAfterRender = opts.stopAfterRenderMs;
-    races.push(
-      (async (): Promise<EndReason> => {
-        while (!prober.frames.some((f) => f.class === 'render')) await sleep(250);
-        await sleep(settleAfterRender);
-        return 'rendered';
-      })(),
+    await prober.start();
+
+    handle = await adapter.start(brief.prompt + protocolSuffix(url), {
+      workdir,
+      env: shims.env,
+      t0Epoch,
+      onEvent: (e) => agentEvents.push(e),
+      logPath: agentLogPath,
+    });
+
+    // An agent that dies on its own -- bad flags, refused permissions, a crash
+    // -- produces a run that looks exactly like an agent which built nothing: a
+    // clean 0.000 with no errors. Catching the early exit is what separates
+    // "measured a failure" from "measured nothing".
+    void handle.done.then(({ exitCode }) => {
+      if (!stopping && exitCode !== 0) {
+        agentFailure = { exitCode, atMs: Date.now() - t0Epoch, logPath: agentLogPath };
+      }
+    });
+
+    // The cold-start window closes when the agent finishes its first turn, or
+    // at the horizon, whichever comes first. Probing until the horizon
+    // regardless would multiply benchmark wall time for no extra signal, since
+    // the curve holds its last value anyway.
+    type EndReason = 'turn' | 'horizon' | 'rendered';
+    // The losing branches keep running after Promise.race resolves. The render
+    // poll below would otherwise loop forever on a run that never renders,
+    // holding the process alive with its timers long after the race was decided.
+    let raceDecided = false;
+    const races: Array<Promise<EndReason>> = [
+      handle.waitForTurn(0).then((): EndReason => 'turn'),
+      sleep(horizonMs).then((): EndReason => 'horizon'),
+    ];
+    if (opts.stopAfterRenderMs !== undefined) {
+      const settleAfterRender = opts.stopAfterRenderMs;
+      races.push(
+        (async (): Promise<EndReason> => {
+          while (!raceDecided && !prober.frames.some((f) => f.class === 'render')) await sleep(250);
+          if (!raceDecided) await sleep(settleAfterRender);
+          return 'rendered';
+        })(),
+      );
+    }
+    const ended = await Promise.race(races);
+    raceDecided = true;
+
+    if (ended === 'horizon')
+      warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
+    log(
+      ended === 'horizon' ? 'horizon reached'
+        : ended === 'rendered' ? 'app rendered; ending cold-start window'
+        : 'agent finished first turn',
     );
-  }
-  const ended = await Promise.race(races);
-  if (ended === 'horizon')
-    warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);
-  log(
-    ended === 'horizon' ? 'horizon reached'
-      : ended === 'rendered' ? 'app rendered; ending cold-start window'
-      : 'agent finished first turn',
-  );
 
-  // Keep watching briefly: builds land after the agent stops talking, and some
-  // agents break the page on their way out. A run that stopped on the render
-  // condition has already waited, so it does not wait again.
-  const settleMs = ended === 'rendered' ? 0 : (opts.settleMs ?? 15_000);
-  const settleStartMs = Date.now() - t0Epoch;
-  await sleep(settleMs);
-  const coldEndMs = Date.now() - t0Epoch;
+    // Keep watching briefly: builds land after the agent stops talking, and
+    // some agents break the page on their way out. A run that stopped on the
+    // render condition has already waited, so it does not wait again.
+    const settleMs = ended === 'rendered' ? 0 : (opts.settleMs ?? 15_000);
+    const settleStartMs = Date.now() - t0Epoch;
+    await sleep(settleMs);
+    coldEndMs = Date.now() - t0Epoch;
 
-  // Time the harness spent deliberately watching an idle app is not
-  // "unattributed": we know exactly what was happening, which is nothing. If it
-  // were charged to the residual bucket, a control run that starts fast would
-  // report low attribution coverage and warn that its own split is untrustworthy,
-  // which is the opposite of the truth.
-  const observationOnlyMs =
-    (coldEndMs - settleStartMs) + (ended === 'rendered' ? (opts.stopAfterRenderMs ?? 0) : 0);
-  const activeWallMs = Math.max(0, coldEndMs - observationOnlyMs);
+    // Time the harness spent deliberately watching an idle app is not
+    // "unattributed": we know exactly what was happening, which is nothing. If
+    // it were charged to the residual bucket, a control run that starts fast
+    // would report low attribution coverage and warn that its own split is
+    // untrustworthy, which is the opposite of the truth.
+    observationOnlyMs =
+      (coldEndMs - settleStartMs) + (ended === 'rendered' ? (opts.stopAfterRenderMs ?? 0) : 0);
+    activeWallMs = Math.max(0, coldEndMs - observationOnlyMs);
 
-  const iterations: IterationResult[] = [];
-  const rendering = prober.frames.some((f) => f.class === 'render');
-  if (!opts.skipIterations && brief.iterations?.length) {
-    if (!rendering) {
-      warnings.push('Skipped iterations: the app never rendered, so there is nothing to edit.');
-    } else if (!handle.send) {
-      warnings.push('Skipped iterations: this adapter cannot send follow-up prompts.');
-    } else {
-      for (const spec of brief.iterations) {
-        log(`iteration: ${spec.id}`);
-        const res = await runIteration(spec, {
-          prober,
-          handle,
-          t0Epoch,
-          mode: adapter.iterationMode ?? 'restart',
-          intervalMs: opts.iterationPollMs ?? 250,
-        });
-        iterations.push(res);
-        if (!res.ok) warnings.push(`Iteration "${spec.id}" never landed within its timeout.`);
+    const rendering = prober.frames.some((f) => f.class === 'render');
+    if (!opts.skipIterations && brief.iterations?.length) {
+      if (!rendering) {
+        warnings.push('Skipped iterations: the app never rendered, so there is nothing to edit.');
+      } else if (!handle.send) {
+        warnings.push('Skipped iterations: this adapter cannot send follow-up prompts.');
+      } else {
+        for (const spec of brief.iterations) {
+          log(`iteration: ${spec.id}`);
+          const res = await runIteration(spec, {
+            prober,
+            handle,
+            t0Epoch,
+            mode: adapter.iterationMode ?? 'restart',
+            intervalMs: opts.iterationPollMs ?? 250,
+          });
+          iterations.push(res);
+          if (res.baselineAlreadyPassing) {
+            warnings.push(
+              `Iteration "${spec.id}" is void: its check already passed before the prompt was sent, so it cannot measure this edit. Fix the check in the brief.`,
+            );
+          } else if (!res.ok) {
+            warnings.push(`Iteration "${spec.id}" never landed within its timeout.`);
+          }
+        }
       }
     }
+  } finally {
+    // A throw anywhere above would otherwise leave Chromium, the static server,
+    // the agent and its dev server running, and a survivor on this port would
+    // corrupt the next run.
+    await cleanup();
   }
 
-  stopping = true;
-  await handle.stop();
-  await prober.stop();
-  staticServer?.close();
-  // Terminating the agent does not reliably take its dev server with it, and a
-  // survivor would corrupt the next run against this port.
-  if (!opts.keepServer) await killPort(port);
+  if (coldEndMs === 0) coldEndMs = Date.now() - t0Epoch;
   const wallMs = Date.now() - t0Epoch;
 
   // ---- analysis (strictly after the run; never inside the measured window) --
@@ -203,7 +247,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   });
   warnings.push(...judged.warnings);
 
-  const serverReadyMs = prober.frames.find((f) => f.httpStatus !== null)?.tMs ?? null;
+  // "Ready" means actually serving the app. The prober keeps retrying a 4xx or
+  // 5xx, so counting the first error response as ready would cut dev-server
+  // boot short and start the first-paint window before anything could paint.
+  const serverReadyMs =
+    prober.frames.find((f) => f.httpStatus !== null && f.httpStatus < 400)?.tMs ?? null;
   const firstPaintMs = judged.frames.find((f) => f.class === 'render')?.tMs ?? null;
 
   const curve = computeMetrics(judged.frames, {

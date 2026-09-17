@@ -4,8 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setupShims, withShimPath } from '../src/decompose/shims.js';
-import { parsePhaseLog } from '../src/decompose/attribute.js';
+import { setupShims, withShimPath } from '../src/decompose/shims.ts';
+import { parsePhaseLog } from '../src/decompose/attribute.ts';
 
 test('shims record a real command and stay transparent to it', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'p2p-shim-'));

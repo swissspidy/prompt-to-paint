@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.js';
-import type { Brief, Frame } from '../src/types.js';
+import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
+import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
   id: 'b', title: 'B', prompt: 'p', horizonSec: 100, reviewableThreshold: 0.5,

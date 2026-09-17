@@ -1,18 +1,27 @@
 import { parseArgs } from 'node:util';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { loadBrief } from './brief.js';
-import { runBenchmark } from './run.js';
-import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.js';
-import { pickBackend, NullBackend } from './judge/backends.js';
-import { judgeRun } from './judge/judge.js';
-import { computeMetrics } from './metrics/curve.js';
-import { renderHtml } from './report/html.js';
-import { renderText } from './report/text.js';
-import { renderCompareText, renderCompareHtml } from './report/compare.js';
-import { aggregate, renderAggregate } from './report/aggregate.js';
-import { FLOOR_TEMPLATES, floorBrief } from './floor.js';
-import type { Adapter, RunResult } from './types.js';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadBrief } from './brief.ts';
+import { runBenchmark } from './run.ts';
+import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
+import { pickBackend, NullBackend } from './judge/backends.ts';
+import { judgeRun } from './judge/judge.ts';
+import { computeMetrics } from './metrics/curve.ts';
+import { renderHtml } from './report/html.ts';
+import { renderText } from './report/text.ts';
+import { renderCompareText, renderCompareHtml } from './report/compare.ts';
+import { aggregate, renderAggregate } from './report/aggregate.ts';
+import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
+import type { Adapter, RunResult } from './types.ts';
+
+/**
+ * Bundled briefs live with the package, not in whatever directory the command
+ * was run from, so `p2p briefs` works outside the repository too.
+ */
+const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page'];
+const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.json`);
 
 const USAGE = `
 prompt-to-paint -- how long until an agent renders something you can react to
@@ -64,8 +73,8 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'briefs') {
-    for (const id of ['todo-app', 'landing-page', 'static-page']) {
-      const b = await loadBrief(join('briefs', `${id}.json`));
+    for (const id of BUNDLED_BRIEFS) {
+      const b = await loadBrief(bundledBrief(id));
       console.log(`  ${id.padEnd(16)} ${b.title}  (horizon ${b.horizonSec}s, ${b.rubric.length} criteria)`);
     }
     return;
@@ -111,12 +120,17 @@ async function main(): Promise<void> {
     const prev = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as RunResult;
     // Prefer an explicit --brief, then the path the run recorded, then the
     // bundled brief of that id.
-    const briefPath = values.brief ?? prev.briefPath ?? join('briefs', `${prev.brief}.json`);
+    const briefPath = values.brief ?? prev.briefPath ?? bundledBrief(prev.brief);
     const brief = await loadBrief(briefPath);
     const backend = pickBackend({ backend: (values.judge as 'api' | 'cli' | 'none' | 'auto') ?? 'auto', model: values['judge-model'] });
     const judged = await judgeRun(prev.frames, brief, { backend });
     const next: RunResult = {
       ...prev,
+      // Spreading prev would keep the old brief id and path, so the report
+      // would name the wrong rubric and a later rescore would reload the brief
+      // this one just replaced.
+      brief: brief.id,
+      briefPath,
       // Warnings from the previous scoring pass are stale; keep the ones about
       // the run itself. Without this a rescore silently inherits the old
       // judge's verdict about itself and hides fresh failures.
@@ -136,7 +150,7 @@ async function main(): Promise<void> {
   }
 
   let brief;
-  let adapter: Adapter;
+  let makeAdapter: () => Adapter;
   let label = values.label ?? '';
 
   if (cmd === 'floor') {
@@ -144,7 +158,7 @@ async function main(): Promise<void> {
     if (!t) fail(`unknown floor template "${values.template}". Try: ${Object.keys(FLOOR_TEMPLATES).join(', ')}`);
     const port = Number(values.port ?? 5173);
     brief = floorBrief(t, port, Number(values.horizon ?? 300));
-    adapter = new ExecAdapter({ command: t.script.replaceAll('{{PORT}}', String(port)) });
+    makeAdapter = () => new ExecAdapter({ command: t.script.replaceAll('{{PORT}}', String(port)) });
     label ||= `floor:${t.id}`;
   } else if (cmd === 'run') {
     if (!values.brief) fail('run needs --brief <file>');
@@ -162,7 +176,7 @@ async function main(): Promise<void> {
             '  (an agent that must run shell commands will stall on approval).',
         );
       }
-      adapter = new ClaudeCodeAdapter({
+      makeAdapter = () => new ClaudeCodeAdapter({
         model: values.model,
         skipPermissions: values.unsafe,
         permissionMode: values['permission-mode'],
@@ -172,7 +186,7 @@ async function main(): Promise<void> {
         console.log('  note: running with --permission-mode acceptEdits. An agent that needs to run\n' +
                     '        commands will stall on approval. Use --unsafe in a non-root sandbox.');
     } else if (kind === 'pi') {
-      adapter = new PiAdapter({
+      makeAdapter = () => new PiAdapter({
         bin: values.bin,
         provider: values.provider,
         model: values.model,
@@ -183,7 +197,7 @@ async function main(): Promise<void> {
         console.log('  note: pi defaults to the google provider. Pass --provider and --model\n' +
                     '        for a reproducible run.');
     } else if (kind === 'antigravity') {
-      adapter = new AntigravityAdapter({
+      makeAdapter = () => new AntigravityAdapter({
         bin: values.bin,
         model: values.model,
         effort: values.effort,
@@ -196,12 +210,15 @@ async function main(): Promise<void> {
                     '        cannot write files or run commands.');
     } else if (kind === 'exec') {
       if (!values.command) fail('--adapter exec needs --command');
-      adapter = new ExecAdapter({ command: values.command });
+      // Captured outside the closure: the narrowing from fail() (which returns
+      // never) does not survive into a deferred factory.
+      const command = values.command;
+      makeAdapter = () => new ExecAdapter({ command });
       label ||= 'exec';
     } else if (kind === 'scripted') {
       if (!values.script) fail('--adapter scripted needs --script <timeline.json>');
       const spec = JSON.parse(await readFile(values.script, 'utf8'));
-      adapter = new ScriptedAdapter(spec);
+      makeAdapter = () => new ScriptedAdapter(spec);
       label ||= 'scripted';
     } else {
       fail(`unknown adapter "${kind}"`);
@@ -230,7 +247,10 @@ async function main(): Promise<void> {
     const result = await runBenchmark({
       brief,
       briefPath: cmd === 'run' ? values.brief : undefined,
-      adapter,
+      // A fresh instance per repeat: adapters accumulate per-run state (the
+      // Antigravity one records what it learned about the stream), and reusing
+      // one would let an earlier repeat decide a later repeat's fidelity.
+      adapter: makeAdapter(),
       runDir,
       label,
       judgeBackend,

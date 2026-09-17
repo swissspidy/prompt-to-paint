@@ -4,39 +4,120 @@
   "prompt": "Build a single-page marketing site for \"Kettle\", a coffee subscription service. It needs a hero section with the headline \"Coffee, handled\" and a \"Start your trial\" button, a three-up feature row (Fresh roasts, Flexible delivery, Cancel anytime), a pricing section with three tiers named Filter, Espresso and Barista, and a footer with the text \"Kettle Coffee Co.\". Make it look like a real product site.",
   "horizonSec": 420,
   "reviewableThreshold": 0.45,
-  "target": { "port": 5173 },
+  "target": {
+    "port": 5173
+  },
   "entities": [
-    { "id": "brand", "aliases": ["Kettle"], "weight": 2 },
-    { "id": "headline", "aliases": ["Coffee, handled", "Coffee handled"], "weight": 2 },
-    { "id": "cta", "aliases": ["Start your trial", "Start trial"] },
-    { "id": "feature-1", "aliases": ["Fresh roasts", "Fresh roast"] },
-    { "id": "feature-2", "aliases": ["Flexible delivery"] },
-    { "id": "feature-3", "aliases": ["Cancel anytime"] },
-    { "id": "tier-1", "aliases": ["Filter"] },
-    { "id": "tier-2", "aliases": ["Espresso"] },
-    { "id": "tier-3", "aliases": ["Barista"] },
-    { "id": "footer", "aliases": ["Kettle Coffee Co"] }
+    {
+      "id": "brand",
+      "aliases": [
+        "Kettle"
+      ],
+      "weight": 2
+    },
+    {
+      "id": "headline",
+      "aliases": [
+        "Coffee, handled",
+        "Coffee handled"
+      ],
+      "weight": 2
+    },
+    {
+      "id": "cta",
+      "aliases": [
+        "Start your trial",
+        "Start trial"
+      ]
+    },
+    {
+      "id": "feature-1",
+      "aliases": [
+        "Fresh roasts",
+        "Fresh roast"
+      ]
+    },
+    {
+      "id": "feature-2",
+      "aliases": [
+        "Flexible delivery"
+      ]
+    },
+    {
+      "id": "feature-3",
+      "aliases": [
+        "Cancel anytime"
+      ]
+    },
+    {
+      "id": "tier-1",
+      "aliases": [
+        "Filter"
+      ]
+    },
+    {
+      "id": "tier-2",
+      "aliases": [
+        "Espresso"
+      ]
+    },
+    {
+      "id": "tier-3",
+      "aliases": [
+        "Barista"
+      ]
+    },
+    {
+      "id": "footer",
+      "aliases": [
+        "Kettle Coffee Co"
+      ]
+    }
   ],
   "rubric": [
-    { "id": "renders", "description": "The page shows a real interface, not a blank page, a loading spinner, or an error overlay.", "weight": 1 },
-    { "id": "hero", "description": "A hero section is visible with the headline \"Coffee, handled\" and a call-to-action button.", "weight": 2 },
-    { "id": "features", "description": "Three features are laid out in a row: Fresh roasts, Flexible delivery, Cancel anytime.", "weight": 2 },
-    { "id": "pricing", "description": "A pricing section shows three distinct tiers named Filter, Espresso and Barista.", "weight": 2 },
-    { "id": "footer", "description": "A footer is visible containing \"Kettle Coffee Co.\".", "weight": 1 },
-    { "id": "designed", "description": "It reads as a designed marketing page -- consistent typography, deliberate spacing, visual hierarchy -- not stacked unstyled text.", "weight": 2 }
+    {
+      "id": "renders",
+      "description": "The page shows a real interface, not a blank page, a loading spinner, or an error overlay.",
+      "weight": 1
+    },
+    {
+      "id": "hero",
+      "description": "A hero section is visible with the headline \"Coffee, handled\" and a call-to-action button.",
+      "weight": 2
+    },
+    {
+      "id": "features",
+      "description": "Three features are laid out in a row: Fresh roasts, Flexible delivery, Cancel anytime.",
+      "weight": 2
+    },
+    {
+      "id": "pricing",
+      "description": "A pricing section shows three distinct tiers named Filter, Espresso and Barista.",
+      "weight": 2
+    },
+    {
+      "id": "footer",
+      "description": "A footer is visible containing \"Kettle Coffee Co.\".",
+      "weight": 1
+    },
+    {
+      "id": "designed",
+      "description": "It reads as a designed marketing page -- consistent typography, deliberate spacing, visual hierarchy -- not stacked unstyled text.",
+      "weight": 2
+    }
   ],
   "iterations": [
     {
       "id": "header-blue",
       "prompt": "Make the hero section background blue.",
       "description": "The canonical small visual edit.",
-      "check": "(() => { for (const el of document.querySelectorAll('header,section,div')) { const r = el.getBoundingClientRect(); if (r.width < 300 || r.height < 150 || r.top > 400) continue; const m = getComputedStyle(el).backgroundColor.match(/\\d+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } return false; })()"
+      "check": "(() => { const leaf = [...document.querySelectorAll('h1,h2,h3,p,span,div,a')].find(el => el.children.length === 0 && /coffee,?\\s*handled/i.test(el.textContent || '')); if (!leaf) return false; for (let el = leaf; el; el = el.parentElement) { const r = el.getBoundingClientRect(); if (r.width < 300 || r.height < 120) continue; const m = getComputedStyle(el).backgroundColor.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } return false; })()"
     },
     {
       "id": "fourth-tier",
       "prompt": "Add a fourth pricing tier called \"Roastery\".",
       "description": "A structural edit, not just a style token.",
-      "check": "document.body.innerText.includes('Roastery')"
+      "check": "(() => { const smallest = (name) => [...document.querySelectorAll('div,section,li,article')].filter(el => new RegExp('\\\\b' + name + '\\\\b').test(el.textContent || '')).sort((a,b) => (a.textContent||'').length - (b.textContent||'').length)[0]; const cards = ['Filter','Espresso','Barista','Roastery'].map(smallest); if (cards.some(c => !c)) return false; const parents = cards.map(c => c.parentElement); return parents.filter(p => p && p === parents[3]).length >= 2; })()"
     }
   ]
 }

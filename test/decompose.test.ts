@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   union, subtract, total, classifyPhase, parsePhaseLog, attributeAgentStream, decompose,
-} from '../src/decompose/attribute.js';
-import type { AgentEvent, PhaseEvent } from '../src/types.js';
+} from '../src/decompose/attribute.ts';
+import type { AgentEvent, PhaseEvent } from '../src/types.ts';
 
 test('union merges overlapping and touching intervals', () => {
   assert.deepEqual(union([{ start: 0, end: 10 }, { start: 5, end: 20 }]), [{ start: 0, end: 20 }]);
@@ -184,9 +184,9 @@ test('iteration mode defaults to restart, so a cold re-run is never read as a li
   // Claiming live-session timings for a cold restart would understate an
   // agent's real edit latency by however long it takes to boot and re-read the
   // project, with nothing in the output to reveal it.
-  const { ExecAdapter } = await import('../src/adapters/exec.js');
-  const { ClaudeCodeAdapter } = await import('../src/adapters/claude-code.js');
-  const { ScriptedAdapter } = await import('../src/adapters/scripted.js');
+  const { ExecAdapter } = await import('../src/adapters/exec.ts');
+  const { ClaudeCodeAdapter } = await import('../src/adapters/claude-code.ts');
+  const { ScriptedAdapter } = await import('../src/adapters/scripted.ts');
 
   assert.equal(new ExecAdapter({ command: 'x' }).iterationMode, 'restart');
   assert.equal(new ClaudeCodeAdapter().iterationMode, 'live-session');

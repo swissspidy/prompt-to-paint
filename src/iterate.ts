@@ -1,6 +1,6 @@
-import type { AgentRunHandle, Frame, IterationMode, IterationResult, IterationSpec } from './types.js';
-import type { Prober } from './probe/prober.js';
-import { hamming, colorDelta } from './probe/pixels.js';
+import type { AgentRunHandle, Frame, IterationMode, IterationResult, IterationSpec } from './types.ts';
+import type { Prober } from './probe/prober.ts';
+import { hamming, colorDelta } from './probe/pixels.ts';
 
 export interface IterateOptions {
   prober: Prober;
@@ -23,6 +23,9 @@ export interface IterateOptions {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const isBroken = (c: Frame['class'] | undefined): boolean =>
+  c === 'error' || c === 'blank' || c === 'unreachable';
 
 /**
  * Measures one edit, from prompt to visible change.
@@ -58,6 +61,12 @@ export async function runIteration(
   const baselineSig = baseline?.colorSig ?? null;
   const firstNewFrame = prober.frames.length;
 
+  // If the check already passes before the prompt is sent, it cannot measure
+  // this edit: the very first frame would report a near-instant success for a
+  // change the agent never made. That is a broken check, not a fast agent, so
+  // the iteration is reported invalid rather than given a flattering number.
+  const baselineAlreadyPassing = baseline?.checkPassed === true;
+
   const turnsBefore = handle.turns();
   const promptSentEpoch = Date.now();
   const promptSentMs = promptSentEpoch - t0Epoch;
@@ -76,7 +85,11 @@ export async function runIteration(
   let firstPassMs: number | null = null;
   let brokenMs = 0;
   let cursor = firstNewFrame;
-  let lastFrameEnd = promptSentMs;
+  // Broken time is charged to the state observed at the *start* of an interval.
+  // Charging it to the frame that ends the interval would book a healthy
+  // stretch as broken the moment the next sample came back blank.
+  let prevBroken = isBroken(baseline?.class);
+  let prevMs = promptSentMs;
 
   const hardDeadline = Date.now() + timeoutMs;
   const grace = opts.postTurnGraceMs ?? 20_000;
@@ -91,10 +104,9 @@ export async function runIteration(
       const f: Frame = prober.frames[cursor]!;
       if (f.tMs < promptSentMs) continue;
 
-      if (f.class === 'error' || f.class === 'blank' || f.class === 'unreachable') {
-        brokenMs += Math.max(0, f.tMs - lastFrameEnd);
-      }
-      lastFrameEnd = f.tMs;
+      if (prevBroken) brokenMs += Math.max(0, f.tMs - prevMs);
+      prevBroken = isBroken(f.class);
+      prevMs = f.tMs;
 
       // Structure OR colour. A recolour moves the colour signature while
       // leaving the luminance hash almost untouched; a layout change does the
@@ -106,7 +118,7 @@ export async function runIteration(
         timeToFirstChangeMs = f.tMs - promptSentMs;
       }
 
-      if (f.checkPassed) {
+      if (f.checkPassed && !baselineAlreadyPassing) {
         if (consecutivePasses === 0) firstPassMs = f.tMs;
         consecutivePasses++;
         // Require the change to persist: HMR can flash a half-applied state.
@@ -121,11 +133,18 @@ export async function runIteration(
     }
   }
 
+  // Charge the last observed state through to whatever ended the loop, so an
+  // app left broken at the end is not silently forgiven.
+  const endedMs =
+    timeToCorrectChangeMs !== null ? promptSentMs + timeToCorrectChangeMs : Date.now() - t0Epoch;
+  if (prevBroken) brokenMs += Math.max(0, endedMs - prevMs);
+
   prober.setCheck(null);
   prober.setInterval(coldInterval);
 
   return {
     id: spec.id,
+    baselineAlreadyPassing,
     mode: opts.mode ?? 'restart',
     prompt: spec.prompt,
     promptSentMs,
@@ -133,6 +152,6 @@ export async function runIteration(
     timeToCorrectChangeMs,
     agentDoneMs,
     brokenMs,
-    ok: timeToCorrectChangeMs !== null,
+    ok: timeToCorrectChangeMs !== null && !baselineAlreadyPassing,
   };
 }

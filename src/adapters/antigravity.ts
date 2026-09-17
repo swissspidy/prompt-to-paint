@@ -1,5 +1,5 @@
-import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.js';
-import { startStreamingProcess } from './streaming-process.js';
+import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.ts';
+import { startStreamingProcess } from './streaming-process.ts';
 
 export interface AntigravityOptions {
   bin?: string;
@@ -82,7 +82,11 @@ export class AntigravityAdapter implements Adapter {
   private sawToolBoundary = false;
   private sawSteps = false;
 
-  constructor(private opts: AntigravityOptions = {}) {}
+  private opts: AntigravityOptions;
+
+  constructor(opts: AntigravityOptions = {}) {
+    this.opts = opts;
+  }
 
   /**
    * Full only once real tool boundaries have been seen. Otherwise the model and

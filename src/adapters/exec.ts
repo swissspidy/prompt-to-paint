@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { Adapter, AgentContext, AgentRunHandle, IterationMode, StreamFidelity } from '../types.js';
-import { withShimPath } from '../decompose/shims.js';
+import type { Adapter, AgentContext, AgentRunHandle, IterationMode, StreamFidelity } from '../types.ts';
+import { withShimPath } from '../decompose/shims.ts';
+import { describeSpawnError } from './spawn-error.ts';
 
 export interface ExecOptions {
   /** Shell command. {{PROMPT}} and {{WORKDIR}} are substituted. */
@@ -17,8 +18,19 @@ export interface ExecOptions {
   shell?: string;
 }
 
+/**
+ * POSIX single-quoting.
+ *
+ * The substituted value ends up inside a `bash -lc` command line. JSON quoting
+ * is not shell quoting: a JSON string is double-quoted, and `$(...)`, backticks
+ * and `${...}` all stay live inside double quotes, so a brief could run
+ * commands simply by naming them in its prompt. Single quotes suppress every
+ * expansion, and the only character needing care is the quote itself.
+ */
+export const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
 const fill = (tpl: string, prompt: string, workdir: string): string =>
-  tpl.replaceAll('{{PROMPT}}', JSON.stringify(prompt)).replaceAll('{{WORKDIR}}', workdir);
+  tpl.replaceAll('{{PROMPT}}', shellQuote(prompt)).replaceAll('{{WORKDIR}}', shellQuote(workdir));
 
 /**
  * Runs any agent that is a command line.
@@ -36,7 +48,11 @@ const fill = (tpl: string, prompt: string, workdir: string): string =>
 export class ExecAdapter implements Adapter {
   readonly name = 'exec';
   readonly streamFidelity: StreamFidelity = 'none';
-  constructor(private opts: ExecOptions) {}
+  private opts: ExecOptions;
+
+  constructor(opts: ExecOptions) {
+    this.opts = opts;
+  }
 
   get iterationMode(): IterationMode {
     return this.opts.iterationMode ?? 'restart';
@@ -66,10 +82,17 @@ export class ExecAdapter implements Adapter {
         current = child;
         child.stdout?.on('data', (d: Buffer) => log.write(d));
         child.stderr?.on('data', (d: Buffer) => log.write(d));
-        child.on('close', (code) => {
+        const finish = (code: number | null): void => {
           ctx.onEvent({ tMs: Date.now() - ctx.t0Epoch, type: 'result', subtype: `exit-${code}` });
           completeTurn();
           resolve(code);
+        };
+        child.on('close', finish);
+        // Unhandled, a failed spawn would terminate the harness instead of
+        // being recorded as a failed run.
+        child.on('error', (err: NodeJS.ErrnoException) => {
+          log.write(`\n${describeSpawnError(err, shell)}\n`);
+          finish(127);
         });
       });
 

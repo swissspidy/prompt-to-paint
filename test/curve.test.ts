@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeMetrics, integrate, buildCurve } from '../src/metrics/curve.js';
-import type { ScoredFrame } from '../src/types.js';
+import { computeMetrics, integrate, buildCurve } from '../src/metrics/curve.ts';
+import type { ScoredFrame } from '../src/types.ts';
 
 function frame(tMs: number, score: number, over: Partial<ScoredFrame> = {}): ScoredFrame {
   return {

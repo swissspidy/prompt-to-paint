@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translatePiEvent, PiAdapter } from '../src/adapters/pi.js';
-import { detectToolSignal, AntigravityAdapter } from '../src/adapters/antigravity.js';
-import { attributeAgentStream, total } from '../src/decompose/attribute.js';
-import type { AgentEvent } from '../src/types.js';
+import { translatePiEvent, PiAdapter } from '../src/adapters/pi.ts';
+import { detectToolSignal, AntigravityAdapter } from '../src/adapters/antigravity.ts';
+import { attributeAgentStream, total } from '../src/decompose/attribute.ts';
+import type { AgentEvent } from '../src/types.ts';
 
 // ---------------------------------------------------------------------------
 // Pi. Event shapes taken from the published --mode json / rpc reference.
@@ -155,4 +155,31 @@ test('antigravity result events close a turn and are not counted as thinking', (
 test('antigravity declares live-session iteration', () => {
   // --input-format stream-json reuses the warmed conversation across turns.
   assert.equal(new AntigravityAdapter().iterationMode, 'live-session');
+});
+
+// ---------------------------------------------------------------------------
+// exec: the substituted prompt reaches a shell, so quoting is a safety boundary
+// ---------------------------------------------------------------------------
+
+test('shellQuote neutralises expansion in a substituted prompt', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { shellQuote } = await import('../src/adapters/exec.ts');
+  // JSON quoting is not shell quoting: inside double quotes $(), backticks and
+  // ${} all stay live, so a brief could run commands just by naming them.
+  const nasty = 'hi $(echo OWNED) `echo OWNED2` ${HOME} \'q\' "dq"';
+  const out = execFileSync('/bin/bash', ['-lc', `printf '%s' ${shellQuote(nasty)}`], { encoding: 'utf8' });
+  assert.equal(out, nasty, 'the value must survive verbatim and unexpanded');
+  assert.ok(!out.includes('OWNED2'.replace('OWNED2', 'OWNED2')) || !/\/root|\/home\/\w+/.test(out));
+});
+
+test('describeSpawnError only blames a missing binary for ENOENT', async () => {
+  const { describeSpawnError } = await import('../src/adapters/spawn-error.ts');
+  const missing = Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' });
+  assert.match(describeSpawnError(missing, 'x'), /not found on PATH/);
+
+  // Anything else means the executable exists and something else broke;
+  // reporting it as "not installed" sends people after the wrong problem.
+  const denied = Object.assign(new Error('spawn x EACCES'), { code: 'EACCES' });
+  assert.doesNotMatch(describeSpawnError(denied, 'x'), /not found on PATH/);
+  assert.match(describeSpawnError(denied, 'x'), /EACCES/);
 });

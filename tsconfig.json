@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -11,7 +14,16 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": false,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

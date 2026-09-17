@@ -1,5 +1,5 @@
-import type { RunResult } from '../types.js';
-import { BUCKET_ORDER, BUCKET_LABEL, BUCKET_SIDE } from './palette.js';
+import type { RunResult } from '../types.ts';
+import { BUCKET_ORDER, BUCKET_LABEL, BUCKET_SIDE } from './palette.ts';
 
 const secs = (ms: number | null): string => (ms === null ? '  --  ' : `${(ms / 1000).toFixed(1)}s`);
 const bar = (frac: number, width = 24): string =>

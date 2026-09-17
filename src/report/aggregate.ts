@@ -1,5 +1,5 @@
-import type { RunResult } from '../types.js';
-import { BUCKET_ORDER, BUCKET_LABEL } from './palette.js';
+import type { RunResult } from '../types.ts';
+import { BUCKET_ORDER, BUCKET_LABEL } from './palette.ts';
 
 export interface Spread {
   n: number;

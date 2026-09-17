@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { Brief } from './types.js';
+import type { Brief } from './types.ts';
 
 class BriefError extends Error {}
 

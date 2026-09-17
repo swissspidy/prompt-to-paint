@@ -22,11 +22,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class ApiBackend implements JudgeBackend {
   readonly name = 'api';
   readonly concurrency = 4;
+  readonly model: string;
+  private apiKey: string;
+  private baseUrl: string;
+
   constructor(
-    readonly model: string,
-    private apiKey: string,
-    private baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-  ) {}
+    model: string,
+    apiKey: string,
+    baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+  ) {
+    this.model = model;
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+  }
 
   async ask(req: JudgeRequest): Promise<string> {
     const body = {
@@ -87,10 +95,13 @@ export class ApiBackend implements JudgeBackend {
 export class CliBackend implements JudgeBackend {
   readonly name = 'cli';
   readonly concurrency = 2;
-  constructor(
-    readonly model: string,
-    private bin = 'claude',
-  ) {}
+  readonly model: string;
+  private bin: string;
+
+  constructor(model: string, bin = 'claude') {
+    this.model = model;
+    this.bin = bin;
+  }
 
   async ask(req: JudgeRequest): Promise<string> {
     const prompt = `Read the image file at ${req.imagePath}, then answer.\n\n${req.prompt}`;

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
-import { classify } from '../src/probe/classify.js';
-import { entityCoverage } from '../src/probe/entities.js';
-import { decodeGray, dhash, hamming, inkRatio, colorSignature, colorDelta } from '../src/probe/pixels.js';
+import { classify } from '../src/probe/classify.ts';
+import { entityCoverage } from '../src/probe/entities.ts';
+import { decodeGray, dhash, hamming, inkRatio, colorSignature, colorDelta } from '../src/probe/pixels.ts';
 
 const base = { reachable: true, httpStatus: 200, overlayHit: null, mediaBoxes: 0, inkRatio: 0.3 };
 

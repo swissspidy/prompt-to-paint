@@ -1,4 +1,4 @@
-import type { Bucket } from '../types.js';
+import type { Bucket } from '../types.ts';
 
 /**
  * Categorical slots in fixed order, from the validated reference palette.

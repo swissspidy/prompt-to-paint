@@ -1,5 +1,5 @@
-import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.js';
-import { startStreamingProcess } from './streaming-process.js';
+import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.ts';
+import { startStreamingProcess } from './streaming-process.ts';
 
 export interface PiOptions {
   bin?: string;
@@ -99,7 +99,11 @@ export class PiAdapter implements Adapter {
   readonly iterationMode: IterationMode = 'live-session';
   readonly streamFidelity = 'full' as const;
 
-  constructor(private opts: PiOptions = {}) {}
+  private opts: PiOptions;
+
+  constructor(opts: PiOptions = {}) {
+    this.opts = opts;
+  }
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = ['--mode', 'rpc'];

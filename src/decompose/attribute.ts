@@ -1,4 +1,4 @@
-import type { AgentEvent, Bucket, Decomposition, PhaseEvent, PhaseKind } from '../types.js';
+import type { AgentEvent, Bucket, Decomposition, PhaseEvent, PhaseKind } from '../types.ts';
 
 export interface Interval {
   start: number;
@@ -216,7 +216,11 @@ export function attributeAgentStream(events: AgentEvent[], endMs: number): Strea
         cursor = e.tMs;
       }
     } else if (e.type === 'result') {
-      if (pending === 0 && e.tMs > cursor) model.push({ start: cursor, end: e.tMs });
+      // A turn can end with tools still outstanding, when a stream coalesces or
+      // omits their results. Closing the span here keeps that time as tool
+      // work; dropping it would quietly move known tool time into the residual.
+      if (pending > 0 && e.tMs > toolStart) tool.push({ start: toolStart, end: e.tMs });
+      else if (e.tMs > cursor) model.push({ start: cursor, end: e.tMs });
       cursor = e.tMs;
       pending = 0;
     }

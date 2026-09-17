@@ -268,6 +268,11 @@ export interface IterationResult {
   id: string;
   /** How the follow-up was delivered. Decides what these timings include. */
   mode: IterationMode;
+  /**
+   * The check was already satisfied before the prompt was sent, so this edit
+   * cannot be measured and the result is void. A broken check, not a fast agent.
+   */
+  baselineAlreadyPassing: boolean;
   prompt: string;
   promptSentMs: number;
   /** First visually distinct frame after the prompt. Loop responsiveness. */

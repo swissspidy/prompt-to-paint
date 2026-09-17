@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode, StreamFidelity } from '../types.js';
+import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode, StreamFidelity } from '../types.ts';
+import { describeSpawnError } from './spawn-error.ts';
 
 export interface ClaudeCodeOptions {
   bin?: string;
@@ -33,7 +34,11 @@ export class ClaudeCodeAdapter implements Adapter {
   // stream-json on stdin keeps one session alive across turns.
   readonly iterationMode: IterationMode = 'live-session';
   readonly streamFidelity: StreamFidelity = 'full';
-  constructor(private opts: ClaudeCodeOptions = {}) {}
+  private opts: ClaudeCodeOptions;
+
+  constructor(opts: ClaudeCodeOptions = {}) {
+    this.opts = opts;
+  }
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = [
@@ -104,22 +109,39 @@ export class ClaudeCodeAdapter implements Adapter {
     child.stderr.on('data', (c: Buffer) => rawLog.write(c));
 
     const done = new Promise<{ exitCode: number | null; reportedApiMs: number | null }>((resolve) => {
-      child.on('close', (code) => {
+      const finish = (code: number | null): void => {
         rawLog.end();
         // Never leave a caller blocked on a turn that can no longer happen.
         releaseAll();
         resolve({ exitCode: code, reportedApiMs });
+      };
+      child.on('close', finish);
+      // A binary that cannot start emits 'error' and never 'close'; unhandled,
+      // it would take the harness down rather than record a failed run.
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        rawLog.write(`\n${describeSpawnError(err, this.opts.bin ?? 'claude')}\n`);
+        finish(127);
       });
     });
+
+    // Writing to the stdin of a process that never started raises EPIPE. The
+    // spawn failure is already recorded, so re-raising it here would turn a
+    // recorded failed run into a thrown exception.
+    child.stdin.on('error', () => undefined);
 
     const write = async (text: string): Promise<void> => {
       const msg = {
         type: 'user',
         message: { role: 'user', content: [{ type: 'text', text }] },
       };
-      await new Promise<void>((res, rej) =>
-        child.stdin.write(JSON.stringify(msg) + '\n', (e) => (e ? rej(e) : res())),
-      );
+      await new Promise<void>((res) => {
+        if (child.stdin.destroyed || child.stdin.writableEnded) return res();
+        try {
+          child.stdin.write(JSON.stringify(msg) + '\n', () => res());
+        } catch {
+          res();
+        }
+      });
     };
 
     const waitForTurn = (after: number): Promise<void> => {

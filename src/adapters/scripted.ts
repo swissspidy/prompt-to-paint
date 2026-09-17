@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Adapter, AgentContext, AgentRunHandle, IterationMode, StreamFidelity } from '../types.js';
-import { withShimPath } from '../decompose/shims.js';
+import type { Adapter, AgentContext, AgentRunHandle, IterationMode, StreamFidelity } from '../types.ts';
+import { withShimPath } from '../decompose/shims.ts';
 
 export interface ScriptedStep {
   /** When to fire, relative to the start of this turn. */
@@ -32,7 +32,11 @@ export class ScriptedAdapter implements Adapter {
   readonly name = 'scripted';
   readonly iterationMode: IterationMode = 'live-session';
   readonly streamFidelity: StreamFidelity = 'full';
-  constructor(private opts: ScriptedOptions) {}
+  private opts: ScriptedOptions;
+
+  constructor(opts: ScriptedOptions) {
+    this.opts = opts;
+  }
 
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     let turnsCompleted = 0;

@@ -2,9 +2,9 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import type { Brief, Frame, ScoredFrame } from '../types.js';
-import { hamming, colorDelta, downscalePngColor } from '../probe/pixels.js';
-import type { JudgeBackend } from './backends.js';
+import type { Brief, Frame, ScoredFrame } from '../types.ts';
+import { hamming, colorDelta, downscalePngColor } from '../probe/pixels.ts';
+import type { JudgeBackend } from './backends.ts';
 
 export interface JudgeOptions {
   backend: JudgeBackend;

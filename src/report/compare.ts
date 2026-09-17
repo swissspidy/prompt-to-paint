@@ -1,6 +1,6 @@
-import type { RunResult } from '../types.js';
-import { buildCurve } from '../metrics/curve.js';
-import { SERIES_LIGHT, SERIES_DARK } from './palette.js';
+import type { RunResult } from '../types.ts';
+import { buildCurve } from '../metrics/curve.ts';
+import { SERIES_LIGHT, SERIES_DARK } from './palette.ts';
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
