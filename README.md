@@ -80,13 +80,16 @@ blue" — into the **same live session** and times it:
 
 ## Quickstart
 
-Requires **Node 22.18 or newer** — the first release that strips TypeScript
-types without a flag. There is no build step, no bundler and no loader: the CLI
-is run directly with `node src/cli.ts`, and `tsconfig.json` sets
-`erasableSyntaxOnly` so syntax Node cannot strip fails typechecking rather than
-only failing at runtime.
+Requires **Node 24 or newer**. `.nvmrc` pins `lts/*`, so `nvm use` picks up a
+supported release without this file having to be edited every six months.
+
+Node strips the TypeScript types itself, so there is no build step, no bundler
+and no loader: the CLI is run directly with `node src/cli.ts`, and
+`tsconfig.json` sets `erasableSyntaxOnly` so syntax Node cannot strip fails
+typechecking rather than only failing at runtime.
 
 ```bash
+nvm use                             # optional; reads .nvmrc
 npm install
 npx playwright install chromium     # or set P2P_CHROMIUM to an existing binary
 
@@ -305,7 +308,12 @@ agent, a missing binary, and an iteration whose check was already satisfied all
 have to report themselves rather than return a tidy zero. It also runs the CLI
 the way a person does, as a subprocess.
 
-CI runs all of it on Node 22.18, 22 and 24.
+CI runs all of it on Node 24 — the supported floor — and on whatever `lts/*`
+resolves to today, which is what `.nvmrc` gives a contributor locally. A second
+job audits the workflows themselves with [zizmor](https://docs.zizmor.sh), so
+the hash-pinned actions and least-privilege permissions stay that way rather
+than decaying at the next hand edit; Dependabot proposes the bumps weekly,
+grouped so a package and its type definitions arrive in one pull request.
 
 ## Caveats worth knowing before you quote a number
 
