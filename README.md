@@ -308,12 +308,13 @@ agent, a missing binary, and an iteration whose check was already satisfied all
 have to report themselves rather than return a tidy zero. It also runs the CLI
 the way a person does, as a subprocess.
 
-CI runs all of it on Node 24 — the supported floor — and on whatever `lts/*`
-resolves to today, which is what `.nvmrc` gives a contributor locally. A second
-job audits the workflows themselves with [zizmor](https://docs.zizmor.sh), so
-the hash-pinned actions and least-privilege permissions stay that way rather
-than decaying at the next hand edit; Dependabot proposes the bumps weekly,
-grouped so a package and its type definitions arrive in one pull request.
+CI runs all of it on the version in `.nvmrc`, which is the same file `nvm use`
+reads — so it tests what a contributor is actually running, and the next LTS
+cutover needs no edit to the workflow. A second job audits the workflows
+themselves with [zizmor](https://docs.zizmor.sh), so the hash-pinned actions and
+least-privilege permissions stay that way rather than decaying at the next hand
+edit; Dependabot proposes the bumps weekly, grouped so a package and its type
+definitions arrive in one pull request.
 
 ## Caveats worth knowing before you quote a number
 

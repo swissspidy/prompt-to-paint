@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
-# A superseded run tells you nothing useful; stop it and keep the latest.
+# Branches are covered by the pull_request trigger, so pushing to one does not
+# also run this workflow against the branch head: same commits, same result,
+# twice the runners. A superseded run tells you nothing useful either; stop it
+# and keep the latest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,21 +21,11 @@ permissions: {}
 
 jobs:
   test:
-    name: node ${{ matrix.node.label }}
+    name: tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        # 24 is the floor, and `lts/*` is what a contributor gets from .nvmrc --
-        # today the same release, but not after the next LTS cuts over, which is
-        # exactly the drift worth catching here rather than in someone's
-        # checkout.
-        node:
-          - { version: '24', label: '24' }
-          - { version: 'lts/*', label: 'lts' }
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,7 +37,9 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node.version }}
+          # The same file `nvm use` reads, so CI and a contributor's checkout
+          # cannot drift apart, and the next LTS cutover needs no edit here.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -74,7 +69,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: p2p-failure-node-${{ matrix.node.label }}
+          name: p2p-failure
           path: |
             runs/
             /tmp/p2p-*/
