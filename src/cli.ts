@@ -1,4 +1,4 @@
-import { parseArgs, promisify } from 'node:util';
+import { parseArgs, promisify, type ParseArgsConfig } from 'node:util';
 import { execFile } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
-import { pickBackend, NullBackend, DEFAULT_JUDGE_MODEL, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
-import type { JudgeChoice } from './judge/backends.ts';
+import { pickBackend, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
+import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
@@ -45,7 +45,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p compare  <result.json...>             rank runs by trajectory and by final score
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
-  p2p rescore  <runDir> [--judge-model <m>] [--brief <file>]
+  p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
   p2p briefs                                list bundled briefs
   p2p floors                                list toolchain-floor templates
@@ -54,9 +54,8 @@ Options for run:
   --adapter    claude-code | pi | antigravity | exec | scripted  (default claude-code)
   --model      model passed to the agent
   --label      name for this run in reports      (default: adapter[+model])
-  --judge      auto | none                       (default auto)
-  --judge-model <provider>:<model>               (default ${DEFAULT_JUDGE_MODEL})
-               judged through the AI SDK, e.g. google:gemini-2.5-flash
+  --judge      <provider>:<model> | none         (default ${DEFAULT_JUDGE})
+               scored through the AI SDK, e.g. google:gemini-2.5-flash
                (providers: ${AI_SDK_PROVIDER_NAMES.join(' | ')})
   --out        output directory                  (default runs/)
   --poll       cold-start poll interval in ms    (default 1000)
@@ -90,7 +89,7 @@ Options for floor:
 
 Options for rescore:
   --brief      score against this brief   (default: the one the run recorded)
-  --judge, --judge-model                  as for run
+  --judge                                 as for run
 
 Options for video:
   --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
@@ -102,6 +101,21 @@ Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
   --title      heading for the page
 `;
+
+/**
+ * parseArgs, reporting an unknown or malformed flag as a usage error.
+ *
+ * Its TypeError carries a stack trace into the terminal and buries the one
+ * sentence that matters, which is the name of the flag that was not understood
+ * -- exactly when the reader is already looking for the spelling.
+ */
+function parse<T extends ParseArgsConfig>(config: T): ReturnType<typeof parseArgs<T>> {
+  try {
+    return parseArgs(config);
+  } catch (e) {
+    fail(`${(e as Error).message}\n  Run "p2p help" for the options each command takes.`);
+  }
+}
 
 /** Quote an argument for a command line a person is meant to paste and run. */
 const shellQuote = (a: string): string =>
@@ -153,6 +167,21 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+/**
+ * Resolve --judge, reporting a bad one as a usage error.
+ *
+ * pickBackend throws for a judge it cannot serve -- an unqualified model, a
+ * missing key -- and every one of those is something the user types, not a bug
+ * they can act on a stack trace for.
+ */
+function judgeBackendFor(judge: string | undefined): JudgeBackend {
+  try {
+    return pickBackend(judge);
+  } catch (e) {
+    fail((e as Error).message);
+  }
+}
+
 /** Parse argv, dispatch the subcommand, and write whatever reports it produces. */
 async function main(): Promise<void> {
   const cmd = process.argv[2];
@@ -191,7 +220,7 @@ async function main(): Promise<void> {
     // Positionals, not "every argument that does not start with a dash": the
     // latter also collects option *values*, so `--title "Two agents"` was read
     // as three more result files.
-    const { values: flags, positionals: files } = parseArgs({
+    const { values: flags, positionals: files } = parse({
       args: argv,
       allowPositionals: true,
       options: { out: { type: 'string' }, title: { type: 'string' } },
@@ -215,7 +244,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'video') {
-    const { values: flags, positionals } = parseArgs({
+    const { values: flags, positionals } = parse({
       args: argv,
       allowPositionals: true,
       options: { out: { type: 'string' }, fps: { type: 'string' }, 'to-horizon': { type: 'boolean' } },
@@ -289,12 +318,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { values } = parseArgs({
+  const { values } = parse({
     args: argv,
     allowPositionals: true,
     options: {
       brief: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' },
-      label: { type: 'string' }, judge: { type: 'string' }, 'judge-model': { type: 'string' },
+      label: { type: 'string' }, judge: { type: 'string' },
       out: { type: 'string' }, poll: { type: 'string' }, 'iter-poll': { type: 'string' },
       settle: { type: 'string' }, command: { type: 'string' }, script: { type: 'string' },
       template: { type: 'string' }, port: { type: 'string' }, horizon: { type: 'string' },
@@ -318,7 +347,7 @@ async function main(): Promise<void> {
     // bundled brief of that id.
     const briefPath = values.brief ?? prev.briefPath ?? bundledBrief(prev.brief);
     const brief = await loadBrief(briefPath);
-    const backend = pickBackend({ backend: values.judge as JudgeChoice, model: values['judge-model'] });
+    const backend = judgeBackendFor(values.judge);
     // Only the cold-start frames are scored, exactly as during the run. A
     // result written before phases existed has none tagged, so fall back to the
     // window the curve recorded; without that, rescoring an old run would judge
@@ -442,7 +471,7 @@ async function main(): Promise<void> {
 
   const judgeBackend = cmd === 'floor'
     ? new NullBackend()
-    : pickBackend({ backend: values.judge as JudgeChoice, model: values['judge-model'] });
+    : judgeBackendFor(values.judge);
 
   const outRoot = values.out ?? 'runs';
   const repeats = Math.max(1, Number(values.repeat ?? 1));

@@ -267,7 +267,7 @@ provider is just part of the model name:
 npm run p2p -- run --brief briefs/todo-app.json
 
 # judge with Gemini instead -- needs GOOGLE_GENERATIVE_AI_API_KEY
-npm run p2p -- run --brief briefs/todo-app.json --judge-model google:gemini-2.5-flash
+npm run p2p -- run --brief briefs/todo-app.json --judge google:gemini-2.5-flash
 ```
 
 | provider | key |
@@ -276,13 +276,13 @@ npm run p2p -- run --brief briefs/todo-app.json --judge-model google:gemini-2.5-
 | `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
 
-`--judge-model` defaults to `anthropic:claude-sonnet-5`, and `--judge none`
-turns scoring off entirely: scores degrade to entity coverage, and every report
-says so. There is no third option, because one transport for every provider is
-what makes two judges comparable — they differ in the model named on the
-command line and nowhere else in this code.
+`--judge` is the whole judging surface: a `<provider>:<model>` pair, defaulting
+to `anthropic:claude-sonnet-5`, or `none` to turn scoring off — scores then
+degrade to entity coverage, and every report says so. There is no backend to
+choose, because one transport for every provider is what makes two judges
+comparable: they differ in that one string and nowhere else in this code.
 
-A model must name its provider: a bare `claude-sonnet-5` is an error rather
+A judge must name its provider. A bare `claude-sonnet-5` is an error rather
 than a guess, and a provider whose key is missing fails before the run starts
 rather than once per frame, after the minutes it takes to measure one. Adding a
 provider is a line in `AI_SDK_PROVIDERS`. `result.json` records the judge as

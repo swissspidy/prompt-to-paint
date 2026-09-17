@@ -1,12 +1,12 @@
 import { generateText, type LanguageModel } from 'ai';
 
 /**
- * Used whenever a judge model is not named explicitly.
+ * Used whenever `--judge` is not given.
  *
- * Qualified like every other judge model, so the default is spelled the same
- * way the flag is and `result.json` never records an unattributed model name.
+ * Qualified like every other judge, so the default is spelled the same way the
+ * flag is and `result.json` never records an unattributed model name.
  */
-export const DEFAULT_JUDGE_MODEL = 'anthropic:claude-sonnet-5';
+export const DEFAULT_JUDGE = 'anthropic:claude-sonnet-5';
 
 export interface JudgeRequest {
   png: Buffer;
@@ -40,14 +40,14 @@ const AI_SDK_PROVIDERS: Record<string, { pkg: string; envKey: string }> = {
 export const AI_SDK_PROVIDER_NAMES = Object.keys(AI_SDK_PROVIDERS);
 
 /**
- * Split a `provider:model` judge spec, or return null if it is not one.
+ * Split a `provider:model` judge into its parts, or return null if it is not one.
  *
  * Only a known provider prefix counts. A bare `claude-sonnet-5` is not a spec,
  * and neither is a Bedrock id like `us.anthropic.claude-x:0`, whose colon
  * belongs to the model name -- so an id that merely contains one is reported as
  * unqualified rather than mistaken for a provider that does not exist.
  */
-export function parseJudgeModel(spec: string): { provider: string; model: string } | null {
+export function parseJudge(spec: string): { provider: string; model: string } | null {
   const i = spec.indexOf(':');
   if (i <= 0) return null;
   const provider = spec.slice(0, i);
@@ -137,46 +137,25 @@ export class NullBackend implements JudgeBackend {
   }
 }
 
-export type JudgeChoice = 'auto' | 'none';
-
-/** Backends that used to exist, so a stale command line says why it stopped. */
-const REMOVED_BACKENDS: Record<string, string> = {
-  api: 'the AI SDK now covers it',
-  cli: 'it shelled out to `claude` once per frame',
-};
-
 /**
- * Choose a judge backend.
+ * Choose a judge from the one value that names it.
  *
- * There is one real backend: every provider reaches the judge through the AI
- * SDK, so a run scored by Gemini and one scored by Claude differ in the model
- * named on the command line and nowhere else in this code. Which provider is
- * chosen by the model itself -- `google:gemini-2.5-flash` -- because a model id
- * alone does not say who served it, and a report that cannot name its judge
- * cannot be compared with another.
+ * Every provider reaches the judge through the AI SDK, so a run scored by
+ * Gemini and one scored by Claude differ in the string on the command line and
+ * nowhere else in this code. That string is the provider and the model
+ * together -- `google:gemini-2.5-flash` -- because a model id alone does not
+ * say who served it, and a report that cannot name its judge cannot be put
+ * beside another one. `none` scores nothing.
  */
-export function pickBackend(opt: {
-  backend?: JudgeChoice | string;
-  model?: string;
-}): JudgeBackend {
-  const choice = opt.backend ?? 'auto';
-  if (choice === 'none') return new NullBackend();
+export function pickBackend(judge?: string): JudgeBackend {
+  const wanted = judge ?? DEFAULT_JUDGE;
+  if (wanted === 'none') return new NullBackend();
 
-  const gone = REMOVED_BACKENDS[choice];
-  if (gone)
-    throw new Error(
-      `judge backend "${choice}" was removed (${gone}). Name the model instead: ` +
-        `--judge-model <provider>:<model>, e.g. ${DEFAULT_JUDGE_MODEL}.`,
-    );
-  if (choice !== 'auto')
-    throw new Error(`unknown judge backend "${choice}". Use auto or none.`);
-
-  const wanted = opt.model ?? DEFAULT_JUDGE_MODEL;
-  const spec = parseJudgeModel(wanted);
+  const spec = parseJudge(wanted);
   if (!spec)
     throw new Error(
-      `--judge-model "${wanted}" does not name a provider. Use <provider>:<model>, ` +
-        `e.g. ${DEFAULT_JUDGE_MODEL}. Providers: ${AI_SDK_PROVIDER_NAMES.join(', ')}.`,
+      `--judge "${wanted}" does not name a provider. Use <provider>:<model>, ` +
+        `e.g. ${DEFAULT_JUDGE}, or none. Providers: ${AI_SDK_PROVIDER_NAMES.join(', ')}.`,
     );
 
   // Refuse now rather than once per frame: a run that judges nothing takes the

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
-import { parseJudgeModel, pickBackend, DEFAULT_JUDGE_MODEL } from '../src/judge/backends.ts';
+import { parseJudge, pickBackend, DEFAULT_JUDGE } from '../src/judge/backends.ts';
 import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
@@ -124,64 +124,56 @@ function withKeys<T>(keys: Record<string, string | undefined>, fn: () => T): T {
   }
 }
 
-test('parseJudgeModel splits only known provider prefixes', () => {
-  assert.deepEqual(parseJudgeModel('google:gemini-2.5-flash'), { provider: 'google', model: 'gemini-2.5-flash' });
-  assert.deepEqual(parseJudgeModel('openai:gpt-5'), { provider: 'openai', model: 'gpt-5' });
-  // A bare model, and a model whose own name contains a colon, are not specs.
-  assert.equal(parseJudgeModel('claude-sonnet-5'), null);
-  assert.equal(parseJudgeModel('us.anthropic.claude-x:0'), null);
-  assert.equal(parseJudgeModel('nosuchprovider:x'), null);
-  assert.equal(parseJudgeModel('google:'), null);
+test('parseJudge splits only known provider prefixes', () => {
+  assert.deepEqual(parseJudge('google:gemini-2.5-flash'), { provider: 'google', model: 'gemini-2.5-flash' });
+  assert.deepEqual(parseJudge('openai:gpt-5'), { provider: 'openai', model: 'gpt-5' });
+  // A bare model, and a model whose own name contains a colon, are not judges.
+  assert.equal(parseJudge('claude-sonnet-5'), null);
+  assert.equal(parseJudge('us.anthropic.claude-x:0'), null);
+  assert.equal(parseJudge('nosuchprovider:x'), null);
+  assert.equal(parseJudge('google:'), null);
 });
 
 test('every provider reaches the judge through the one AI SDK backend', () => {
   withKeys({ GOOGLE_GENERATIVE_AI_API_KEY: 'k', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' }, () => {
-    for (const model of ['google:gemini-2.5-flash', 'openai:gpt-5', 'anthropic:claude-sonnet-5']) {
-      const b = pickBackend({ model });
+    for (const judge of ['google:gemini-2.5-flash', 'openai:gpt-5', 'anthropic:claude-sonnet-5']) {
+      const b = pickBackend(judge);
       assert.equal(b.name, 'ai');
       // Qualified, so a report can never claim the wrong judge served a run.
-      assert.equal(b.model, model);
+      assert.equal(b.model, judge);
     }
   });
 });
 
-test('the default judge model names its provider like any other', () => {
+test('the default judge names its provider like any other', () => {
   withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
-    const b = pickBackend({});
+    const b = pickBackend();
     assert.equal(b.name, 'ai');
-    assert.equal(b.model, DEFAULT_JUDGE_MODEL);
-    assert.match(DEFAULT_JUDGE_MODEL, /^anthropic:/);
+    assert.equal(b.model, DEFAULT_JUDGE);
+    assert.match(DEFAULT_JUDGE, /^anthropic:/);
   });
 });
 
 test('a judge that cannot be served is refused up front, not once per frame', () => {
   withKeys({}, () => {
-    assert.throws(() => pickBackend({ model: 'google:g' }), /GOOGLE_GENERATIVE_AI_API_KEY/);
-    assert.throws(() => pickBackend({}), /ANTHROPIC_API_KEY/);
+    assert.throws(() => pickBackend('google:g'), /GOOGLE_GENERATIVE_AI_API_KEY/);
+    assert.throws(() => pickBackend(), /ANTHROPIC_API_KEY/);
   });
 });
 
-test('an unqualified judge model is an error, not a guess at the provider', () => {
+test('a judge that does not name a provider is an error, not a guess', () => {
   withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
-    assert.throws(() => pickBackend({ model: 'claude-sonnet-5' }), /does not name a provider/);
-    assert.throws(() => pickBackend({ model: 'gemini-2.5-flash' }), /<provider>:<model>/);
-  });
-});
-
-test('the backends that were removed say so instead of failing obscurely', () => {
-  withKeys({ ANTHROPIC_API_KEY: 'k' }, () => {
-    // A command line written against the old flags must not silently do
-    // something else -- nor die on an unrelated error three minutes later.
-    for (const gone of ['api', 'cli']) {
-      assert.throws(() => pickBackend({ backend: gone }), /was removed/);
+    // Includes the spellings the removed backends used, which now fail the
+    // same way anything else unrecognised does.
+    for (const judge of ['claude-sonnet-5', 'gemini-2.5-flash', 'api', 'cli', 'auto']) {
+      assert.throws(() => pickBackend(judge), /does not name a provider/, judge);
     }
-    assert.throws(() => pickBackend({ backend: 'nonsense' }), /unknown judge backend/);
   });
 });
 
-test('the null backend needs no credentials at all', () => {
+test('the null judge needs no credentials at all', () => {
   withKeys({}, () => {
-    const b = pickBackend({ backend: 'none', model: 'google:g' });
+    const b = pickBackend('none');
     assert.equal(b.name, 'none');
     assert.equal(b.model, null);
   });
