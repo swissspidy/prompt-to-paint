@@ -17,6 +17,7 @@ import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
 import { ensureFreePort, killPort } from './port.ts';
 import { sleep } from './sleep.ts';
+import { writeJsonAtomic } from './atomic.ts';
 
 export interface RunOptions {
   brief: Brief;
@@ -591,9 +592,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     warnings: [...warnings, ...judgeWarnings],
   });
 
-  const writeResult = async (r: RunResult): Promise<void> => {
-    await writeFile(resultPath, JSON.stringify(r, null, 2));
-  };
+  const writeResult = (r: RunResult): Promise<void> => writeJsonAtomic(resultPath, r);
 
   // Write the run out before scoring it.
   //

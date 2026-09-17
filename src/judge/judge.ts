@@ -204,8 +204,21 @@ export async function judgeRun(
 
   const cacheDir = opts.cacheDir ?? join(process.cwd(), '.p2p-cache');
   await mkdir(cacheDir, { recursive: true });
+  // The judge is part of the cache identity, not just the rubric.
+  //
+  // Verdicts are keyed by screenshot hash inside this file, so two judges
+  // sharing one would let whichever ran first answer for the other: a rescore
+  // under a different --judge would return the original verdicts, and the
+  // result would record them under the new judge's name. That is the one thing
+  // `p2p rescore` with a second judge exists to do -- measure how far two
+  // judges disagree -- so it would report perfect agreement by construction.
   const rubricHash = createHash('sha256')
-    .update(JSON.stringify({ id: brief.id, prompt: brief.prompt, rubric: brief.rubric }))
+    .update(JSON.stringify({
+      id: brief.id,
+      prompt: brief.prompt,
+      rubric: brief.rubric,
+      judge: { backend: opts.backend.name, model: opts.backend.model },
+    }))
     .digest('hex')
     .slice(0, 12);
   const cachePath = join(cacheDir, `judge-${rubricHash}.json`);

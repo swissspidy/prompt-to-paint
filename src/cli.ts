@@ -4,6 +4,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
+import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
 import { pickBackend, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
@@ -385,7 +386,7 @@ async function main(): Promise<void> {
         reviewableThreshold: brief.reviewableThreshold,
       }),
     };
-    await writeFile(join(dir, 'result.json'), JSON.stringify(next, null, 2));
+    await writeJsonAtomic(join(dir, 'result.json'), next);
     await writeFile(join(dir, 'report.html'), renderHtml(next, dir));
     console.log(renderText(next));
     return;
@@ -546,7 +547,7 @@ async function main(): Promise<void> {
     const agg = aggregate(results);
     await mkdir(resolve(outRoot), { recursive: true });
     const aggPath = resolve(outRoot, `aggregate-${brief.id}-${slug(label)}.json`);
-    await writeFile(aggPath, JSON.stringify(agg, null, 2));
+    await writeJsonAtomic(aggPath, agg);
     console.log(renderAggregate(agg));
     console.log(`  aggregate: ${aggPath}\n`);
   }

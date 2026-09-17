@@ -2,6 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
 import { parseJudge, pickBackend, DEFAULT_JUDGE } from '../src/judge/backends.ts';
+import { judgeRun } from '../src/judge/judge.ts';
+import type { JudgeBackend } from '../src/judge/backends.ts';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Brief, Frame } from '../src/types.ts';
 
 const brief: Brief = {
@@ -177,4 +182,65 @@ test('the null judge needs no credentials at all', () => {
     assert.equal(b.name, 'none');
     assert.equal(b.model, null);
   });
+});
+
+// ---------------------------------------------------------------------------
+// The verdict cache
+// ---------------------------------------------------------------------------
+
+/** A judge with a fixed answer, which counts how often it is actually asked. */
+function fakeJudge(model: string, met: boolean): JudgeBackend & { calls: number } {
+  return {
+    name: 'ai',
+    model,
+    concurrency: 1,
+    calls: 0,
+    async ask(): Promise<string> {
+      this.calls++;
+      return JSON.stringify({ criteria: { renders: { met } } });
+    },
+  };
+}
+
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+test('two judges do not share a verdict cache', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judgecache-'));
+  try {
+    const shot = join(dir, 'f.png');
+    await writeFile(shot, PNG_1X1);
+    const cacheDir = join(dir, 'cache');
+    const frames = [{
+      index: 0, tMs: 1000, class: 'render' as const, reason: 'r', screenshotPath: shot,
+      dhash: 'abcdef0123456789', colorSig: '0'.repeat(16), inkRatio: 0.5, text: 'x',
+      title: 't', httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
+      entitiesFound: ['x'], domSignature: 'D', captureMs: 1,
+    }];
+    const single: Brief = { ...brief, rubric: [{ id: 'renders', description: 'renders', weight: 1 }] };
+
+    const first = fakeJudge('anthropic:claude-sonnet-5', true);
+    const a = await judgeRun(frames, single, { backend: first, cacheDir });
+    assert.equal(first.calls, 1);
+    assert.equal(a.frames[0]?.score, 1);
+
+    // The same brief, the same screenshot, a different judge. Verdicts are
+    // keyed by screenshot hash, so a shared cache file would hand this one the
+    // first judge's answer and record it under this judge's name -- which
+    // would make a rescore report perfect agreement between any two judges.
+    const second = fakeJudge('google:gemini-2.5-flash', false);
+    const b = await judgeRun(frames, single, { backend: second, cacheDir });
+    assert.equal(second.calls, 1, 'the second judge was asked for its own verdict');
+    assert.equal(b.frames[0]?.score, 0, 'and its own verdict is what got recorded');
+
+    // Re-running the first judge still hits its own cache, which is the point
+    // of having one.
+    const again = fakeJudge('anthropic:claude-sonnet-5', true);
+    await judgeRun(frames, single, { backend: again, cacheDir });
+    assert.equal(again.calls, 0, 'the same judge reuses its cached verdict');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

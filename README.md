@@ -287,7 +287,18 @@ than a guess, and a provider whose key is missing fails before the run starts
 rather than once per frame, after the minutes it takes to measure one. Adding a
 provider is a line in `AI_SDK_PROVIDERS`. `result.json` records the judge as
 `google:gemini-2.5-flash` rather than a bare model name — **different judges
-disagree at the margin, so a leaderboard should not mix them.**
+disagree at the margin, so a leaderboard should not mix them.** Two judges also
+get separate verdict caches, so re-scoring one run with a second judge measures
+their disagreement instead of replaying the first one's answers.
+
+This replaced an earlier pair of flags:
+
+| before | now |
+|---|---|
+| `--judge-model google:gemini-2.5-flash` | `--judge google:gemini-2.5-flash` |
+| `--judge-model claude-sonnet-5` | `--judge anthropic:claude-sonnet-5` |
+| `--judge api`, `--judge cli`, `--judge auto` | omit `--judge` |
+| `--judge none` | unchanged |
 
 Judging runs **after** the run finishes, from saved screenshots — scoring during
 the run would put model latency inside the window being measured. Only visually
