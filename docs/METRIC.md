@@ -338,7 +338,10 @@ and the output says so when the AUC range exceeds 0.15.
   including the ones taken before anything was listening, but consecutive
   frames whose luminance hash and colour grid are both exactly equal point at
   one file in `frames/`. The timeline in `result.json` is complete; the
-  directory holds one copy per distinct visual state.
+  directory holds one copy per distinct visual state. This means `frames/`
+  cannot be replayed as a timeline: stitching the directory listing gives every
+  distinct state equal screen time regardless of how long it was actually on
+  screen. `p2p video` rebuilds the real one from `result.json`.
 - **The prober reloads a non-rendering page** after 4 stale polls, and stops
   reloading once anything has rendered. A page that would have painted at 10s
   can be refreshed at ~4s and restart its boot; this is visible in the frame log.

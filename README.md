@@ -122,6 +122,23 @@ event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
 was given), `phases.jsonl` and `agent.log`. With `--video`, also `video.webm`.
 
+**`frames/` is not the timeline and cannot be replayed as one.** Consecutive
+identical screenshots share a file, so a forty-observation run can hold four
+PNGs; stitching the directory listing gives a four-frame video in which a blank
+minute and a finished app get equal screen time. The timeline is in
+`result.json`, where every observation carries its own `tMs`:
+
+```bash
+npm run p2p -- video runs/todo-app-claude-code-abc123
+```
+
+`p2p video` rebuilds it — each image held until the next observation, and the
+stretch before the first one left blank rather than back-filled with the first
+frame, which would claim the app was on screen before anything had been looked
+at. It shells out to `ffmpeg`, and prints the command to run by hand if there
+isn't one. `--to-horizon` pads every video to the brief's horizon so two runs
+come out the same length and can be played side by side.
+
 `--unsafe` passes `--dangerously-skip-permissions` to Claude Code. Without it an
 agent that needs to run commands will stall waiting for approval. **Sandboxes
 only.**

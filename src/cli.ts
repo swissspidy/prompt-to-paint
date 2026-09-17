@@ -1,4 +1,5 @@
-import { parseArgs } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,9 @@ import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
 import { renderCompareText, renderCompareHtml } from './report/compare.ts';
 import { renderLeaderboard, renderLeaderboardText } from './report/leaderboard.ts';
+import {
+  buildSegments, inferIntervalMs, renderConcat, ffmpegArgs, resolveShot, writeBlankFrame, timelineSpanMs,
+} from './report/video.ts';
 import { aggregate, renderAggregate } from './report/aggregate.ts';
 import { Progress } from './progress.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
@@ -39,6 +43,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p floor    --template <id> [options]    measure the toolchain with no agent
   p2p compare  <result.json...>             rank runs by trajectory and by final score
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
+  p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <backend>] [--brief <file>]
                                             re-score saved frames without re-running
   p2p briefs                                list bundled briefs
@@ -62,6 +67,12 @@ Options for run:
   --quiet-for  end the window after N seconds with nothing changing (default 120, 0 off)
   --stop-after-render  end the window N ms after the app first renders
   --no-render-early    drop the "render something early" clause from the protocol
+
+Options for video:
+  --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
+  --fps        output frame rate                 (default 30)
+  --to-horizon hold the last frame to the brief's horizon, so two runs' videos
+               are the same length and can be played side by side
   --headed     show the prober's browser window while the agent works
   --video      record the session to video.webm (Playwright screencast)
   --no-progress  no live status line
@@ -78,6 +89,50 @@ Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
   --title      heading for the page
 `;
+
+/** Quote an argument for a command line a person is meant to paste and run. */
+const shellQuote = (a: string): string =>
+  /^[\w.,:=/-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`;
+
+/**
+ * Check the encoded video is as long as the timeline it was built from.
+ *
+ * A dropped segment does not make ffmpeg fail. The concat demuxer skips inputs
+ * whose stream parameters do not match the first one and says nothing, so the
+ * video comes out short and every timestamp after the gap is wrong -- which is
+ * unnoticeable in a file nobody has measured. The timeline span is known
+ * exactly, so this compares against it rather than trusting the encode.
+ */
+async function assertVideoSpan(
+  sh: (f: string, a: string[]) => Promise<{ stdout: string }>,
+  out: string,
+  spanMs: number,
+  fps: number,
+): Promise<void> {
+  let seconds: number;
+  try {
+    const { stdout } = await sh('ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out,
+    ]);
+    seconds = Number(stdout.trim());
+  } catch {
+    // ffprobe usually ships with ffmpeg, but the check is a safety net rather
+    // than the job; not having it is not a reason to withhold the video.
+    console.log('  note: ffprobe not available, so the video length was not verified.');
+    return;
+  }
+  if (!Number.isFinite(seconds)) return;
+  // Rounding to whole output frames is expected; a missing segment is not.
+  const slackMs = (2000 / fps) + 250;
+  const driftMs = Math.abs(seconds * 1000 - spanMs);
+  if (driftMs > slackMs)
+    fail(
+      `the encoded video is ${seconds.toFixed(2)}s but the timeline is ${(spanMs / 1000).toFixed(2)}s.\n` +
+        `  ffmpeg dropped ${(driftMs / 1000).toFixed(2)}s, so every timestamp after the gap is wrong.\n` +
+        `  This is usually a frame whose pixel format differs from the rest; compare them with\n` +
+        `  ffprobe -show_entries stream=pix_fmt,width,height on the files in the concat script.`,
+    );
+}
 
 /** Print a usage error and exit, without a stack trace the user cannot act on. */
 function fail(msg: string): never {
@@ -143,6 +198,81 @@ async function main(): Promise<void> {
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs }));
     console.log(`  leaderboard: ${out}\n`);
+    return;
+  }
+
+  if (cmd === 'video') {
+    const { values: flags, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { out: { type: 'string' }, fps: { type: 'string' }, 'to-horizon': { type: 'boolean' } },
+    });
+    const dir = positionals[0];
+    if (!dir) fail('video needs a run directory');
+    const runDir = resolve(dir);
+    const result = JSON.parse(await readFile(join(runDir, 'result.json'), 'utf8')) as RunResult;
+
+    const fps = Number(flags.fps ?? 30);
+    if (!Number.isFinite(fps) || fps <= 0) fail(`--fps must be a positive number, got "${flags.fps}"`);
+
+    // A screenshot that is not where the result says it is becomes a blank
+    // frame, which is indistinguishable from a deliberately blank one, so it is
+    // counted rather than quietly substituted.
+    let missing = 0;
+    const segments = buildSegments(result.frames, {
+      tailMs: inferIntervalMs(result.frames),
+      holdToMs: flags['to-horizon'] ? result.curve.horizonMs : null,
+    }).map((seg) => {
+      if (!seg.src) return seg;
+      const found = resolveShot(runDir, seg.src);
+      if (!found) missing++;
+      return { ...seg, src: found };
+    });
+
+    if (!segments.length) fail(`no frames recorded in ${join(runDir, 'result.json')}`);
+    const anyShot = segments.find((seg) => seg.src)?.src;
+    if (!anyShot)
+      fail(
+        `none of this run's screenshots are on disk. result.json records absolute paths, so\n` +
+          `  moving runs/ breaks them; frames/ must sit beside result.json.`,
+      );
+    if (missing)
+      console.log(`  ! ${missing} of ${segments.length} segments have no screenshot on disk; they show blank.`);
+
+    const blankPath = join(runDir, 'timeline-blank.png');
+    if (segments.some((seg) => !seg.src)) await writeBlankFrame(blankPath, anyShot);
+    const concatPath = join(runDir, 'timeline.concat');
+    await writeFile(concatPath, renderConcat(segments, blankPath));
+
+    const out = resolve(flags.out ?? join(runDir, 'timeline.mp4'));
+    await mkdir(dirname(out), { recursive: true });
+    const args = ffmpegArgs(concatPath, out, fps);
+    const spanMs = timelineSpanMs(segments);
+    console.log(
+      `  ${result.frames.length} observations over ${(spanMs / 1000).toFixed(1)}s -> ${segments.length} segments`,
+    );
+
+    const sh = promisify(execFile);
+    try {
+      await sh('ffmpeg', ['-version']);
+    } catch {
+      // The timeline is the hard part and it is already written, so say exactly
+      // how to finish rather than throwing the work away.
+      console.error(
+        `\n  error: ffmpeg is not on PATH, so nothing was encoded.\n` +
+          `  The timeline is written; finish it with:\n\n` +
+          `    ffmpeg ${args.map(shellQuote).join(' ')}\n`,
+      );
+      process.exit(1);
+    }
+    try {
+      await sh('ffmpeg', args, { maxBuffer: 1 << 24 });
+    } catch (e) {
+      const err = e as { stderr?: string };
+      fail(`ffmpeg failed:\n${(err.stderr ?? String(e)).trim().split('\n').slice(-8).join('\n')}`);
+    }
+    await assertVideoSpan(sh, out, spanMs, fps);
+    console.log(`  video: ${out}\n`);
     return;
   }
 
