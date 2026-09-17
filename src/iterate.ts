@@ -1,6 +1,7 @@
 import type { AgentRunHandle, Frame, IterationMode, IterationResult, IterationSpec } from './types.ts';
 import type { Prober } from './probe/prober.ts';
 import { hamming, colorDelta } from './probe/pixels.ts';
+import { sleep } from './sleep.ts';
 
 export interface IterateOptions {
   prober: Prober;
@@ -21,8 +22,6 @@ export interface IterateOptions {
   /** Worst-cell colour distance counting as a visible change (0..255). */
   colorThreshold?: number;
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const isBroken = (c: Frame['class'] | undefined): boolean =>
   c === 'error' || c === 'blank' || c === 'unreachable';

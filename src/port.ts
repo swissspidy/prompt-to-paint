@@ -1,5 +1,6 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { sleep } from './sleep.ts';
 
 const sh = promisify(exec);
 
@@ -60,7 +61,7 @@ export async function ensureFreePort(url: string, port: number, autoKill: boolea
   // Give the socket a moment to be released before declaring victory.
   for (let i = 0; i < 10; i++) {
     if (!(await isOccupied(url))) return;
-    await new Promise((r) => setTimeout(r, 300));
+    await sleep(300);
   }
   throw new PortInUseError(`Could not free port ${port}; something is still serving at ${url}.`);
 }

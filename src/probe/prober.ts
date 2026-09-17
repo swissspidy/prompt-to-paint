@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { analyzeShot } from './pixels.ts';
 import { classify, ERROR_SELECTORS } from './classify.ts';
 import { findChromium } from './browser.ts';
+import { sleep } from '../sleep.ts';
 import type { Frame } from '../types.ts';
 
 export interface ProberOptions {
@@ -392,7 +393,7 @@ export class Prober {
    * baseline is the current state and not a frame up to one interval stale.
    */
   async sample(): Promise<Frame | null> {
-    for (let i = 0; i < 40 && this.capturing; i++) await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 40 && this.capturing; i++) await sleep(25);
     await this.tick();
     return this.frames.at(-1) ?? null;
   }
@@ -405,7 +406,7 @@ export class Prober {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     // Let an in-flight capture finish so the last frame is not truncated.
-    for (let i = 0; i < 50 && this.capturing; i++) await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 50 && this.capturing; i++) await sleep(50);
     await this.browser?.close().catch(() => undefined);
     this.browser = null;
     this.page = null;

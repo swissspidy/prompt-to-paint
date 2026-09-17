@@ -13,6 +13,7 @@ import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
 import { ensureFreePort, killPort } from './port.ts';
+import { sleep } from './sleep.ts';
 
 export interface RunOptions {
   brief: Brief;
@@ -39,8 +40,6 @@ export interface RunOptions {
   skipIterations?: boolean;
   onLog?: (msg: string) => void;
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Every agent is told the same thing about where to serve, so a run is never
@@ -155,26 +154,34 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // regardless would multiply benchmark wall time for no extra signal, since
     // the curve holds its last value anyway.
     type EndReason = 'turn' | 'horizon' | 'rendered';
-    // The losing branches keep running after Promise.race resolves. The render
-    // poll below would otherwise loop forever on a run that never renders,
-    // holding the process alive with its timers long after the race was decided.
-    let raceDecided = false;
+    // The losing branches keep running after Promise.race resolves, and a
+    // pending timer holds the whole process open. Waiting out an eight-minute
+    // horizon that the agent beat in thirty seconds is not a hypothetical: the
+    // CLI printed its report and then sat idle for the rest of it. Aborting
+    // stops the render poll and clears the horizon timer together.
+    const raceCtl = new AbortController();
     const races: Array<Promise<EndReason>> = [
       handle.waitForTurn(0).then((): EndReason => 'turn'),
-      sleep(horizonMs).then((): EndReason => 'horizon'),
+      sleep(horizonMs, raceCtl.signal).then((): EndReason => 'horizon'),
     ];
     if (opts.stopAfterRenderMs !== undefined) {
       const settleAfterRender = opts.stopAfterRenderMs;
+      const { signal } = raceCtl;
       races.push(
         (async (): Promise<EndReason> => {
-          while (!raceDecided && !prober.frames.some((f) => f.class === 'render')) await sleep(250);
-          if (!raceDecided) await sleep(settleAfterRender);
+          while (!signal.aborted && !prober.frames.some((f) => f.class === 'render'))
+            await sleep(250, signal);
+          if (!signal.aborted) await sleep(settleAfterRender, signal);
           return 'rendered';
         })(),
       );
     }
-    const ended = await Promise.race(races);
-    raceDecided = true;
+    let ended: EndReason;
+    try {
+      ended = await Promise.race(races);
+    } finally {
+      raceCtl.abort();
+    }
 
     if (ended === 'horizon')
       warnings.push(`Agent did not finish within the ${brief.horizonSec}s horizon.`);

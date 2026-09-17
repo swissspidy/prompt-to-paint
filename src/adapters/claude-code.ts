@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode, StreamFidelity } from '../types.ts';
 import { describeSpawnError } from './spawn-error.ts';
+import { sleep } from '../sleep.ts';
 
 export interface ClaudeCodeOptions {
   bin?: string;
@@ -165,7 +166,15 @@ export class ClaudeCodeAdapter implements Adapter {
           child.stdin.end();
         } catch { /* already closed */ }
         child.kill('SIGTERM');
-        await Promise.race([done, new Promise((r) => setTimeout(r, 5000))]);
+        // The grace timer must not outlive the process it was waiting for: a
+        // pending one holds the event loop open for its full five seconds after
+        // the agent has already exited.
+        const grace = new AbortController();
+        try {
+          await Promise.race([done, sleep(5000, grace.signal)]);
+        } finally {
+          grace.abort();
+        }
         if (child.exitCode === null) child.kill('SIGKILL');
       },
     };
