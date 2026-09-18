@@ -147,7 +147,11 @@ export async function salvageRun(runDir: string): Promise<SalvageOutcome> {
     label: header.label,
     startedAt: header.startedAt,
     t0Epoch: header.t0Epoch,
-    wallMs: side.frames.at(-1)!.tMs,
+    // The marker can be the last thing written: a process that died between
+    // closing the cold-start window and capturing the next frame leaves
+    // coldEndMs later than any frame, and a run whose runEndMs exceeds its
+    // wallMs is not a run anyone should have to reconcile.
+    wallMs: Math.max(side.frames.at(-1)!.tMs, coldEndMs),
     url: header.url,
     curve: computeMetrics(scoredCold, {
       horizonMs: header.horizonMs,

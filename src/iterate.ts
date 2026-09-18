@@ -97,7 +97,10 @@ export async function runIteration(
 
   let agentDoneMs: number | null = null;
   let doneAtWallMs = Number.POSITIVE_INFINITY;
-  void handle.waitForTurn(turnsBefore).then(() => {
+  // Kept, not discarded: a fast loop finishes the *edit* before the agent
+  // finishes the *turn*, and in that case this promise is the only thing that
+  // will ever know when the turn ended. See the bounded wait below.
+  const turnDone = handle.waitForTurn(turnsBefore).then(() => {
     agentDoneMs = Date.now() - t0Epoch;
     doneAtWallMs = Date.now();
   });
@@ -164,6 +167,24 @@ export async function runIteration(
 
   prober.setCheck(null);
   prober.setInterval(coldInterval);
+
+  // Wait for the turn to end before asking when it ended.
+  //
+  // The measurement loop stops the moment the check passes, which on a fast
+  // loop is *before* the agent stops talking -- exactly the case the signed
+  // `afterAgentMs` exists to describe. Reading it right there found
+  // `agentDoneMs` still null and reported no answer for the one situation the
+  // number was introduced to show. Nothing measured is affected: `endedMs` and
+  // `brokenMs` above are already fixed, and this window sits outside every
+  // clock. Bounded, because a turn that never completes must not hold the run.
+  if (timeToCorrectChangeMs !== null && agentDoneMs === null) {
+    const waitCtl = new AbortController();
+    try {
+      await Promise.race([turnDone, sleep(grace, waitCtl.signal)]);
+    } finally {
+      waitCtl.abort();
+    }
+  }
 
   // The part of the edit the agent is not accountable for: it had finished and
   // the page had not caught up. Deliberately signed -- a negative number means

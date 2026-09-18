@@ -387,7 +387,8 @@ before sending. See [docs/METRIC.md](docs/METRIC.md#the-verdict-cache) for why
 the key is the bytes and not a perceptual hash.
 
 Runs that are not on one scale refuse to be ranked together — different
-horizons, briefs, judges, judged-vs-unjudged, or prompted-vs-unprompted. See
+horizons, briefs, judges, judge temperatures, viewports, judged-vs-unjudged,
+prompted-vs-unprompted, or a run whose judging never finished. See
 [what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
 
 ## Recovering an interrupted run

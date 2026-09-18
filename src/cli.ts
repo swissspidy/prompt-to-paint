@@ -234,7 +234,8 @@ async function assertJudgeUsable(backend: JudgeBackend): Promise<void> {
 function num(name: string, raw: string | undefined, min = 1): number | undefined {
   if (raw === undefined) return undefined;
   const v = Number(raw);
-  if (!Number.isFinite(v) || v < min) fail(`--${name} must be a number of at least ${min}, got "${raw}"`);
+  if (!Number.isInteger(v) || v < min)
+    fail(`--${name} must be a whole number of at least ${min}, got "${raw}"`);
   return v;
 }
 
@@ -489,7 +490,7 @@ async function main(): Promise<void> {
       f.phase ? f.phase === 'cold' : f.tMs <= prev.curve.runEndMs;
     const judged = await judgeRun(prev.frames.filter(isCold), brief, {
       backend,
-      maxJudged: num('max-judged', values['max-judged']),
+      maxJudged: num('max-judged', values['max-judged'], 2),
       maxImageWidth: num('judge-width', values['judge-width'], 256),
     });
     const next: RunResult = {
@@ -673,7 +674,7 @@ async function main(): Promise<void> {
         headed: values.headed,
         videoPath: values.video ? join(runDir, 'video.webm') : undefined,
         keepServer: values['keep-server'],
-        maxJudged: num('max-judged', values['max-judged']),
+        maxJudged: num('max-judged', values['max-judged'], 2),
         maxImageWidth: num('judge-width', values['judge-width'], 256),
         onLog: (m) => (progress ? progress.log(m) : console.log(`  · ${m}`)),
         onFrame: (f) => progress?.onFrame(f),

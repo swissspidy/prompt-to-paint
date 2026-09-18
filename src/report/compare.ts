@@ -112,6 +112,17 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
     throw new Error(`cannot compare runs from different briefs (${briefs.join(', ')}): rubrics differ.`);
   }
 
+  // A run whose scoring pass never finished carries provisional scores and says
+  // so. It is not a judged run, whatever its judge block names, and ranking it
+  // presents entity coverage as rubric correctness under a model's byline.
+  const pending = runs.filter((r) => r.judge.pending);
+  if (pending.length) {
+    throw new Error(
+      `cannot compare runs whose judging did not finish (${pending.map((r) => r.label || r.adapter).join(', ')}): ` +
+        'their scores are provisional. Run `p2p rescore <runDir>` on each, then compare.',
+    );
+  }
+
   // A degraded run's score is entity coverage -- a text match against the
   // brief's nouns -- and a judged run's is rubric correctness. They are
   // different quantities that happen to share a 0..1 range.
@@ -134,6 +145,34 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
       `cannot compare runs scored by different judges (${judges.join(', ')}): judges disagree at the ` +
         'margin, so a ranking across them is partly a ranking of the judges. Re-score them onto one ' +
         'judge with `p2p rescore <runDir> --judge <provider:model>`.',
+    );
+  }
+
+  // Sampling conditions are part of the judge, not a footnote about it. The
+  // same model at two temperatures produces two score distributions, which is
+  // why the temperature is recorded at all. `unrecorded` is its own value
+  // rather than a wildcard: runs from before it was recorded compare with each
+  // other, and refuse to compare with runs that pinned it.
+  const temps = [...new Set(runs.map((r) => r.judge.temperature ?? 'unrecorded'))];
+  if (temps.length > 1) {
+    throw new Error(
+      `cannot compare runs scored at different judge temperatures (${temps.join(', ')}): the same model ` +
+        'samples differently at each, so part of the gap between these runs is the sampler. Re-score ' +
+        'them onto one setting with `p2p rescore <runDir>`.',
+    );
+  }
+
+  // The window a run was observed through decides what the judge was shown and
+  // what entity coverage counted, so it moves the AUC and ttfrrMs directly. Two
+  // runs of one brief seen through different windows are two measurements.
+  const windows = [...new Set(runs.map((r) => {
+    const v = r.viewport ?? { width: 1280, height: 800 };
+    return `${v.width}x${v.height}`;
+  }))];
+  if (windows.length > 1) {
+    throw new Error(
+      `cannot compare runs observed through different viewports (${windows.join(', ')}): the viewport ` +
+        'decides what the judge could see and what counted as on screen, so the scores are not on one scale.',
     );
   }
 

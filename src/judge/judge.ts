@@ -1,4 +1,5 @@
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
+import { writeJsonAtomic } from '../atomic.ts';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -16,6 +17,9 @@ export interface JudgeOptions {
   maxImageWidth?: number;
   onProgress?: (done: number, total: number) => void;
 }
+
+/** Width screenshots are downscaled to before they are sent to a judge. */
+export const DEFAULT_IMAGE_WIDTH = 1024;
 
 export interface JudgeSummary {
   frames: ScoredFrame[];
@@ -243,6 +247,11 @@ export async function judgeRun(
       prompt: brief.prompt,
       rubric: brief.rubric,
       judge: { backend: opts.backend.name, model: opts.backend.model },
+      // The image the judge sees is the screenshot downscaled to this width, so
+      // it is an input to the verdict as surely as the rubric is. Without it a
+      // rescore at a different --judge-width reads back verdicts formed from
+      // pictures it never sent.
+      imageWidth: opts.maxImageWidth ?? DEFAULT_IMAGE_WIDTH,
     }))
     .digest('hex')
     .slice(0, 12);
@@ -260,9 +269,12 @@ export async function judgeRun(
   const persist = (force = false): void => {
     if (!force && ++unsaved < 5) return;
     unsaved = 0;
-    saving = saving
-      .then(() => writeFile(cachePath, JSON.stringify(cache, null, 2)))
-      .catch(() => undefined);
+    // Atomic, because this runs every few verdicts: a plain write truncates the
+    // file first, so a process that stopped inside that window would leave
+    // unparseable JSON, and loadCache treats unparseable as cold -- discarding
+    // every verdict already paid for. Writing incrementally is only an
+    // improvement if the increments cannot destroy each other.
+    saving = saving.then(() => writeJsonAtomic(cachePath, cache)).catch(() => undefined);
   };
 
   const prompt = buildJudgePrompt(brief);
@@ -305,7 +317,7 @@ export async function judgeRun(
           opts.onProgress?.(++done, targets.length);
           continue;
         }
-        const png = downscalePngColor(full, opts.maxImageWidth ?? 1024);
+        const png = downscalePngColor(full, opts.maxImageWidth ?? DEFAULT_IMAGE_WIDTH);
         const raw = await opts.backend.ask({ png, prompt });
         calls++;
         const v = parseVerdict(raw);

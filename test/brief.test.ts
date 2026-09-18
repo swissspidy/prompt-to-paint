@@ -73,6 +73,10 @@ test('a target that cannot be observed is refused up front', () => {
     () => parseBrief({ ...valid, target: { viewport: { width: 1280, height: 10 } } }, 'b.json'),
     /target\.viewport/,
   );
+  // An explicit null passes `!== undefined`, and reading `.width` off it would
+  // throw a TypeError from inside the validator whose job is to name the file.
+  assert.throws(() => parseBrief({ ...valid, target: { viewport: null } }, 'b.json'), /target\.viewport/);
+  assert.throws(() => parseBrief({ ...valid, target: { viewport: 'big' } }, 'b.json'), /target\.viewport/);
   assert.doesNotThrow(
     () => parseBrief({ ...valid, target: { port: 5173, viewport: { width: 1280, height: 2400 } } }, 'b.json'),
   );

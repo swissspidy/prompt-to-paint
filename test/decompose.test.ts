@@ -278,16 +278,37 @@ test('an adapter that cannot see tool boundaries reports unknown, never zero', (
   assert.equal(w.toolMs, null);
 });
 
-test('a rebuild straddling the end of an edit still counts against it', () => {
-  // The case this exists for: one tool call, then eleven seconds of Vite. The
-  // wall clock is the same as nine tool calls of flailing, and only this tells
-  // them apart.
+test('a rebuild straddling an edit is charged only for the part inside it', () => {
+  // The case this exists for: one tool call, then a long Vite rebuild. The wall
+  // clock is the same as nine tool calls of flailing, and only this tells them
+  // apart -- but only the overlapping seconds belong to the edit. Charging the
+  // build's full eleven seconds to a four-second window bills the edit for work
+  // done after its change was already on screen.
   const w = iterationWork([], [
-    shimPhase('devserver', 0, null),       // started long before; not this edit's cost
-    shimPhase('build', 6000, 17_000),      // straddles the window end: it is
+    shimPhase('devserver', 0, null),       // started long before; still running
+    shimPhase('build', 6000, 17_000),      // straddles the window end
   ], { from: 5000, to: 9000, fidelity: 'full' });
   assert.deepEqual(w.phases.map((p) => p.kind), ['devserver', 'build']);
-  assert.equal(w.phases[1]?.ms, 11_000);
+  assert.equal(w.phases[1]?.ms, 3000, 'six to nine seconds, not six to seventeen');
+  assert.equal(w.phases[0]?.ms, null, 'a phase still running has no duration to apportion');
+});
+
+test('a phase that started before an edit is charged only from the prompt', () => {
+  const w = iterationWork([], [shimPhase('build', 1000, 7000)], { from: 5000, to: 9000, fidelity: 'full' });
+  assert.equal(w.phases[0]?.ms, 2000);
+});
+
+test('tool time survives a call that reports back after the edit landed', () => {
+  // attributeExplicit pairs by id, so cutting the events to the window first
+  // dropped the partner of any span crossing an edge -- and an unmatched result
+  // contributes nothing, so a tool the edit genuinely waited on read as zero.
+  const events = [
+    ev(5100, 'tool_use', { toolId: 'a', toolName: 'Bash' }),
+    ev(9500, 'tool_result', { toolId: 'a', toolName: 'Bash' }),  // after `to`
+  ];
+  const w = iterationWork(events, [], { from: 5000, to: 9000, fidelity: 'full' });
+  assert.equal(w.toolCalls, 1);
+  assert.ok(w.toolMs !== null && w.toolMs > 0, `tool time should not be zero, got ${w.toolMs}`);
 });
 
 test('a phase that finished before the prompt is not charged to the edit', () => {

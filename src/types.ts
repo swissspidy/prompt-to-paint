@@ -452,6 +452,16 @@ export interface RunResult {
     pending?: boolean;
   };
   /**
+   * The window this run was observed through, defaults included.
+   *
+   * It decides what the judge was shown and what entity coverage counted, so it
+   * changes the AUC and `ttfrrMs` as surely as the rubric does. Two runs of the
+   * same brief through different windows are not the same measurement, and
+   * without this recorded they would look like one. Absent on results written
+   * before v0.6, which were all 1280x800.
+   */
+  viewport?: { width: number; height: number };
+  /**
    * Set when the agent process died before the harness stopped it. A run that
    * failed to launch must never be mistaken for an agent that built nothing.
    */

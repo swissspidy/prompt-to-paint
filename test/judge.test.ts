@@ -403,3 +403,56 @@ test('verdicts survive a scoring pass that does not finish', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a different judge width does not reuse the old width\'s verdicts', async () => {
+  // The cache key is the screenshot on disk, but the judge is sent that
+  // screenshot downscaled. The width is therefore an input to the verdict, and
+  // a rescore at another width must not read back answers formed from pictures
+  // it never sent.
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-width-'));
+  try {
+    const png = flatPng(800, 600, [[100, 200]]);
+    await writeFile(join(dir, 'a.png'), png);
+    const frames: Frame[] = [{ ...frame(0, dhash(decodeGray(png))), screenshotPath: join(dir, 'a.png') }];
+
+    let calls = 0;
+    const backend: JudgeBackend = {
+      name: 'ai', model: 'test:model', concurrency: 1,
+      ask: async () => { calls++; return JSON.stringify({ criteria: { renders: { met: true } } }); },
+    };
+    await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0, maxImageWidth: 512 });
+    assert.equal(calls, 1);
+    await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0, maxImageWidth: 512 });
+    assert.equal(calls, 1, 'the same width reuses the verdict');
+    await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0, maxImageWidth: 256 });
+    assert.equal(calls, 2, 'a different width judges the image it actually sends');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the verdict cache survives being written over and over', async () => {
+  // Written every few verdicts, so a plain truncating write would leave
+  // unparseable JSON if the process stopped mid-write -- and loadCache treats
+  // unparseable as cold, discarding everything already paid for.
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-atomic-'));
+  try {
+    const frames: Frame[] = [];
+    for (let i = 0; i < 12; i++) {
+      const png = flatPng(400, 300, [[10 + i * 12, 40 + i * 3]]);
+      await writeFile(join(dir, `f${i}.png`), png);
+      frames.push({ ...frame(i, dhash(decodeGray(png))), screenshotPath: join(dir, `f${i}.png`) });
+    }
+    const backend: JudgeBackend = {
+      name: 'ai', model: 'test:model', concurrency: 4,
+      ask: async () => JSON.stringify({ criteria: { renders: { met: true } } }),
+    };
+    const out = await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0 });
+    const file = (await readdir(dir)).find((f) => f.startsWith('judge-v2-'))!;
+    const parsed = JSON.parse(await readFile(join(dir, file), 'utf8')) as Record<string, unknown>;
+    assert.equal(Object.keys(parsed).length, out.framesJudged, 'nothing was lost between writes');
+    assert.equal((await readdir(dir)).filter((f) => f.endsWith('.tmp')).length, 0, 'no scratch file left behind');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

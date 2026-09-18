@@ -152,7 +152,28 @@ export function iterationWork(
   // That is the exact misattribution this split exists to prevent, so it must
   // not be reintroduced by the way the function is called.
   const lastEventMs = inWindow.at(-1)?.tMs ?? from;
-  const stream = full ? attributeAgentStream(inWindow, lastEventMs) : { model: [], tool: [] };
+
+  // Attribute over the *whole* stream and clip afterwards, rather than
+  // attributing over a slice of it. A tool call that opens inside the window
+  // and reports back outside it -- or the reverse -- loses its partner when the
+  // events are cut first, and `attributeExplicit` pairs by id: an unmatched
+  // `tool_result` is dropped entirely, so a tool the edit genuinely waited on
+  // could contribute zero. Pairing needs the events either side; the window
+  // only decides what is counted, which is what the clip below does.
+  const streamEndMs = events.at(-1)?.tMs ?? to;
+  const stream = full ? attributeAgentStream(events, streamEndMs) : { model: [], tool: [] };
+
+  // How far into the window the agent was demonstrably still working.
+  //
+  // Its last *event* is not the answer on its own: a tool that opens inside the
+  // edit and reports back after it leaves no event in between, and stopping at
+  // the open would clip that whole span to nothing. Nor is the window's end,
+  // which would hand the tail rule the page's catch-up time and book it as
+  // thinking. It is the later of the two, capped by the window.
+  const activeUntil = Math.min(
+    to,
+    Math.max(lastEventMs, ...stream.tool.filter((i) => i.start >= from && i.start <= to).map((i) => i.end)),
+  );
 
   // Clip to the window before totalling.
   //
@@ -167,7 +188,7 @@ export function iterationWork(
   const clip = (ivs: Interval[]): number =>
     Math.round(total(
       ivs
-        .map((i) => ({ start: Math.max(i.start, from), end: Math.min(i.end, lastEventMs) }))
+        .map((i) => ({ start: Math.max(i.start, from), end: Math.min(i.end, activeUntil) }))
         .filter((i) => i.end > i.start),
     ));
 
@@ -194,7 +215,14 @@ export function iterationWork(
       .map((p) => ({
         kind: p.kind,
         cmd: [p.cmd, ...p.argv].join(' ').slice(0, 60),
-        ms: p.endMs === null ? null : Math.round(p.endMs - p.startMs),
+        // The overlapping part, not the whole command. A build running from
+        // 6s to 17s that straddles an edit ending at 9s spent three of those
+        // seconds on this edit, and reporting eleven charges it for work done
+        // after the change was already on screen. Null stays null: a phase
+        // still running has no duration to apportion.
+        ms: p.endMs === null
+          ? null
+          : Math.round(Math.max(0, Math.min(p.endMs, to) - Math.max(p.startMs, from))),
       })),
   };
 }
@@ -264,6 +292,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
 
   const port = brief.target?.port ?? 5173;
   const url = brief.target?.url ?? `http://127.0.0.1:${port}/`;
+  // Resolved once, so the window the prober uses and the window the result
+  // records cannot drift apart.
+  const viewport = brief.target?.viewport ?? { width: 1280, height: 800 };
   const horizonMs = brief.horizonSec * 1000;
   const warnings: string[] = [];
 
@@ -283,10 +314,17 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   // Appends are chained rather than fired in parallel: two concurrent appends
   // can interleave inside one line and a half-written JSON object would take
   // the rest of the file with it.
+  let framesLogError: string | null = null;
   const recordLine = (obj: unknown): void => {
     framesLog = framesLog
       .then(() => appendFile(framesLogPath, `${JSON.stringify(obj)}\n`))
-      .catch(() => undefined);
+      // Swallowed so one bad append cannot take the run down, but remembered:
+      // a full disk or a removed directory would otherwise leave a truncated
+      // frames.ndjson while the run still advertises it as the way to recover,
+      // and the final await cannot tell a failed chain from a finished one.
+      .catch((e) => {
+        framesLogError ??= String(e).slice(0, 200);
+      });
   };
   const recordFrame = (f: Frame): void => recordLine(slimText(f));
 
@@ -301,7 +339,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     framesDir,
     t0Epoch,
     intervalMs: opts.pollMs ?? 1000,
-    viewport: brief.target?.viewport,
+    viewport,
     headed: opts.headed,
     videoPath: opts.videoPath,
     onFrame: (f) => {
@@ -800,8 +838,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   const offscreen = lastWithText?.offscreenTextChars ?? 0;
   const onscreen = lastWithText?.text.length ?? 0;
   if (offscreen > 0) {
-    const vp = brief.target?.viewport ?? { width: 1280, height: 800 };
-    const window_ = `${vp.width}x${vp.height} viewport`;
+    const window_ = `${viewport.width}x${viewport.height} viewport`;
     if (onscreen === 0) {
       // The whole page is out of frame. Qualitatively worse than some of it
       // being hidden, and it does not even produce a rendering frame to notice
@@ -822,6 +859,12 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       );
     }
   }
+
+  if (framesLogError)
+    warnings.push(
+      `The frame log at ${framesLogPath} could not be written (${framesLogError}). It is incomplete, ` +
+        'so `p2p salvage` would recover only part of this run. result.json below is unaffected.',
+    );
 
   // An empty workdir is not proof of anything on its own -- a run the agent
   // never started has one too -- but beside a page that rendered it is the
@@ -924,6 +967,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     agentEvents,
     judge,
     agentFailure,
+    viewport,
     endReason,
     protocol: { renderEarly: !opts.noRenderEarly },
     artifacts: {

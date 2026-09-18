@@ -88,24 +88,61 @@ export const OBSERVE = `(() => {
     const range = document.createRange();
     const parts = [];
     let seen = 0;
+    let wordBudget = 20000;
+    // A rect that overlaps the viewport at all. Zero-area rects are what a
+    // display:none or collapsed node produces.
+    const shows = (r) => r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    const anyShows = (rects) => {
+      for (let i = 0; i < rects.length; i++) if (shows(rects[i])) return true;
+      return false;
+    };
+    // Whitespace by code point rather than a regex: an escape like \\s written
+    // in the template literal that builds this script is swallowed before the
+    // page ever sees it, and the result is a subtly wrong matcher rather than
+    // an error anything would catch.
+    const isSpace = (ch) => ch.charCodeAt(0) <= 32;
     for (let n = walker.nextNode(); n && seen < 4000; n = walker.nextNode()) {
       const raw = n.nodeValue;
       if (!raw || !raw.trim()) continue;
       const parent = n.parentElement;
       if (!parent || parent.closest('script,style,noscript,template')) continue;
       seen++;
-      let onScreen = false;
       try {
         range.selectNodeContents(n);
         const rects = range.getClientRects();
-        for (let i = 0; i < rects.length; i++) {
-          const r = rects[i];
-          if (r.width <= 0 || r.height <= 0) continue;
-          if (r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw) { onScreen = true; break; }
+        if (rects.length <= 1) {
+          if (anyShows(rects)) parts.push(raw.trim());
+          else offscreenChars += raw.trim().length;
+          continue;
         }
-      } catch {}
-      if (onScreen) parts.push(raw.trim());
-      else offscreenChars += raw.trim().length;
+        // More than one rect means the node wraps across lines, and the lines
+        // need not agree about being on screen: a paragraph can begin inside
+        // the viewport and run past the fold. Crediting the whole node because
+        // one of its lines is visible would let an entity below the fold count
+        // as reviewable -- the exact confusion between "in the DOM" and "on
+        // screen" that this whole rectangle rule exists to settle. So each word
+        // is measured on its own.
+        let visible = '';
+        let hidden = 0;
+        let i = 0;
+        while (i < raw.length && wordBudget > 0) {
+          while (i < raw.length && isSpace(raw[i])) i++;
+          if (i >= raw.length) break;
+          const start = i;
+          while (i < raw.length && !isSpace(raw[i])) i++;
+          wordBudget--;
+          const word = raw.slice(start, i);
+          range.setStart(n, start);
+          range.setEnd(n, i);
+          if (anyShows(range.getClientRects())) visible += (visible ? ' ' : '') + word;
+          else hidden += word.length;
+        }
+        if (visible) parts.push(visible);
+        offscreenChars += hidden;
+      } catch {
+        // A node that cannot be measured is not evidence of anything on screen.
+        offscreenChars += raw.trim().length;
+      }
     }
     text = parts.join('\\n');
   }

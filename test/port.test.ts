@@ -23,6 +23,9 @@ async function noLookupTool(): Promise<boolean> {
 test('killPort kills the listener and spares this process, which is only a client', async (t) => {
   if (await noLookupTool()) return t.skip('no lsof, ss or fuser here');
   const child = listener(PORT);
+  // Registered before the first await: an assertion that fails below would
+  // otherwise leave this server holding the port and the worker open.
+  t.after(() => { child.kill('SIGKILL'); });
   await once(child.stdout!, 'data');
 
   // This is the whole bug. `lsof -i tcp:PORT` matches sockets with that number
@@ -60,6 +63,7 @@ test('killPort on an empty port does nothing and says it looked', async (t) => {
 test('a port is free again once its listener has been killed', async (t) => {
   if (await noLookupTool()) return t.skip('no lsof, ss or fuser here');
   const child = listener(PORT + 2);
+  t.after(() => { child.kill('SIGKILL'); });
   await once(child.stdout!, 'data');
   await killPort(PORT + 2);
   await sleep(200);

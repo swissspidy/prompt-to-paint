@@ -50,7 +50,11 @@ export function parseBrief(raw: unknown, source: string): Brief {
     );
   if (t?.viewport !== undefined)
     need(
-      Number.isInteger(t.viewport.width) && t.viewport.width >= 320 &&
+      // `!== undefined` alone lets an explicit null through, and reading
+      // `.width` off it throws a TypeError from inside a validator whose whole
+      // job is to turn bad briefs into a sentence naming the file.
+      t.viewport !== null && typeof t.viewport === 'object' &&
+        Number.isInteger(t.viewport.width) && t.viewport.width >= 320 &&
         Number.isInteger(t.viewport.height) && t.viewport.height >= 320,
       `${source}: "target.viewport" needs integer width and height of at least 320`,
     );

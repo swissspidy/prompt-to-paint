@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, writeFile, chmod, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { listenersOn } from '../../src/port.ts';
 import { execFile } from 'node:child_process';
@@ -495,6 +496,35 @@ test('what the judge sees and what counts as reviewable are the same rectangle',
     } finally {
       await rm(dir2, { recursive: true, force: true });
     }
+
+    // One paragraph that begins inside the viewport and runs past the fold.
+    // Crediting the whole text node because its first line is visible would let
+    // an entity below the fold count as reviewable -- the same confusion
+    // between "in the DOM" and "on screen", one node lower down.
+    const dir3 = await tmp('p2p-fold3-');
+    try {
+      const filler = Array.from({ length: 200 }, (_, i) => `filler${i}`).join(' ');
+      const wrapped = '<!doctype html><meta charset=utf-8><body style="margin:0;font:16px/24px monospace">'
+        + `<p style="margin:0">DevConf 2026 ${filler} See you in Berlin</p></body>`;
+      const run3 = await runBenchmark({
+        brief: {
+          ...base, horizonSec: 25, iterations: [],
+          target: { ...base.target, port: 5294, viewport: { width: 400, height: 200 } },
+        },
+        adapter: new ScriptedAdapter({ steps: [{ atMs: 0, write: { path: 'index.html', content: wrapped } }] }),
+        runDir: dir3, label: 'wrapped', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+      });
+      const f = [...run3.frames].reverse().find((fr) => fr.text.length > 0);
+      assert.ok(f, 'the page was observed');
+      assert.ok(f.text.includes('DevConf 2026'), 'the visible start of the paragraph counts');
+      assert.ok(
+        !f.text.includes('See you in Berlin'),
+        'its tail, far below the fold, does not -- even though one node holds both',
+      );
+      assert.ok(f.offscreenTextChars > 0, 'and the hidden part is counted as hidden');
+    } finally {
+      await rm(dir3, { recursive: true, force: true });
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -511,13 +541,24 @@ test('Ctrl-C takes the agent\'s dev server with it', { skip: needsBrowser, timeo
   // and exit the process. The harness's teardown got as far as closing the
   // browser and was then pre-empted, so a Ctrl-C looked tidy -- the window
   // vanished -- while the agent and its server ran on.
-  const PORT = 5289;
+  // A port the OS just handed out, not a fixed one. This test has to clear
+  // whatever ends up listening afterwards, and on a fixed port that could be a
+  // developer's or a CI service's own process rather than anything it started.
+  // Asking for port 0 and reading back what was assigned means anything found
+  // on it later can only have come from here.
+  const PORT = await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const addr = probe.address();
+      const p = typeof addr === 'object' && addr ? addr.port : 0;
+      probe.close(() => (p ? resolve(p) : reject(new Error('no port assigned'))));
+    });
+  });
   const dir = await tmp('p2p-sigint-');
   const serve = `node -e "require('http').createServer((q,s)=>s.end('<h1>Orbit</h1>')).listen(${PORT},'127.0.0.1')" & sleep 600`;
 
-  for (const pid of (await listenersOn(PORT)).pids) {
-    try { process.kill(pid, 'SIGKILL'); } catch { /* not ours */ }
-  }
+  assert.deepEqual((await listenersOn(PORT)).pids, [], 'the reserved port starts clear');
 
   // The agent serves this port itself, so the brief must target it and must not
   // ask the harness to serve the workdir -- otherwise the port under test is not
@@ -573,9 +614,41 @@ test('Ctrl-C takes the agent\'s dev server with it', { skip: needsBrowser, timeo
     assert.ok(existsSync(join(dir, runDirs[0]!, 'frames.ndjson')), 'the timeline survived the interrupt');
   } finally {
     if (cli.exitCode === null && cli.signalCode === null) cli.kill('SIGKILL');
+    // Safe because the port was reserved above and verified empty: anything on
+    // it now was started by this test.
     for (const pid of (await listenersOn(PORT)).pids) {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* not ours */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
     }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a frame log that cannot be written says so instead of promising recovery', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-badlog-');
+  try {
+    // A directory where the log file should go: every append fails with EISDIR,
+    // which stands in for the full disk or removed directory this guards. The
+    // appends are fire-and-forget so one bad write cannot take the run down,
+    // and that is exactly how an incomplete frames.ndjson used to go unnoticed
+    // while the run still advertised `p2p salvage` as the way back.
+    await mkdir(join(dir, 'frames.ndjson'), { recursive: true });
+
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 20, iterations: [], target: { ...base.target, port: 5290 } },
+      adapter: new ScriptedAdapter({
+        steps: [{ atMs: 0, write: { path: 'index.html', content: '<!doctype html><h1>DevConf 2026</h1>' } }],
+      }),
+      runDir: dir, label: 'badlog', judgeBackend: new NullBackend(), settleMs: 1000, killPort: true,
+    });
+
+    assert.ok(
+      result.warnings.some((w) => /frame log .* could not be written/.test(w)),
+      `the run should report the failed log, got: ${result.warnings.join(' | ')}`,
+    );
+    // And the run itself is unharmed: result.json is the primary record.
+    assert.ok(result.frames.length > 0, 'the timeline in the result is intact');
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

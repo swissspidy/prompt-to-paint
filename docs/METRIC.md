@@ -143,8 +143,11 @@ halves disagreed: a page whose content sat below 800px could be called
 *reviewable* by one and empty by the other, and TTFRR could fire on text nobody
 could see without scrolling.
 
-Now the text a frame records is the text inside the viewport, measured per text
-node against the visible rectangle. `classify` and `entityCoverage` both read
+Now the text a frame records is the text inside the viewport. A text node that
+wraps is measured **word by word**, not as a whole: a paragraph can begin inside
+the viewport and run past the fold, and crediting all of it because its first
+line is visible would put an entity nobody can see back into `ttfrrMs` — the same
+confusion between "in the DOM" and "on screen", one node lower down. `classify` and `entityCoverage` both read
 it, so the judge, the render classification and the reviewability threshold all
 mean the same thing by "on screen".
 
@@ -414,6 +417,10 @@ working directory). The file is keyed by the brief, its rubric **and the judge**
 so two judges can never answer for each other — that would defeat the one thing
 `p2p rescore --judge` exists to do.
 
+The file is also keyed by the width screenshots are downscaled to before they
+are sent (`--judge-width`): the judge sees that image, not the one on disk, so it
+is an input to the verdict as surely as the rubric is.
+
 Inside the file, each verdict is keyed by a **SHA-256 of the screenshot's
 bytes**. It was previously keyed by the frame's `dhash`, which is wrong in a way
 that leaves no trace: a dhash is a 64-bit perceptual hash of a 9×8 downscale,
@@ -424,6 +431,12 @@ an exact key in a file shared by every run of one brief, that let a verdict
 earned by one agent's page be served for another agent's different page, with
 the collision rate rising as the cache filled. Caches written under the old
 scheme are ignored rather than migrated.
+
+Verdicts are written as they arrive rather than once at the end, and written
+atomically: a truncating write that stopped halfway would leave unparseable JSON,
+and an unparseable cache is read as a cold one — discarding every verdict already
+paid for. Writing incrementally is only an improvement if the increments cannot
+destroy each other.
 
 Perceptual similarity still has a job: it is how `selectFramesToJudge` decides a
 frame is not worth a fresh call. That is a threshold applied within one run, not
@@ -445,6 +458,15 @@ check guards a table that would otherwise look completely normal:
 - **different briefs** — different rubrics.
 - **different judges** — they disagree at the margin, so a ranking across them is
   partly a ranking of the judges.
+- **different judge temperatures** — the same model samples differently at each,
+  so part of the gap would be the sampler. A run from before the temperature was
+  recorded compares with its own kind and refuses to compare with one that
+  pinned it.
+- **different viewports** — the window decides what the judge was shown and what
+  counted as on screen, so it moves the AUC as directly as the rubric does. It
+  is recorded on every result, defaults included.
+- **unfinished judging** — a `judge.pending` result carries provisional scores;
+  ranking it presents entity coverage under a model's byline.
 - **judged mixed with unjudged** — entity coverage and rubric correctness are
   different quantities that happen to share a 0..1 range.
 - **prompted mixed with unprompted** — different questions. `compare` refuses

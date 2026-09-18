@@ -60,12 +60,34 @@ export function aggregate(runs: RunResult[]): Aggregate {
   for (const b of BUCKET_ORDER) {
     bucketMedians[b] = spread(runs.map((r) => r.decomposition.buckets[b])).median ?? 0;
   }
-  const judges = [...new Set(runs.map((r) => r.judge.model ?? `none:${r.judge.backend}`))];
+  // Two names for the judge, because they answer different questions. The model
+  // is what a reader wants printed; the identity is what decides whether these
+  // runs may be pooled at all, and it includes the sampling temperature -- the
+  // same model at two settings is two scorers, so a median across them mixes
+  // agent variance with sampler variance.
+  const named = (r: RunResult): string => r.judge.model ?? `none:${r.judge.backend}`;
+  const models = [...new Set(runs.map(named))];
+  const identities = [...new Set(runs.map((r) => `${named(r)}@${r.judge.temperature ?? 'unrecorded'}`))];
   const warnings: string[] = [];
-  if (judges.length > 1)
+  if (models.length > 1)
     warnings.push(
-      `These runs were scored by different judges (${judges.join(', ')}), so the spread below mixes ` +
+      `These runs were scored by different judges (${models.join(', ')}), so the spread below mixes ` +
         'agent variance with judge disagreement and cannot be read as either.',
+    );
+  else if (identities.length > 1)
+    warnings.push(
+      `These runs were scored by ${models[0]} at different temperatures (${identities.join(', ')}). The ` +
+        'same model samples differently at each, so part of the spread below is the sampler rather than ' +
+        'the agent.',
+    );
+  const viewports = [...new Set(runs.map((r) => {
+    const v = r.viewport ?? { width: 1280, height: 800 };
+    return `${v.width}x${v.height}`;
+  }))];
+  if (viewports.length > 1)
+    warnings.push(
+      `These runs were observed through different viewports (${viewports.join(', ')}), which decides what ` +
+        'the judge could see. Their scores are not on one scale.',
     );
   if (runs.some((r) => r.judge.degraded) && !runs.every((r) => r.judge.degraded))
     warnings.push(
@@ -76,7 +98,7 @@ export function aggregate(runs: RunResult[]): Aggregate {
     brief: runs[0]?.brief ?? '',
     label: runs[0]?.label ?? '',
     runs: runs.length,
-    judge: judges.length === 1 ? judges[0]! : null,
+    judge: identities.length === 1 ? models[0]! : null,
     auc: spread(runs.map((r) => r.curve.auc)),
     ttfnbrMs: spread(runs.map((r) => r.curve.ttfnbrMs)),
     ttfrrMs: spread(runs.map((r) => r.curve.ttfrrMs)),

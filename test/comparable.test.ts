@@ -21,7 +21,8 @@ const run = (over: Partial<RunResult> = {}): RunResult => ({
     coverage: 1, crossCheck: { reportedApiMs: null, attributedModelMs: 0, deltaMs: null }, notes: [],
   },
   iterations: [], frames: [], phases: [], agentEvents: [],
-  judge: { backend: 'ai', model: 'anthropic:claude-sonnet-5', framesJudged: 10, degraded: false },
+  judge: { backend: 'ai', model: 'anthropic:claude-sonnet-5', framesJudged: 10, degraded: false, temperature: 0 },
+  viewport: { width: 1280, height: 800 },
   agentFailure: null, endReason: 'signal', protocol: { renderEarly: true }, warnings: [],
   ...over,
 });
@@ -85,4 +86,44 @@ test('bucket medians are absolute, because they do not add up to a run', () => {
   assert.match(text, /do not sum to a run/);
   assert.doesNotMatch(text, /\d+%/, 'no percentage is offered for a breakdown of nothing');
   assert.match(text, /median wall clock/);
+});
+
+test('a run whose judging never finished is not a judged run', () => {
+  // Provisional scores are entity coverage wearing a model's byline. Ranking
+  // them presents one as the other.
+  const partial = run({ label: 'b', judge: { ...run().judge, pending: true } });
+  assert.throws(() => assertComparable([run(), partial]), /judging did not finish/);
+  assert.throws(() => assertComparable([partial]), /judging did not finish/);
+});
+
+test('one model at two temperatures is two scorers', () => {
+  assert.throws(
+    () => assertComparable([run(), run({ label: 'b', judge: { ...run().judge, temperature: 1 } })]),
+    /different judge temperatures/,
+  );
+  // A run from before the temperature was recorded compares with its own kind,
+  // and refuses to compare with one that pinned it.
+  const legacy = run({ label: 'old', judge: { ...run().judge, temperature: undefined } });
+  assert.doesNotThrow(() => assertComparable([legacy, run({ label: 'old2', judge: { ...run().judge, temperature: undefined } })]));
+  assert.throws(() => assertComparable([run(), legacy]), /different judge temperatures/);
+});
+
+test('two viewports are two measurements, not two agents', () => {
+  // The viewport decides what the judge was shown and what counted as on
+  // screen, so it moves the AUC as directly as the rubric does.
+  assert.throws(
+    () => assertComparable([run(), run({ label: 'b', viewport: { width: 1280, height: 2400 } })]),
+    /different viewports/,
+  );
+  // An unrecorded viewport is the old default, so it compares with it.
+  assert.doesNotThrow(() => assertComparable([run(), run({ label: 'b', viewport: undefined })]));
+});
+
+test('an aggregate separates the judge it prints from the judge it pools on', () => {
+  const sameModelTwoTemps = aggregate([run(), run({ judge: { ...run().judge, temperature: 1 } })]);
+  assert.equal(sameModelTwoTemps.judge, null, 'these may not be pooled');
+  assert.ok(sameModelTwoTemps.warnings.some((w) => /different temperatures/.test(w)));
+
+  const clean = aggregate([run(), run()]);
+  assert.equal(clean.judge, 'anthropic:claude-sonnet-5', 'and the printed name stays readable');
 });

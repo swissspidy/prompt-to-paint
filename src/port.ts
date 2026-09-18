@@ -33,17 +33,26 @@ async function probe(file: string, args: string[], parse: (out: string) => numbe
     const { stdout } = await run(file, args, { timeout: 5000 });
     return { ran: true, pids: parse(stdout) };
   } catch (e) {
-    const err = e as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
-    // ENOENT is the tool missing; anything else means it ran and disliked
-    // something. lsof and ss both exit non-zero on an empty match, which is an
-    // answer -- the port has no listener -- not a failure.
-    if (err.code === 'ENOENT') return { ran: false, pids: [] };
+    const err = e as NodeJS.ErrnoException & {
+      stdout?: string; stderr?: string; killed?: boolean; signal?: string | null; code?: unknown;
+    };
     const out = typeof err.stdout === 'string' ? err.stdout : '';
     const pids = parse(out);
-    // A non-empty stderr with no pids is a real error (bad flags, no
-    // permission), not an empty result, so let the next strategy try.
-    const noisy = Boolean(err.stderr && err.stderr.trim());
-    return { ran: !noisy || pids.length > 0, pids };
+    // Anything parsed is real, whatever else went wrong.
+    if (pids.length) return { ran: true, pids };
+
+    // `ran` means "this tool looked and found nothing", and only a clean
+    // no-match may claim it. Everything else -- the tool missing, a timeout, a
+    // kill, a permission error, bad flags -- is a lookup that did not happen,
+    // and saying otherwise is worse than saying nothing: `listenersOn` reports
+    // the port inspected, `killPort` signals no one, and the run suppresses the
+    // very warning that would explain why a leaked dev server survived.
+    if (err.killed || err.signal) return { ran: false, pids: [] };
+    if (typeof err.code === 'string') return { ran: false, pids: [] }; // ENOENT, EACCES, ETIMEDOUT
+    if (err.stderr && err.stderr.trim()) return { ran: false, pids: [] };
+    // A numeric exit status with empty output: lsof, ss and fuser all report an
+    // empty match this way.
+    return { ran: typeof err.code === 'number', pids: [] };
   }
 }
 
