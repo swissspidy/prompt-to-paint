@@ -565,9 +565,16 @@ async function main(): Promise<void> {
         );
       }
       makeAdapter = () => new ClaudeCodeAdapter({
+        // `--bin` and `--agent-arg` are documented for every agent and were
+        // wired only to antigravity, so both were accepted here and silently
+        // dropped. A flag that does nothing is worse than one that errors: the
+        // run it was meant to configure happens anyway, looks ordinary, and
+        // answers a question nobody asked.
+        bin: values.bin,
         model: values.model,
         skipPermissions: values.unsafe,
         permissionMode: values['permission-mode'],
+        extraArgs: values['agent-arg'],
       });
       label ||= values.model ? `claude-code:${values.model}` : 'claude-code';
       if (!values.unsafe && !values['permission-mode'])
@@ -579,6 +586,7 @@ async function main(): Promise<void> {
         provider: values.provider,
         model: values.model,
         tools: values.tools,
+        extraArgs: values['agent-arg'],
       });
       label ||= values.model ? `pi:${values.model}` : 'pi';
       if (!values.model)

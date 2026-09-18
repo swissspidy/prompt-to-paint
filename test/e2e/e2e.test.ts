@@ -899,6 +899,47 @@ test('the frames before anything is serving are captured, not skipped', { skip: 
   }
 });
 
+test('a bundled iteration check survives the CSS a real agent writes', { skip: needsBrowser, timeout: 60_000 }, async () => {
+  // The exact page a claude-code run produced for todo-app: column headers
+  // styled `text-transform: uppercase`, so the fourth column reads BLOCKED. The
+  // brief's check read `document.body.innerText`, which is the text *as
+  // rendered*, and compared it with `.includes('Blocked')`. The edit was in the
+  // screenshot, in the workdir and in the viewport text the same frame
+  // recorded; the harness reported NEVER LANDED.
+  //
+  // Evaluated the way the prober evaluates it, in a real browser, because that
+  // is where the two spellings of the word diverge -- nothing about the check
+  // read wrong on the page.
+  const { chromium } = await import('playwright');
+  const { loadBrief } = await import('../../src/brief.ts');
+  const brief = await loadBrief('briefs/todo-app.json');
+  const check = brief.iterations?.find((i) => i.id === 'add-column')?.check;
+  assert.ok(check, 'todo-app still has the add-column iteration');
+
+  const browser = await chromium.launch({ executablePath: findChromium(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    const board = (columns: string[]): string =>
+      '<style>h2{text-transform:uppercase}</style><body><h1>Orbit</h1>'
+      + columns.map((c) => `<div class="column"><h2>${c}</h2></div>`).join('')
+      + '</body>';
+
+    await page.setContent(board(['Todo', 'In Progress', 'Done']));
+    assert.equal(
+      await page.evaluate(`Boolean(${check})`), false,
+      'before the edit the check must not pass, or the iteration is void',
+    );
+
+    await page.setContent(board(['Todo', 'In Progress', 'Done', 'Blocked']));
+    assert.equal(
+      await page.evaluate(`Boolean(${check})`), true,
+      'the column is on screen, whatever case the CSS renders it in',
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 test('bundled briefs resolve from the package, not the working directory', async () => {
   // An installed CLI is run from somewhere else entirely.
   const elsewhere = await tmp('p2p-cwd-');

@@ -110,8 +110,8 @@
     {
       "id": "add-column",
       "prompt": "Add a fourth column called \"Blocked\" after Done.",
-      "description": "A structural edit, not just a style token.",
-      "check": "document.body.innerText.includes('Blocked')"
+      "description": "A structural edit, not just a style token. Matched case-insensitively because innerText is the text as rendered: a column header styled text-transform: uppercase reads BLOCKED, and a case-sensitive check called a visibly landed edit NEVER LANDED.",
+      "check": "/\\bblocked\\b/i.test(document.body.innerText)"
     }
   ]
 }

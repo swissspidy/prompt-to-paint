@@ -54,6 +54,29 @@ test('the bundled briefs are all valid', async () => {
   }
 });
 
+test('a bundled check that reads innerText matches case-insensitively', async () => {
+  // innerText is the text *as rendered*, so CSS decides its case. A column
+  // header styled `text-transform: uppercase` -- an ordinary design choice, and
+  // what a real agent produced -- reads BLOCKED, and the case-sensitive check
+  // that shipped here reported NEVER LANDED for an edit visible in the
+  // screenshot beside it. Entity coverage has always matched case-insensitively
+  // (`norm` lowercases); the iteration checks have to agree, or one half of the
+  // harness credits a word the other half cannot see.
+  const { loadBrief } = await import('../src/brief.ts');
+  for (const id of ['todo-app', 'landing-page', 'static-page']) {
+    const b = await loadBrief(`briefs/${id}.json`);
+    for (const it of b.iterations ?? []) {
+      if (!/innerText/.test(it.check)) continue;
+      assert.doesNotMatch(
+        it.check,
+        /\.includes\(|\.indexOf\(|\.startsWith\(|\.endsWith\(/,
+        `${id}/${it.id} compares innerText with a case-sensitive string method`,
+      );
+      assert.match(it.check, /\/i[.)\s]/, `${id}/${it.id} must match innerText case-insensitively`);
+    }
+  }
+});
+
 test('two iterations cannot share an id', () => {
   // Iteration ids key results, report rows and the scripted adapter's steps.
   // Two that share one silently measure the wrong edit.
