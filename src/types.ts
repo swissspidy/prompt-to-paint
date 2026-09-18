@@ -94,6 +94,23 @@ export interface Frame {
   inkRatio: number;
   text: string;
   title: string;
+  /**
+   * Absolute href of the icon the page declares, or null if it declares none.
+   *
+   * Browser chrome, not pixels: it is not in the screenshot, so nothing that
+   * reads a frame's image can see it.
+   */
+  favicon: string | null;
+  /**
+   * The tab is identifying the app while the viewport may still be empty -- a
+   * real `<title>`, a declared icon, or both.
+   *
+   * Deliberately not an input to `classify()`. A titled blank page is still a
+   * blank page to the person waiting for it, and letting this move the class
+   * would change every AUC ever recorded. It is reported beside the render
+   * times instead, as the separate thing it is.
+   */
+  tabSignal: boolean;
   httpStatus: number | null;
   consoleErrors: string[];
   /** Weighted fraction of brief entities visible in the rendered text. */
@@ -269,6 +286,15 @@ export interface CurveMetrics {
   ttfnbrMs: number | null;
   /** First frame a human could give useful feedback on. */
   ttfrrMs: number | null;
+  /**
+   * First frame where the tab said something -- title or favicon -- however
+   * empty the page still was.
+   *
+   * Separate from `ttfnbrMs` on purpose, and never mixed into it: this is the
+   * stretch where a person can tell the build is alive but has nothing to
+   * react to yet. Absent on results written before v0.5.
+   */
+  firstTabSignalMs?: number | null;
   finalScore: number;
   peakScore: number;
   timeToPeakMs: number | null;
@@ -373,6 +399,24 @@ export interface RunResult {
     /** Screenshots actually written; repeats share one file. */
     distinctShots?: number;
     repeatedShots?: number;
+    /**
+     * Append-only copy of the timeline, written frame by frame during the run.
+     *
+     * result.json is assembled once, at the end. Anything that kills the
+     * process before then -- an OOM, a stray SIGKILL, a Ctrl-C -- used to take
+     * the whole run with it, leaving screenshots nobody could put in order.
+     * This file is on disk the moment each frame is, so `p2p salvage` can
+     * rebuild a run from it.
+     */
+    framesLogPath?: string;
+    /**
+     * What the agent left in its working directory, sampled before teardown.
+     *
+     * An empty workdir beside a page that rendered is the signature of an agent
+     * that built somewhere else, so the fact is recorded rather than left for
+     * someone to notice afterwards.
+     */
+    workdir?: { path: string; entries: string[]; fileCount: number; empty: boolean };
   };
   warnings: string[];
 }

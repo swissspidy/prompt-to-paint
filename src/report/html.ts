@@ -82,6 +82,7 @@ function curveChart(r: RunResult): string {
     ${held}${gridY}${gridX}
     <path class="area" d="${area}"/>
     <path class="line" d="${d}"/>
+    ${marker(r.curve.firstTabSignalMs ?? null, 'tab', 'var(--series-4)')}
     ${marker(r.curve.ttfnbrMs, 'first render', 'var(--series-2)')}
     ${marker(r.curve.ttfrrMs, 'reviewable', 'var(--series-3)')}
     ${dots}
@@ -294,6 +295,9 @@ export function renderHtml(r: RunResult, outDir: string): string {
 
   <div class="tiles">
     <div class="tile"><div class="k">Area under curve</div><div class="v">${r.curve.auc.toFixed(3)}</div><div class="n">headline, 0-1</div></div>
+    ${r.curve.firstTabSignalMs != null
+      ? `<div class="tile"><div class="k">Tab title/icon</div><div class="v">${secs(r.curve.firstTabSignalMs)}</div><div class="n">browser chrome, not the page</div></div>`
+      : ''}
     <div class="tile"><div class="k">First render</div><div class="v">${secs(r.curve.ttfnbrMs)}</div><div class="n">anything on screen</div></div>
     <div class="tile"><div class="k">First reviewable</div><div class="v">${secs(r.curve.ttfrrMs)}</div><div class="n">worth feedback</div></div>
     <div class="tile"><div class="k">Final score</div><div class="v">${r.curve.finalScore.toFixed(2)}</div><div class="n">${r.curve.regression > 0.01 ? `peaked at ${r.curve.peakScore.toFixed(2)}` : 'no regression'}</div></div>

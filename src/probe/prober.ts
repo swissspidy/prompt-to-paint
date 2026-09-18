@@ -42,6 +42,8 @@ export interface ProberOptions {
 interface PageObservation {
   text: string;
   title: string;
+  /** Absolute href of the page's declared icon, or null if it declares none. */
+  favicon: string | null;
   overlayHit: string | null;
   mediaBoxes: number;
   domSignature: string;
@@ -57,6 +59,13 @@ const OBSERVE = `(() => {
     if (r.width > 8 && r.height > 8) mediaBoxes++;
   }
   const text = (document.body && document.body.innerText) ? document.body.innerText : '';
+  // The last declared icon wins, the way the browser resolves it. .href is the
+  // resolved absolute URL; the attribute would be whatever relative string the
+  // page happened to write.
+  let favicon = null;
+  const icons = document.querySelectorAll('link[rel~="icon" i],link[rel="shortcut icon" i],link[rel="apple-touch-icon" i]');
+  const lastIcon = icons[icons.length - 1];
+  if (lastIcon && lastIcon.href) favicon = String(lastIcon.href);
   const tags = {};
   for (const el of document.querySelectorAll('*')) {
     tags[el.tagName] = (tags[el.tagName] || 0) + 1;
@@ -65,11 +74,40 @@ const OBSERVE = `(() => {
   return {
     text: text.slice(0, 20000),
     title: document.title || '',
+    favicon,
     overlayHit,
     mediaBoxes,
     domSignature,
   };
 })()`;
+
+/**
+ * Does the browser chrome identify the app yet?
+ *
+ * Asked because the two halves of the tab move before the page does: an app
+ * that sets `<title>` and an icon in its index.html says "Orbit" in the tab
+ * while the viewport is still an empty grey rectangle. That is a real signal to
+ * the person waiting -- it is the first evidence the right thing is starting --
+ * and a screenshot of the viewport cannot contain it.
+ *
+ * A title Chromium derived from the address is not a signal: a document with no
+ * `<title>` is titled after its own URL, so counting that would fire on every
+ * blank page ever served.
+ */
+export function tabSignalFrom(title: string, favicon: string | null, url: string): boolean {
+  if (favicon) return true;
+  const t = title.trim();
+  if (!t) return false;
+  let derived: string[] = [];
+  try {
+    const u = new URL(url);
+    const hostPath = `${u.host}${u.pathname}`.replace(/\/$/, '');
+    derived = [u.href, u.href.replace(/\/$/, ''), u.host, hostPath, `${hostPath}/`];
+  } catch {
+    derived = [url];
+  }
+  return !derived.includes(t);
+}
 
 export interface CaptureAttempt {
   buf: Buffer | null;
@@ -283,6 +321,8 @@ export class Prober {
       inkRatio: 0,
       text: '',
       title: '',
+      favicon: null,
+      tabSignal: false,
       httpStatus: null,
       consoleErrors: [],
       entityCoverage: 0,
@@ -475,6 +515,8 @@ export class Prober {
       inkRatio: ink,
       text: obs.text,
       title: obs.title,
+      favicon: obs.favicon,
+      tabSignal: tabSignalFrom(obs.title, obs.favicon, this.opts.url),
       httpStatus: status,
       consoleErrors: errs,
       entityCoverage: an.entityCoverage,

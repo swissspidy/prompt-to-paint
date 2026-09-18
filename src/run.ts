@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, stat, appendFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
@@ -79,6 +79,43 @@ export const DONE_SENTINEL = '.p2p-done';
  */
 export const ITERATION_SETTLE_MS = 3000;
 
+/**
+ * DOM text kept per stored frame.
+ *
+ * Entity coverage is computed during the run from the full 20KB; what is stored
+ * is for eyeballing why a frame scored as it did. Keeping all of it would make
+ * result.json hundreds of megabytes on a long run, and the sidecar twice that.
+ */
+const STORED_TEXT = 4000;
+
+const slimText = <T extends Frame>(f: T): T =>
+  f.text.length > STORED_TEXT
+    ? { ...f, text: `${f.text.slice(0, STORED_TEXT)}\n...[truncated ${f.text.length - STORED_TEXT} chars]` }
+    : f;
+
+/**
+ * What the agent left behind, read before anything is torn down.
+ *
+ * A run whose workdir is empty but whose page rendered was not built here --
+ * the agent worked somewhere else, or its own sandbox rolled the files back
+ * when it was interrupted. Either way it is a fact about the run worth having
+ * in the file, rather than a surprise found in Finder a day later.
+ */
+async function inventory(dir: string): Promise<{ path: string; entries: string[]; fileCount: number; empty: boolean }> {
+  try {
+    const names = await readdir(dir);
+    const visible = names.filter((n) => n !== DONE_SENTINEL);
+    return {
+      path: dir,
+      entries: visible.slice(0, 50).sort(),
+      fileCount: visible.length,
+      empty: visible.length === 0,
+    };
+  } catch {
+    return { path: dir, entries: [], fileCount: 0, empty: true };
+  }
+}
+
 export interface ProtocolOptions {
   /**
    * Ask for an early rough render. On by default, and identical for every
@@ -147,6 +184,29 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   const horizonMs = brief.horizonSec * 1000;
   const warnings: string[] = [];
 
+  // The timeline, on disk as it happens.
+  //
+  // result.json is assembled once, after teardown and after judging. Until it
+  // exists, everything that says how the run went lives only in this process's
+  // memory, so anything that kills the process -- the harness SIGKILLing itself
+  // through killPort, an OOM, a Ctrl-C -- left a frames/ directory full of
+  // screenshots with no record of when any of them were taken or what the page
+  // was doing. These two files cost one append per frame and make a run
+  // recoverable from any point onward; `p2p salvage` rebuilds a result from
+  // them.
+  const framesLogPath = join(opts.runDir, 'frames.ndjson');
+  const headerPath = join(opts.runDir, 'run.json');
+  let framesLog: Promise<unknown> = Promise.resolve();
+  // Appends are chained rather than fired in parallel: two concurrent appends
+  // can interleave inside one line and a half-written JSON object would take
+  // the rest of the file with it.
+  const recordLine = (obj: unknown): void => {
+    framesLog = framesLog
+      .then(() => appendFile(framesLogPath, `${JSON.stringify(obj)}\n`))
+      .catch(() => undefined);
+  };
+  const recordFrame = (f: Frame): void => recordLine(slimText(f));
+
   // Refuse to measure whatever a previous run left behind.
   await ensureFreePort(url, port, opts.killPort ?? false);
 
@@ -160,7 +220,10 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     intervalMs: opts.pollMs ?? 1000,
     headed: opts.headed,
     videoPath: opts.videoPath,
-    onFrame: opts.onFrame,
+    onFrame: (f) => {
+      recordFrame(f);
+      opts.onFrame?.(f);
+    },
     analyze: (text) => {
       const c = entityCoverage(text, brief.entities);
       return { entityCoverage: c.coverage, entitiesFound: c.found };
@@ -181,6 +244,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   let cleaned = false;
   let lastIterationOk = false;
   let endReason: RunEndReason = 'horizon';
+  let workdirState: Awaited<ReturnType<typeof inventory>> | null = null;
 
   // Shared by every branch of the end-of-window race below. The losing branches
   // keep running after Promise.race resolves, and a pending timer holds the
@@ -220,7 +284,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
           f.dhash !== prev.dhash ||
           f.colorSig !== prev.colorSig ||
           f.domSignature !== prev.domSignature ||
-          f.class !== prev.class;
+          f.class !== prev.class ||
+          // A page whose tab is still changing is not a settled page, even
+          // when its pixels have not moved for a minute.
+          f.title !== prev.title ||
+          f.favicon !== prev.favicon;
         if (moved) lastVisualChangeMs = f.tMs;
         prev = f;
       }
@@ -263,7 +331,27 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     } catch { /* already closed */ }
     // Terminating the agent does not reliably take its dev server with it, and
     // a survivor would corrupt the next run against this port.
-    if (!opts.keepServer) await killPort(port).catch(() => undefined);
+    if (!opts.keepServer) {
+      const res = await killPort(port).catch(() => null);
+      if (res?.skippedSelf.length)
+        // Should now be unreachable: killPort only looks at listeners, and this
+        // process is never one. Kept because the failure it guards against was
+        // silent -- the harness SIGKILLing itself at teardown, losing the run.
+        warnings.push(
+          `The harness declined to kill PID(s) ${res.skippedSelf.join(', ')} on port ${port}: ` +
+            'they are this process or one of its parents.',
+        );
+      if (res && !res.probed)
+        warnings.push(
+          `Could not check port ${port} for a leaked dev server: no lsof, ss or fuser here. ` +
+            'If the next run against this port reports a near-zero first render, that is why.',
+        );
+      else if (res?.survivors.length)
+        warnings.push(
+          `PID(s) ${res.survivors.join(', ')} are still listening on port ${port} after SIGKILL. ` +
+            'The next run against this port would measure them, not the agent.',
+        );
+    }
   };
 
   try {
@@ -273,6 +361,16 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     }
 
     await prober.start();
+
+    // The header the sidecar needs to be readable on its own: which brief, which
+    // agent, which clock. Written before the agent starts, so it exists however
+    // early the run dies.
+    await writeJsonAtomic(headerPath, {
+      schema: 1, runId, brief: brief.id, briefPath: opts.briefPath ?? '',
+      adapter: adapter.name, label: opts.label, url, t0Epoch,
+      startedAt: new Date(t0Epoch).toISOString(), horizonMs,
+      framesDir, framesLogPath,
+    });
 
     const prompt =
       brief.prompt + protocolSuffix(url, { renderEarly: !opts.noRenderEarly });
@@ -354,12 +452,18 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
           `The agent had not reported finishing. The curve holds its last value to the horizon ` +
           `either way, so this does not change the AUC, but a late improvement would have been missed.`,
       );
+    // Prefixed, because these sat in the same `  · ...` column as the
+    // `iteration: <id>` lines below and read as one list: a run that hit its
+    // horizon and then measured two edits looked like it had run three
+    // iterations, one of them named "horizon reached".
     log(
-      ended === 'horizon' ? 'horizon reached'
-        : ended === 'rendered' ? 'app rendered; ending cold-start window'
-        : ended === 'signal' ? `agent signalled done (${DONE_SENTINEL})`
-        : ended === 'quiet' ? `nothing changed for ${(quietForMs / 1000).toFixed(0)}s; ending cold-start window`
-        : 'agent finished first turn',
+      `cold start ended: ${
+        ended === 'horizon' ? `horizon reached (${brief.horizonSec}s); the agent had not finished`
+          : ended === 'rendered' ? 'app rendered'
+          : ended === 'signal' ? `agent signalled done (${DONE_SENTINEL})`
+          : ended === 'quiet' ? `nothing changed for ${(quietForMs / 1000).toFixed(0)}s`
+          : 'agent finished its first turn'
+      }`,
     );
 
     // Keep watching briefly: builds land after the agent stops talking, and
@@ -370,6 +474,10 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     const settleStartMs = Date.now() - t0Epoch;
     await sleep(settleMs);
     coldEndMs = Date.now() - t0Epoch;
+    // Without this the sidecar is a flat list of frames and a salvaged run
+    // could not tell the measured window from the edits that followed it,
+    // which is the one split every headline number depends on.
+    recordLine({ __p2p: 'cold-end', tMs: coldEndMs, endReason });
 
     // Time the harness spent deliberately watching an idle app is not
     // "unattributed": we know exactly what was happening, which is nothing. If
@@ -390,8 +498,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       } else if (!handle.send) {
         warnings.push('Skipped iterations: this adapter cannot send follow-up prompts.');
       } else {
-        for (const spec of brief.iterations) {
-          log(`iteration: ${spec.id}`);
+        const total = brief.iterations.length;
+        for (const [i, spec] of brief.iterations.entries()) {
+          log(`iteration ${i + 1}/${total} "${spec.id}": ${spec.prompt}`);
           const res = await runIteration(spec, {
             prober,
             handle,
@@ -400,7 +509,19 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
             intervalMs: opts.iterationPollMs ?? 250,
           });
           iterations.push(res);
+          recordLine({ __p2p: 'iteration', iteration: res });
           lastIterationOk = res.ok;
+          // Said here rather than only in the final report, because the report
+          // is printed once at the very end and a run that dies before it has
+          // nothing anywhere saying whether an edit landed.
+          const secs = (ms: number | null): string => (ms === null ? 'never' : `${(ms / 1000).toFixed(1)}s`);
+          log(
+            `iteration ${i + 1}/${total} "${spec.id}": ${
+              res.baselineAlreadyPassing ? 'VOID -- its check already passed before the prompt was sent'
+                : res.ok ? `landed in ${secs(res.timeToCorrectChangeMs)} (first visible change ${secs(res.timeToFirstChangeMs)})`
+                : `NEVER LANDED (first visible change ${secs(res.timeToFirstChangeMs)})`
+            }`,
+          );
           if (res.baselineAlreadyPassing) {
             warnings.push(
               `Iteration "${spec.id}" is void: its check already passed before the prompt was sent, so it cannot measure this edit. Fix the check in the brief.`,
@@ -417,6 +538,10 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       }
     }
   } finally {
+    // Read before teardown: killing the agent is exactly when a sandboxed one
+    // rolls its edits back, and an inventory taken afterwards could not tell
+    // that apart from an agent that never wrote anything.
+    workdirState = await inventory(workdir);
     // A throw anywhere above would otherwise leave Chromium, the static server,
     // the agent and its dev server running, and a survivor on this port would
     // corrupt the next run.
@@ -425,6 +550,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
 
   if (coldEndMs === 0) coldEndMs = Date.now() - t0Epoch;
   const wallMs = Date.now() - t0Epoch;
+
+  // Let the last appends land. They are fire-and-forget during the run so a
+  // slow disk can never delay a capture, which means the final frames can still
+  // be queued here -- and the sidecar is only worth having if it is complete.
+  await framesLog;
 
   // ---- analysis (strictly after the run; never inside the measured window) --
   const phaseText = existsSync(shims.phaseLog) ? await readFile(shims.phaseLog, 'utf8') : '';
@@ -498,6 +628,33 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       'AGENT PRODUCED NO OUTPUT: no assistant events were seen. The adapter may not have started the agent correctly; check agent.log.',
     );
   }
+  // An empty workdir is not proof of anything on its own -- a run the agent
+  // never started has one too -- but beside a page that rendered it is the
+  // only evidence that the app came from somewhere this harness cannot see.
+  if (workdirState?.empty) {
+    const rendered = prober.frames.some((f) => f.class === 'render');
+    warnings.push(
+      rendered
+        ? `The agent's working directory (${workdir}) is empty, yet the page rendered. The app was ` +
+            'served from somewhere else: either the agent built outside its cwd, or it rolled its ' +
+            'edits back when it was stopped. Nothing in this run directory reproduces that app; ' +
+            'check agent.log for the paths the agent actually wrote to.'
+        : `The agent's working directory (${workdir}) is empty and nothing ever rendered. The agent ` +
+            'wrote no files at all -- usually a permission mode that soft-denies writes, or an agent ' +
+            'that never started. Check agent.log.',
+    );
+  }
+
+  // Only as many pictures as the page had states. Said plainly because a
+  // frames/ directory holding three PNGs after a twenty-minute run reads as
+  // data loss, and it is the opposite: the page moved three times.
+  if (prober.distinctShots > 0 && prober.distinctShots < 5 && prober.frames.length > 60)
+    warnings.push(
+      `The page had only ${prober.distinctShots} distinct visual state(s) across ${prober.frames.length} frames, ` +
+        `so frames/ holds ${prober.distinctShots} screenshot(s) and the other ${prober.repeatedShots} frames reuse them. ` +
+        'That is deduplication, not missing captures: the timeline in result.json maps every frame to its picture.',
+    );
+
   if (prober.repeatedShots > 0 && prober.distinctShots > 0)
     log(
       `${prober.frames.length} frames, ${prober.distinctShots} distinct screenshots ` +
@@ -515,15 +672,6 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     warnings.push(
       `The prober reloaded ${prober.reloadCount} times across ${prober.frames.length} frames. The served document changes on nearly every request (a per-request nonce or timestamp), so reload-driven timings here are unreliable.`,
     );
-
-  // Entity coverage was computed during the run from the full text; what is
-  // stored is for eyeballing why a frame scored as it did. Keeping 20KB of DOM
-  // text per frame would make result.json hundreds of megabytes on a long run.
-  const STORED_TEXT = 4000;
-  const slim = (f: ScoredFrame): ScoredFrame =>
-    f.text.length > STORED_TEXT
-      ? { ...f, text: `${f.text.slice(0, STORED_TEXT)}\n...[truncated ${f.text.length - STORED_TEXT} chars]` }
-      : f;
 
   const resultPath = join(opts.runDir, 'result.json');
 
@@ -576,7 +724,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     frames: [
       ...scoredCold.map((f): ScoredFrame => ({ ...f, phase: 'cold' })),
       ...mechanicalScores(iterationFrames).map((f): ScoredFrame => ({ ...f, phase: 'iteration' })),
-    ].map(slim),
+    ].map(slimText),
     phases,
     agentEvents,
     judge,
@@ -588,6 +736,8 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       promptPath: join(opts.runDir, 'prompt.txt'),
       distinctShots: prober.distinctShots,
       repeatedShots: prober.repeatedShots,
+      framesLogPath,
+      ...(workdirState ? { workdir: workdirState } : {}),
     },
     warnings: [...warnings, ...judgeWarnings],
   });

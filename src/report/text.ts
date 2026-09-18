@@ -20,6 +20,11 @@ export function renderText(r: RunResult): string {
   }
   L.push(`  ${'-'.repeat(64)}`);
   L.push(`  AUC (headline)        ${r.curve.auc.toFixed(3)}   ${bar(r.curve.auc)}`);
+  // Printed above first render because it is normally the earlier of the two,
+  // and the gap between them is the point: it is how long the tab says "Orbit"
+  // at an empty grey page.
+  if (r.curve.firstTabSignalMs != null)
+    L.push(`  Tab title/icon        ${secs(r.curve.firstTabSignalMs)}`);
   L.push(`  First render          ${secs(r.curve.ttfnbrMs)}`);
   L.push(`  First reviewable      ${secs(r.curve.ttfrrMs)}`);
   L.push(`  Final / peak score    ${r.curve.finalScore.toFixed(2)} / ${r.curve.peakScore.toFixed(2)}${r.curve.regression > 0.01 ? '   <- regressed' : ''}`);

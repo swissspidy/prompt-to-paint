@@ -104,6 +104,34 @@ Mechanical on purpose: "could a human give useful feedback on this" becomes
 "are enough of the named things on screen", which is reproducible across runs
 and judges.
 
+### The tab, which is not one of them
+
+**Time to first tab signal** — the first frame where `document.title` was
+something other than the address Chromium falls back to, or the page declared a
+`<link rel="icon">`. Recorded per frame as `tabSignal`, surfaced once as
+`curve.firstTabSignalMs`.
+
+It sits outside `classify()` on purpose, and nothing downstream of it moves:
+
+- A titled blank page is still a blank page. Someone waiting for something to
+  react to cannot react to a tab, so counting it as a render would move TTFNBR,
+  the curve and every AUC ever recorded — including the ones in this repository's
+  own calibration fixtures.
+- The judge cannot see it either way. Browser chrome is outside the viewport, so
+  it is absent from the screenshot by construction; a frame scored 0 for being
+  empty is scored 0 whatever its tab says.
+
+What it is good for is the gap. `firstTabSignalMs` well before `ttfnbrMs` is a
+dev server that booted and served an `index.html` whose app has not mounted yet
+— the difference between "nothing is happening" and "the bundle is still
+building", which are indistinguishable in the screenshot and very different to
+the person watching.
+
+A title the browser derived from the URL (`127.0.0.1:5173`, which is what a
+document with no `<title>` gets) is not a signal. Counting it would fire on
+every blank page ever served, including the error page shown before anything is
+listening.
+
 ## Latency decomposition
 
 Wall clock is partitioned so every millisecond lands in exactly one bucket.
@@ -309,6 +337,20 @@ leaked server would make the next run report a time-to-first-render near zero,
 for an application the agent under test never built — a wrong number that looks
 entirely plausible. Pass `--kill-port` to clear the port instead of aborting,
 and `--keep-server` to leave a finished run's server up for debugging.
+
+Only **listening** sockets are ever killed, and never this process or one of its
+parents. The distinction is not hypothetical: `lsof -i tcp:5173` matches sockets
+with that number at either end, so it returns every client of the port as well
+as the server. The harness polls the app under test once a second and is
+therefore always a client of it, and the old teardown piped that list straight
+into `kill -9`. The result was a run that died with `Killed: 9` immediately
+after its last measured frame — no `result.json`, no scoring pass, no report,
+and a `frames/` directory with nothing to read it by. macOS only: Linux has
+`fuser`, which matches local ports, and it was tried first.
+
+If no lookup tool is installed at all, the run says so in its warnings rather
+than assuming the port is clear — an unexamined port is how a leaked server
+survives into the next run.
 
 ## Repeats
 

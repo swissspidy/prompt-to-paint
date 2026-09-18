@@ -44,6 +44,21 @@ That comparison is pinned as a test, not a claim: `test/curve.test.ts`.
   useful feedback on. Operationalised as "enough of the things the brief named
   are on screen", so it is judgeable rather than vibes.
 
+### And one that deliberately does not
+
+- **Time to tab title/icon** — the first frame where the browser chrome
+  identified the app, however empty the viewport still was. An app whose
+  `index.html` sets `<title>` and a favicon says "Orbit" in the tab while the
+  page is still a grey rectangle, and that is real evidence to the person
+  waiting that the right thing is starting.
+
+  It is reported beside the render times and **never folded into them**. A
+  titled blank page is still a blank page to someone waiting to react to it, so
+  letting this move a frame's class would change every AUC ever recorded. It is
+  also invisible to the judge by construction: browser chrome is not in the
+  screenshot. A title Chromium derived from the address — what a document with
+  no `<title>` gets — does not count, or every blank page would trip it.
+
 ## Where the time actually goes
 
 Wall clock is decomposed into model thinking, tool round trips, dependency
@@ -120,7 +135,9 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe -
 Each run writes a directory containing `result.json` (every frame, phase and
 event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
-was given), `phases.jsonl` and `agent.log`. With `--video`, also `video.webm`.
+was given), `run.json` and `frames.ndjson` (the timeline as it happens — see
+[Recovering an interrupted run](#recovering-an-interrupted-run)), `phases.jsonl`
+and `agent.log`. With `--video`, also `video.webm`.
 
 `result.json` holds the whole run: cold-start frames and, when the brief has
 iterations, the frames captured while those edits landed. Each carries a
@@ -132,8 +149,10 @@ iteration frames are kept so the run can be replayed in full.
 **`frames/` is not the timeline and cannot be replayed as one.** Consecutive
 identical screenshots share a file, so a forty-observation run can hold four
 PNGs; stitching the directory listing gives a four-frame video in which a blank
-minute and a finished app get equal screen time. The timeline is in
-`result.json`, where every observation carries its own `tMs`:
+minute and a finished app get equal screen time. A long run whose page barely
+moved is the extreme case — 1300 observations of a page that changed three times
+is three PNGs, and that is deduplication working, not captures going missing.
+The timeline is in `result.json`, where every observation carries its own `tMs`:
 
 ```bash
 npm run p2p -- video runs/todo-app-claude-code-abc123
@@ -311,6 +330,65 @@ scores land. `result.json` is therefore written **twice**: once with the
 complete timeline and provisional scores (`judge.pending: true`), and again with
 the real scores when the judge returns. An interrupted or failed scoring pass
 leaves a run that still replays and still rescores, rather than no run at all.
+
+A judge is also checked **before** the run rather than after it. `--judge` names
+a provider and a model, and only the provider knows whether that model exists,
+so the harness sends it one 1×1 pixel and quotes whatever comes back:
+
+```
+error: the judge "google:gemini-3.5-flash-low" did not answer a test request.
+
+  models/gemini-3.5-flash-low is not found for API version v1beta
+
+  The provider was sent that model id exactly as written, so a typo, a model that has
+  been renamed, and one your key cannot reach all look like this.
+```
+
+Without that check a misspelled model is discovered at the end of a fifteen
+minute run, as one failure per frame. The scoring pass itself gives up after
+three failures with no successful call, for the same reason.
+
+## Recovering an interrupted run
+
+`result.json` is assembled once, after the browser and the agent are torn down.
+Until then the timeline lives only in the harness's memory, so anything that
+kills the process — a Ctrl-C, an OOM, the harness [killing its own
+port](#freeing-a-port) — used to leave a `frames/` directory full of screenshots
+with no record of when any of them were taken.
+
+Two files are now written *while* the run happens: `run.json` (which brief,
+which agent, which clock) and `frames.ndjson` (one line per observation, plus a
+marker for the end of the cold-start window and one per completed iteration).
+They cost one append per frame and they are on disk the moment each frame is:
+
+```bash
+npm run p2p -- salvage runs/todo-app-antigravity-abc123
+```
+
+That rebuilds `result.json` and `report.html` from the frame log, after which
+`p2p video` and `p2p rescore` work normally. A salvaged run is explicitly not a
+complete one and says so in its warnings: the agent's event stream and the
+toolchain phases were never on disk, so it has a timeline and no latency
+decomposition, and its scores are entity coverage until you follow up with
+`p2p rescore`.
+
+## Freeing a port
+
+A dev server the agent started is not reliably killed by killing the agent, and
+a survivor would corrupt the next run: the harness would find something already
+serving and report a near-zero first render for an app the agent never built. So
+the port is cleared at teardown, and `--kill-port` clears it at startup too.
+
+Clearing it means **listening sockets only**. `lsof -i tcp:5173` matches every
+socket with that number at either end, which includes every *client* of the port
+— and the harness polls the app under test once a second, so it is always one.
+Piping that list into `kill -9` made the harness SIGKILL itself during teardown:
+the run died immediately after its last measured frame, losing `result.json`,
+the judging pass and the report, and printing `Killed: 9` with no explanation.
+It only reproduced on macOS, which has no `fuser` and fell through to the `lsof`
+line; Linux has `fuser`, which matches local ports only, so CI never saw it.
+The lookup now filters to `LISTEN` state and refuses to signal this process or
+any of its parents, whatever a tool reports.
 
 ## Which agents this works with
 

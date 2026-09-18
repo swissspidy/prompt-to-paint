@@ -1,13 +1,14 @@
 import { parseArgs, promisify, type ParseArgsConfig } from 'node:util';
 import { execFile } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
 import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
-import { pickBackend, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
+import { pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
@@ -20,6 +21,7 @@ import {
 } from './report/video.ts';
 import { aggregate, renderAggregate } from './report/aggregate.ts';
 import { Progress } from './progress.ts';
+import { salvageRun } from './salvage.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
 import type { Adapter, RunResult, ScoredFrame } from './types.ts';
 
@@ -48,6 +50,8 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
+  p2p salvage  <runDir>                     rebuild result.json for a run whose
+                                            process died before it wrote one
   p2p briefs                                list bundled briefs
   p2p floors                                list toolchain-floor templates
 
@@ -91,6 +95,11 @@ Options for floor:
 Options for rescore:
   --brief      score against this brief   (default: the one the run recorded)
   --judge                                 as for run
+
+Options for salvage:
+  (none) -- reads run.json and frames.ndjson from the run directory. The
+  recovered run has the timeline but no latency decomposition, and its scores
+  are entity coverage until you follow up with rescore.
 
 Options for video:
   --out        output file; .mp4 or .webm picks the codec (default <runDir>/timeline.mp4)
@@ -183,6 +192,57 @@ function judgeBackendFor(judge: string | undefined): JudgeBackend {
   }
 }
 
+/**
+ * Prove the judge answers before committing to a run.
+ *
+ * `pickBackend` can only check what was typed: a provider it knows, a key in
+ * the environment. Whether the model id behind it exists is something only the
+ * provider can say, and it says it in milliseconds. Without this, a judge named
+ * `google:gemini-3.5-flash-low` -- a plausible-looking id that no provider
+ * serves -- is accepted, the agent works for fifteen minutes, and the scoring
+ * pass then fails on every frame. The run is not lost, but the answer to "is
+ * this judge real" arrives about as late as it possibly could.
+ */
+async function assertJudgeUsable(backend: JudgeBackend): Promise<void> {
+  if (!backend.model) return;
+  const problem = await preflightJudge(backend);
+  if (!problem) return;
+  fail(
+    `the judge "${backend.model}" did not answer a test request.\n\n` +
+      `  ${problem.split('\n').join('\n  ')}\n\n` +
+      `  The provider was sent that model id exactly as written, so a typo, a model that has\n` +
+      `  been renamed, and one your key cannot reach all look like this. Check the id against\n` +
+      `  the provider's model list, or pass --judge none to measure without scoring.`,
+  );
+}
+
+/**
+ * Read a run's result.json, or say what to do instead.
+ *
+ * A missing result.json used to surface as an ENOENT on a path, which says
+ * nothing about the two quite different situations behind it: a directory that
+ * was never a run, and a run whose process died before it could write itself
+ * out. The second is recoverable, and the frame log sitting right beside the
+ * missing file is how you can tell.
+ */
+async function readResultOrExplain(runDir: string): Promise<string> {
+  const resultPath = join(runDir, 'result.json');
+  try {
+    return await readFile(resultPath, 'utf8');
+  } catch (e) {
+    if (existsSync(join(runDir, 'frames.ndjson')))
+      fail(
+        `${resultPath} does not exist, but this run's frame log does.\n` +
+          `  The run was interrupted before it wrote its result. Recover the timeline with:\n` +
+          `    p2p salvage ${runDir}`,
+      );
+    fail(
+      `could not read ${resultPath}: ${(e as Error).message}\n` +
+        `  This command takes a run directory, the one holding result.json and frames/.`,
+    );
+  }
+}
+
 /** Parse argv, dispatch the subcommand, and write whatever reports it produces. */
 async function main(): Promise<void> {
   const cmd = process.argv[2];
@@ -244,6 +304,32 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'salvage') {
+    const { positionals } = parse({ args: argv, allowPositionals: true, options: {} });
+    const dir = positionals[0];
+    if (!dir) fail('salvage needs a run directory');
+    const runDir = resolve(dir);
+    const resultPath = join(runDir, 'result.json');
+    if (existsSync(resultPath))
+      fail(
+        `${resultPath} already exists, so this run wrote itself out and there is nothing to salvage.\n` +
+          `  To re-score it instead, run: p2p rescore ${dir}`,
+      );
+    let out;
+    try {
+      out = await salvageRun(runDir);
+    } catch (e) {
+      fail((e as Error).message);
+    }
+    await writeJsonAtomic(resultPath, out.result);
+    await writeFile(join(runDir, 'report.html'), renderHtml(out.result, runDir));
+    console.log(renderText(out.result));
+    console.log(`  recovered ${out.frameCount} frames into ${resultPath}`);
+    console.log(`  report: ${join(runDir, 'report.html')}`);
+    console.log(`  next:   p2p rescore ${dir}   (to score these frames with a judge)\n`);
+    return;
+  }
+
   if (cmd === 'video') {
     const { values: flags, positionals } = parse({
       args: argv,
@@ -253,7 +339,7 @@ async function main(): Promise<void> {
     const dir = positionals[0];
     if (!dir) fail('video needs a run directory');
     const runDir = resolve(dir);
-    const result = JSON.parse(await readFile(join(runDir, 'result.json'), 'utf8')) as RunResult;
+    const result = JSON.parse(await readResultOrExplain(runDir)) as RunResult;
 
     const fps = Number(flags.fps ?? 30);
     if (!Number.isFinite(fps) || fps <= 0) fail(`--fps must be a positive number, got "${flags.fps}"`);
@@ -350,15 +436,7 @@ async function main(): Promise<void> {
     const dir = positionals[0];
     if (!dir) fail('rescore needs a run directory');
     const resultPath = join(dir, 'result.json');
-    let prev: RunResult;
-    try {
-      prev = JSON.parse(await readFile(resultPath, 'utf8')) as RunResult;
-    } catch (e) {
-      fail(
-        `could not read ${resultPath}: ${(e as Error).message}\n` +
-          `  rescore takes a run directory, the one holding result.json and frames/.`,
-      );
-    }
+    const prev = JSON.parse(await readResultOrExplain(dir)) as RunResult;
     // Prefer an explicit --brief, then the path the run recorded, then the
     // bundled brief of that id.
     //
@@ -378,6 +456,7 @@ async function main(): Promise<void> {
       );
     }
     const backend = judgeBackendFor(values.judge);
+    await assertJudgeUsable(backend);
     // Only the cold-start frames are scored, exactly as during the run. A
     // result written before phases existed has none tagged, so fall back to the
     // window the curve recorded; without that, rescoring an old run would judge
@@ -502,6 +581,12 @@ async function main(): Promise<void> {
   const judgeBackend = cmd === 'floor'
     ? new NullBackend()
     : judgeBackendFor(values.judge);
+
+  // Before the run, not after it. A judge is minutes of agent work away from
+  // being called for the first time, and every reason it might not work is
+  // knowable now.
+  await assertJudgeUsable(judgeBackend);
+  if (judgeBackend.model) console.log(`  judge:   ${judgeBackend.model} (answered a test request)`);
 
   const outRoot = values.out ?? 'runs';
   const repeats = Math.max(1, Number(values.repeat ?? 1));

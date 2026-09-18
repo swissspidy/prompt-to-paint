@@ -68,6 +68,10 @@ export function computeMetrics(frames: ScoredFrame[], opts: CurveOptions): Curve
   const auc = integrate(points, opts.horizonMs);
 
   const firstRender = inHorizon.find((f) => f.class === 'render');
+  // Browser chrome, reported beside the render times and never folded into
+  // them. It answers a different question -- when could you tell the right app
+  // was starting -- and nothing here feeds the curve or the AUC.
+  const firstTabSignal = inHorizon.find((f) => f.tabSignal);
   const firstReviewable = inHorizon.find(
     (f) => f.class === 'render' && f.entityCoverage >= opts.reviewableThreshold,
   );
@@ -87,6 +91,7 @@ export function computeMetrics(frames: ScoredFrame[], opts: CurveOptions): Curve
     auc,
     ttfnbrMs: firstRender?.tMs ?? null,
     ttfrrMs: firstReviewable?.tMs ?? null,
+    firstTabSignalMs: firstTabSignal?.tMs ?? null,
     finalScore,
     peakScore,
     timeToPeakMs,

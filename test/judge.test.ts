@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
-import { parseJudge, pickBackend, DEFAULT_JUDGE } from '../src/judge/backends.ts';
+import { parseJudge, pickBackend, preflightJudge, DEFAULT_JUDGE } from '../src/judge/backends.ts';
 import { judgeRun } from '../src/judge/judge.ts';
 import type { JudgeBackend } from '../src/judge/backends.ts';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -56,7 +56,8 @@ test('a missing criterion counts as unmet, never as absent from the denominator'
 
 const frame = (index: number, dhash: string, cls: Frame['class'] = 'render'): Frame => ({
   index, tMs: index * 1000, class: cls, reason: '', screenshotPath: `f${index}.png`,
-  dhash, colorSig: null, inkRatio: 0.2, text: '', title: '', httpStatus: 200, consoleErrors: [],
+  dhash, colorSig: null, inkRatio: 0.2, text: '', title: '', favicon: null, tabSignal: false,
+  httpStatus: 200, consoleErrors: [],
   entityCoverage: 0, entitiesFound: [], domSignature: '', captureMs: 5,
 });
 
@@ -216,7 +217,7 @@ test('two judges do not share a verdict cache', async () => {
     const frames = [{
       index: 0, tMs: 1000, class: 'render' as const, reason: 'r', screenshotPath: shot,
       dhash: 'abcdef0123456789', colorSig: '0'.repeat(16), inkRatio: 0.5, text: 'x',
-      title: 't', httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
+      title: 't', favicon: null, tabSignal: false, httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
       entitiesFound: ['x'], domSignature: 'D', captureMs: 1,
     }];
     const single: Brief = { ...brief, rubric: [{ id: 'renders', description: 'renders', weight: 1 }] };
@@ -243,4 +244,50 @@ test('two judges do not share a verdict cache', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('a judge that cannot answer is reported before the run, not after it', async () => {
+  // The provider is the only thing that knows whether a model id exists, and it
+  // takes milliseconds to ask. Discovering it at the end of a fifteen-minute run
+  // is the failure this exists to remove.
+  const dead = {
+    name: 'ai', model: 'google:gemini-3.5-flash-low', concurrency: 1,
+    ask: async (): Promise<string> => { throw new Error('unused'); },
+    preflight: async (): Promise<void> => {
+      throw new Error('models/gemini-3.5-flash-low is not found for API version v1beta');
+    },
+  };
+  assert.match(String(await preflightJudge(dead)), /gemini-3\.5-flash-low is not found/);
+});
+
+test('a judge that answers reports no problem', async () => {
+  const live = {
+    name: 'ai', model: 'google:real', concurrency: 1,
+    ask: async (): Promise<string> => '{}',
+    preflight: async (): Promise<void> => undefined,
+  };
+  assert.equal(await preflightJudge(live), null);
+});
+
+test('a backend with nothing to preflight is not treated as broken', async () => {
+  const old = { name: 'ai', model: 'x:y', concurrency: 1, ask: async (): Promise<string> => '{}' };
+  assert.equal(await preflightJudge(old), null);
+});
+
+test('a judge that never once answers stops instead of grinding every frame', async () => {
+  // Four SDK retries times sixty frames is minutes of backoff to reach a
+  // conclusion that was available after three calls.
+  let calls = 0;
+  const backend = {
+    name: 'ai', model: 'google:nope', concurrency: 1,
+    ask: async (): Promise<string> => { calls++; throw new Error('404 model not found'); },
+  };
+  const frames = Array.from({ length: 40 }, (_, i) =>
+    frame(i, (i % 2 ? 'f' : '0').repeat(16)));
+  const out = await judgeRun(frames, brief, { backend, cacheDir: await mkdtemp(join(tmpdir(), 'p2p-judge-')) });
+  assert.ok(calls <= 3, `stopped after ${calls} calls`);
+  assert.ok(out.warnings.some((w) => /giving up after/.test(w)));
+  // The run is still returned, scored mechanically and saying so.
+  assert.equal(out.frames.length, 40);
+  assert.ok(out.frames.every((f) => f.scoreSource !== 'judge'));
 });

@@ -20,7 +20,31 @@ export interface JudgeBackend {
   ask(req: JudgeRequest): Promise<string>;
   /** Safe parallelism for this backend. */
   concurrency: number;
+  /**
+   * One cheap call proving this judge can actually be reached, or a throw
+   * carrying the provider's own refusal.
+   *
+   * `pickBackend` can only check the shape of what was typed -- a known
+   * provider, a key in the environment. Whether the *model* exists is a fact
+   * only the provider has, and asking it costs one small request against
+   * minutes of run. Without this a misspelled model id is discovered after the
+   * agent has finished, as sixty identical 404s in the warnings of a run that
+   * can no longer be scored.
+   */
+  preflight?(): Promise<void>;
 }
+
+/**
+ * A 1x1 PNG, for asking a provider whether it will take a call at all.
+ *
+ * An image rather than a bare prompt because a text-only round trip proves
+ * nothing about the path every real judge call takes: a model that exists but
+ * cannot accept an image fails at frame one and nowhere earlier.
+ */
+const PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 /**
  * Providers the AI SDK judge can address.
@@ -103,6 +127,31 @@ export class AiSdkBackend implements JudgeBackend {
     return this.loaded;
   }
 
+  /**
+   * Ask the provider for one token about one pixel.
+   *
+   * No retries: a wrong model id is not a transient condition, and backing off
+   * four times before saying so turns a two-second answer into half a minute of
+   * silence at the exact moment the user is watching for one.
+   */
+  async preflight(): Promise<void> {
+    const model = await this.load();
+    await generateText({
+      model,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(30_000),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'file', mediaType: 'image/png', data: { type: 'data', data: PIXEL_PNG } },
+            { type: 'text', text: 'Reply with the single word OK.' },
+          ],
+        },
+      ],
+    });
+  }
+
   /** Score one frame. */
   async ask(req: JudgeRequest): Promise<string> {
     const model = await this.load();
@@ -134,6 +183,27 @@ export class NullBackend implements JudgeBackend {
   /** Always throws: callers must fall back to mechanical scoring. */
   async ask(): Promise<string> {
     throw new Error('no judge backend configured');
+  }
+  /** Nothing to check: scoring nothing cannot fail late. */
+  async preflight(): Promise<void> {}
+}
+
+/**
+ * Fail before the run rather than after it.
+ *
+ * Returns the provider's own message, because that message is the only place
+ * the real reason lives -- a model that was renamed, a key without access to
+ * it, a region that does not serve it. Guessing which of those it was, and
+ * saying so, would be worse than quoting it.
+ */
+export async function preflightJudge(backend: JudgeBackend): Promise<string | null> {
+  if (!backend.preflight) return null;
+  try {
+    await backend.preflight();
+    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return msg.trim() || String(e);
   }
 }
 

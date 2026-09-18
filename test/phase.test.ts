@@ -7,7 +7,7 @@ import type { Frame, RunResult, ScoredFrame } from '../src/types.ts';
 const frame = (index: number, tMs: number, over: Partial<Frame> = {}): Frame => ({
   index, tMs, class: 'render', reason: 'r', screenshotPath: `f${index}.png`,
   dhash: 'a'.repeat(16), colorSig: '0'.repeat(16), inkRatio: 0.5, text: 'Orbit',
-  title: 'Orbit', httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
+  title: 'Orbit', favicon: null, tabSignal: false, httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
   entitiesFound: [], domSignature: 'DIVD3', captureMs: 10, ...over,
 });
 

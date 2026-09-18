@@ -11,6 +11,7 @@ function frame(tMs: number, score: number, shot: string | null, over: Partial<Sc
   return {
     index: tMs / 1000, tMs, class: score > 0 ? 'render' : 'unreachable', reason: '',
     screenshotPath: shot, dhash: shot, colorSig: shot, inkRatio: 0.1, text: '', title: '',
+    favicon: null, tabSignal: false,
     httpStatus: 200, consoleErrors: [], entityCoverage: score, entitiesFound: [],
     domSignature: '', captureMs: 5, score, scoreSource: 'judge', ...over,
   };

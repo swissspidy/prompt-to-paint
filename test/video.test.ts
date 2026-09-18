@@ -23,6 +23,8 @@ function frame(tMs: number, screenshotPath: string | null): ScoredFrame {
     inkRatio: 0,
     text: '',
     title: '',
+    favicon: null,
+    tabSignal: false,
     httpStatus: 200,
     consoleErrors: [],
     entityCoverage: 0,

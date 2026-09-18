@@ -230,12 +230,25 @@ export async function judgeRun(
   const verdicts = new Map<number, JudgeVerdict>();
   let done = 0;
   let calls = 0;
+  let failures = 0;
+  let aborted = false;
+
+  // Stop after a few failures if nothing has ever worked.
+  //
+  // Every plausible cause of a first failure that is not transient -- a model
+  // id that does not exist, a key without access to it -- fails identically for
+  // every frame. Discovering that sixty times, each behind the SDK's four
+  // retries, is minutes of backoff to reach a conclusion available after three.
+  // A judge that has answered even once is a different situation: those
+  // failures are rate limits and bad luck, and the pass runs to the end.
+  const HOPELESS_AFTER = 3;
 
   // Workers pull by index rather than shifting a copy of the list: nothing
   // yields between the read and the increment, so each target is taken once.
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
+      if (aborted) return;
       const idx = targets[next++];
       if (idx === undefined) return;
       const frame = byIndex.get(idx);
@@ -259,7 +272,17 @@ export async function judgeRun(
           cache[frame.dhash] = v;
         }
       } catch (e) {
+        failures++;
         warnings.push(`judge: frame ${idx} failed (${String(e).slice(0, 200)})`);
+        if (calls === 0 && failures >= HOPELESS_AFTER && !aborted) {
+          aborted = true;
+          warnings.push(
+            `judge: giving up after ${failures} failures with no successful call. The judge ` +
+              `(${opts.backend.model ?? opts.backend.name}) is not answering, so the remaining ` +
+              `${Math.max(0, targets.length - done - 1)} frame(s) were not sent. Scores here are entity ` +
+              'coverage, not rubric correctness; fix the judge and run p2p rescore on this run directory.',
+          );
+        }
       }
       opts.onProgress?.(++done, targets.length);
     }

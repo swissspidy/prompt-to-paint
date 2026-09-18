@@ -10,6 +10,7 @@ import { runBenchmark } from '../../src/run.ts';
 import { ScriptedAdapter } from '../../src/adapters/scripted.ts';
 import { ExecAdapter } from '../../src/adapters/exec.ts';
 import { NullBackend } from '../../src/judge/backends.ts';
+import { salvageRun } from '../../src/salvage.ts';
 import type { JudgeBackend } from '../../src/judge/backends.ts';
 import { coldFrames } from '../../src/phase.ts';
 import { findChromium } from '../../src/probe/browser.ts';
@@ -303,6 +304,102 @@ test('the run is on disk before it is scored, so an interrupted judge loses noth
     // The finished file supersedes it: scoring was attempted, so it is no
     // longer pending, even though this backend never returned a verdict.
     assert.notEqual(result.judge.pending, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a run killed before it writes itself out is recoverable from its frame log', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-sidecar-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 25, iterations: [], target: { ...base.target, port: 5298 } },
+      adapter: new ScriptedAdapter({
+        steps: [{
+          atMs: 0,
+          write: {
+            path: 'index.html',
+            content: '<!doctype html><meta charset=utf-8><title>DevConf 2026</title>'
+              + '<link rel="icon" href="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'
+              + '<body><h1>DevConf 2026</h1><ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul>'
+              + '<footer>See you in Berlin</footer></body>',
+          },
+        }],
+      }),
+      runDir: dir, label: 'sidecar', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    // Both files exist because they were written while the run was happening,
+    // not because it finished. This is everything a SIGKILL would have left.
+    assert.equal(result.artifacts?.framesLogPath, join(dir, 'frames.ndjson'));
+    const header = JSON.parse(await readFile(join(dir, 'run.json'), 'utf8')) as { brief: string; horizonMs: number };
+    assert.equal(header.brief, base.id);
+
+    // Simulate the loss: the run directory keeps its frames and its log, and
+    // loses the file that is only written at the very end.
+    await rm(join(dir, 'result.json'));
+    const { result: salvaged, frameCount } = await salvageRun(dir);
+
+    assert.equal(frameCount, result.frames.length, 'every frame reached the log');
+    assert.deepEqual(
+      salvaged.frames.map((f) => f.tMs),
+      result.frames.map((f) => f.tMs),
+      'the salvaged timeline is the run timeline',
+    );
+    assert.deepEqual(
+      salvaged.frames.map((f) => f.screenshotPath),
+      result.frames.map((f) => f.screenshotPath),
+      'and still points at the screenshots on disk',
+    );
+    assert.equal(salvaged.curve.ttfnbrMs, result.curve.ttfnbrMs, 'first render survives the round trip');
+    assert.ok(salvaged.warnings.some((w) => w.startsWith('SALVAGED RUN')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a page whose tab names the app before it paints is measured saying so', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-tab-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    // A title and an icon with nothing in the body: the state the run is meant
+    // to distinguish -- a grey viewport whose tab already says the right thing.
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 25, iterations: [], target: { ...base.target, port: 5299 } },
+      adapter: new ScriptedAdapter({
+        steps: [
+          {
+            atMs: 0,
+            write: {
+              path: 'index.html',
+              content: '<!doctype html><meta charset=utf-8><title>DevConf 2026</title>'
+                + '<link rel="icon" href="data:image/gif;base64,R0lGODlhAQABAAAAACw="><body></body>',
+            },
+          },
+          {
+            atMs: 6000,
+            write: {
+              path: 'index.html',
+              content: '<!doctype html><meta charset=utf-8><title>DevConf 2026</title>'
+                + '<body><h1>DevConf 2026</h1><ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul>'
+                + '<footer>See you in Berlin</footer></body>',
+            },
+          },
+        ],
+      }),
+      runDir: dir, label: 'tab', judgeBackend: new NullBackend(), settleMs: 3000, killPort: true,
+    });
+
+    const tab = result.curve.firstTabSignalMs;
+    assert.ok(tab !== null && tab !== undefined, 'the tab signal was seen');
+    assert.ok(result.curve.ttfnbrMs !== null, 'and the page did eventually render');
+    assert.ok(tab <= result.curve.ttfnbrMs, `tab signal ${tab}ms should not be after first render ${result.curve.ttfnbrMs}ms`);
+    // The thing that must not have happened: a titled empty page counting as a
+    // render would move every AUC ever recorded.
+    const titledButEmpty = result.frames.filter((f) => f.tabSignal && f.class !== 'render');
+    assert.ok(titledButEmpty.length > 0, 'the empty-but-titled window was actually observed');
+    assert.ok(titledButEmpty.every((f) => f.score === 0), 'and scored nothing, exactly as before');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
