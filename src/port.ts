@@ -98,16 +98,28 @@ export async function listenersOn(port: number): Promise<{ pids: number[]; probe
  * A dev server the agent started is a descendant, so it is never in here; the
  * shell, npm and node wrappers above us always are. Nothing on this list may be
  * killed to free a port, whatever a lookup tool reports about it.
+ *
+ * Bounded by one deadline across the whole walk, not per `ps`. This runs during
+ * teardown, including from a signal handler, and a teardown step that can take
+ * an unbounded amount of time is a leaked dev server by another name -- which
+ * is the exact thing it is here to help prevent. `process.pid` and
+ * `process.ppid` need no subprocess and are the two that actually matter; the
+ * rest of the chain is belt and braces, and giving up on it costs nothing
+ * because the listener filter is the real protection.
  */
-async function ancestorPids(): Promise<Set<number>> {
+async function ancestorPids(budgetMs = 1500): Promise<Set<number>> {
   const chain = new Set<number>([process.pid]);
+  if (typeof process.ppid === 'number' && process.ppid > 1) chain.add(process.ppid);
+  const deadline = Date.now() + budgetMs;
   let pid = typeof process.ppid === 'number' ? process.ppid : 0;
-  for (let depth = 0; depth < 12 && pid > 1; depth++) {
-    chain.add(pid);
+  for (let depth = 0; depth < 12 && pid > 1 && Date.now() < deadline; depth++) {
     try {
-      const { stdout } = await run('ps', ['-o', 'ppid=', '-p', String(pid)], { timeout: 2000 });
+      const { stdout } = await run('ps', ['-o', 'ppid=', '-p', String(pid)], {
+        timeout: Math.max(200, deadline - Date.now()),
+      });
       const parent = Number(stdout.trim());
       if (!Number.isInteger(parent) || parent <= 1 || chain.has(parent)) break;
+      chain.add(parent);
       pid = parent;
     } catch {
       break;
@@ -146,27 +158,32 @@ export async function killPort(port: number): Promise<KillPortResult> {
   const skippedSelf = pids.filter((p) => mine.has(p));
   const targets = pids.filter((p) => !mine.has(p));
 
-  const alive = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      // EPERM means it exists and is not ours; ESRCH means it is gone.
-      return (e as NodeJS.ErrnoException).code === 'EPERM';
-    }
-  };
   const signal = (pid: number, sig: NodeJS.Signals): void => {
     try {
       process.kill(pid, sig);
     } catch { /* already gone, or not ours to signal */ }
   };
 
-  for (const pid of targets) signal(pid, 'SIGTERM');
-  for (let i = 0; i < 10 && targets.some(alive); i++) await sleep(150);
-  for (const pid of targets.filter(alive)) signal(pid, 'SIGKILL');
-  await sleep(150);
+  // Success is measured by asking the port again, not by asking whether the pid
+  // still exists.
+  //
+  // `process.kill(pid, 0)` succeeds for a *zombie* -- a killed child still in
+  // the process table because nothing has reaped it -- so a pid check reports a
+  // dead server as a survivor indefinitely. It is also the wrong question: what
+  // the next run needs to know is whether anything is still listening, and a
+  // process that has released the port is no longer this function's problem.
+  const stillListening = async (): Promise<number[]> =>
+    targets.length ? (await listenersOn(port)).pids.filter((p) => targets.includes(p)) : [];
 
-  const survivors = targets.filter(alive);
+  for (const pid of targets) signal(pid, 'SIGTERM');
+  for (let i = 0; i < 8; i++) {
+    await sleep(150);
+    if (!(await stillListening()).length) break;
+  }
+  for (const pid of await stillListening()) signal(pid, 'SIGKILL');
+  await sleep(200);
+
+  const survivors = await stillListening();
   return {
     killed: targets.filter((p) => !survivors.includes(p)),
     survivors,

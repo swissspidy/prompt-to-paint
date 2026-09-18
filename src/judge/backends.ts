@@ -13,6 +13,22 @@ export interface JudgeRequest {
   prompt: string;
 }
 
+/**
+ * Sampling temperature for every judge call.
+ *
+ * Zero, and stated once, because the judge decides the headline number. At a
+ * provider's default -- typically 1.0 -- the same screenshot scored twice can
+ * come back with different criteria met, so an AUC carries sampling noise that
+ * nothing downstream can see or subtract. Worse, the verdict cache then freezes
+ * whichever sample happened to land first, so the noise becomes permanent and
+ * looks like a measurement.
+ *
+ * It does not make a judge deterministic -- no provider promises that, even at
+ * zero -- but it removes the variance that is ours to remove, and `result.json`
+ * records it so a run can say how it was scored.
+ */
+export const JUDGE_TEMPERATURE = 0;
+
 export interface JudgeBackend {
   name: string;
   model: string | null;
@@ -139,6 +155,7 @@ export class AiSdkBackend implements JudgeBackend {
     await generateText({
       model,
       maxRetries: 0,
+      temperature: JUDGE_TEMPERATURE,
       abortSignal: AbortSignal.timeout(30_000),
       messages: [
         {
@@ -158,6 +175,7 @@ export class AiSdkBackend implements JudgeBackend {
     const { text } = await generateText({
       model,
       maxRetries: 4,
+      temperature: JUDGE_TEMPERATURE,
       abortSignal: AbortSignal.timeout(120_000),
       messages: [
         {

@@ -8,7 +8,9 @@ import { loadBrief } from './brief.ts';
 import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
-import { pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES } from './judge/backends.ts';
+import {
+  pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, JUDGE_TEMPERATURE,
+} from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
@@ -62,6 +64,9 @@ Options for run:
   --judge      <provider>:<model> | none         (default ${DEFAULT_JUDGE})
                scored through the AI SDK, e.g. google:gemini-2.5-flash
                (providers: ${AI_SDK_PROVIDER_NAMES.join(' | ')})
+  --max-judged cap on model calls per run        (default 60)
+               frames beyond it are sampled evenly; the rest forward-fill
+  --judge-width  width screenshots are downscaled to before judging (default 1024)
   --out        output directory                  (default runs/)
   --poll       cold-start poll interval in ms    (default 1000)
   --iter-poll  iteration poll interval in ms     (default 250)
@@ -98,7 +103,7 @@ Options for floor:
 
 Options for rescore:
   --brief      score against this brief   (default: the one the run recorded)
-  --judge                                 as for run
+  --judge, --max-judged, --judge-width    as for run
 
 Options for salvage:
   (none) -- reads run.json and frames.ndjson from the run directory. The
@@ -218,6 +223,19 @@ async function assertJudgeUsable(backend: JudgeBackend): Promise<void> {
       `  been renamed, and one your key cannot reach all look like this. Check the id against\n` +
       `  the provider's model list, or pass --judge none to measure without scoring.`,
   );
+}
+
+/**
+ * A numeric flag, or a usage error naming it.
+ *
+ * `Number(undefined)` is NaN and NaN flows through every comparison as false,
+ * so a mistyped `--max-judged` used to disable the cap rather than complain.
+ */
+function num(name: string, raw: string | undefined, min = 1): number | undefined {
+  if (raw === undefined) return undefined;
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < min) fail(`--${name} must be a number of at least ${min}, got "${raw}"`);
+  return v;
 }
 
 /**
@@ -424,6 +442,7 @@ async function main(): Promise<void> {
       provider: { type: 'string' }, tools: { type: 'string' }, effort: { type: 'string' },
       'print-timeout': { type: 'string' }, bin: { type: 'string' },
       'no-add-dir': { type: 'boolean' }, 'agent-arg': { type: 'string', multiple: true },
+      'max-judged': { type: 'string' }, 'judge-width': { type: 'string' },
       'quiet-for': { type: 'string' }, 'stop-after-render': { type: 'string' },
       'no-render-early': { type: 'boolean' }, headed: { type: 'boolean' },
       video: { type: 'boolean' }, 'no-progress': { type: 'boolean' },
@@ -468,7 +487,11 @@ async function main(): Promise<void> {
     // its iteration frames against the cold-start rubric and quietly move AUC.
     const isCold = (f: ScoredFrame): boolean =>
       f.phase ? f.phase === 'cold' : f.tMs <= prev.curve.runEndMs;
-    const judged = await judgeRun(prev.frames.filter(isCold), brief, { backend });
+    const judged = await judgeRun(prev.frames.filter(isCold), brief, {
+      backend,
+      maxJudged: num('max-judged', values['max-judged']),
+      maxImageWidth: num('judge-width', values['judge-width'], 256),
+    });
     const next: RunResult = {
       ...prev,
       // Spreading prev would keep the old brief id and path, so the report
@@ -492,6 +515,7 @@ async function main(): Promise<void> {
         model: backend.model,
         framesJudged: judged.framesJudged,
         degraded: judged.degraded,
+        temperature: JUDGE_TEMPERATURE,
       },
       curve: computeMetrics(judged.frames, {
         horizonMs: brief.horizonSec * 1000,
@@ -649,6 +673,8 @@ async function main(): Promise<void> {
         headed: values.headed,
         videoPath: values.video ? join(runDir, 'video.webm') : undefined,
         keepServer: values['keep-server'],
+        maxJudged: num('max-judged', values['max-judged']),
+        maxImageWidth: num('judge-width', values['judge-width'], 256),
         onLog: (m) => (progress ? progress.log(m) : console.log(`  · ${m}`)),
         onFrame: (f) => progress?.onFrame(f),
         onAgentEvent: (e) => progress?.onAgentEvent(e),

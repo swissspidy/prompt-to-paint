@@ -153,6 +153,28 @@ export function selectFramesToJudge(
 }
 
 /**
+ * The cache key for one screenshot: the bytes of the screenshot.
+ *
+ * This used to be the frame's `dhash`, which is wrong in a way that is easy to
+ * miss and impossible to notice afterwards. A dhash is a 64-bit perceptual hash
+ * of a 9x8 downscale -- built to answer "are these nearly the same picture",
+ * with a distance threshold, and it collides readily on pages that differ only
+ * in their text. Two 1280x800 screenshots with entirely different copy hash
+ * identically (there is a test).
+ *
+ * As an exact cache key inside a file shared by every run of one brief, that
+ * means a verdict earned by one agent's page can be served for another agent's
+ * different page, silently, with the collision rate rising as the cache fills.
+ * The rubric hash above is careful to stop two judges answering for each other;
+ * this stops two screenshots doing the same thing.
+ *
+ * Perceptual similarity still has a job here -- it is how `selectFramesToJudge`
+ * decides a frame is not worth a fresh call -- but that is a threshold applied
+ * within one run, not an identity claim across all of them.
+ */
+export const keyOf = (png: Buffer): string => createHash('sha256').update(png).digest('hex');
+
+/**
  * Read the verdict cache, treating any corruption as a cold cache.
  */
 async function loadCache(path: string): Promise<Record<string, JudgeVerdict>> {
@@ -202,7 +224,10 @@ export async function judgeRun(
     return { frames: mechanicalScores(frames), framesJudged: 0, degraded: true, warnings };
   }
 
-  const cacheDir = opts.cacheDir ?? join(process.cwd(), '.p2p-cache');
+  // P2P_CACHE_DIR because the default is relative to the working directory, so
+  // running the same brief from a different shell silently started cold and
+  // paid for every verdict again.
+  const cacheDir = opts.cacheDir ?? process.env.P2P_CACHE_DIR ?? join(process.cwd(), '.p2p-cache');
   await mkdir(cacheDir, { recursive: true });
   // The judge is part of the cache identity, not just the rubric.
   //
@@ -221,8 +246,24 @@ export async function judgeRun(
     }))
     .digest('hex')
     .slice(0, 12);
-  const cachePath = join(cacheDir, `judge-${rubricHash}.json`);
+  // v2: caches written before this were keyed by perceptual hash and are not
+  // safe to read. See the note on `keyOf` -- a v1 file can hold a verdict that
+  // belongs to a different screenshot, so it is left on disk and ignored rather
+  // than migrated.
+  const cachePath = join(cacheDir, `judge-v2-${rubricHash}.json`);
   const cache = await loadCache(cachePath);
+  // Written as verdicts arrive, not once at the end: the pass is the expensive
+  // part of a run, and a process that died during it used to lose every call it
+  // had already paid for.
+  let unsaved = 0;
+  let saving: Promise<void> = Promise.resolve();
+  const persist = (force = false): void => {
+    if (!force && ++unsaved < 5) return;
+    unsaved = 0;
+    saving = saving
+      .then(() => writeFile(cachePath, JSON.stringify(cache, null, 2)))
+      .catch(() => undefined);
+  };
 
   const prompt = buildJudgePrompt(brief);
   const targets = selectFramesToJudge(frames, { distinctThreshold, maxJudged });
@@ -253,14 +294,17 @@ export async function judgeRun(
       if (idx === undefined) return;
       const frame = byIndex.get(idx);
       if (!frame?.screenshotPath || !frame.dhash) continue;
-      const cached = cache[frame.dhash];
-      if (cached) {
-        verdicts.set(idx, cached);
-        opts.onProgress?.(++done, targets.length);
-        continue;
-      }
       try {
+        // The file is read before the cache is consulted, because the key is
+        // the file. One read is nothing against the model call it may save.
         const full = await readFile(frame.screenshotPath);
+        const key = keyOf(full);
+        const cached = cache[key];
+        if (cached) {
+          verdicts.set(idx, cached);
+          opts.onProgress?.(++done, targets.length);
+          continue;
+        }
         const png = downscalePngColor(full, opts.maxImageWidth ?? 1024);
         const raw = await opts.backend.ask({ png, prompt });
         calls++;
@@ -269,7 +313,8 @@ export async function judgeRun(
           warnings.push(`judge: frame ${idx} returned unparseable output`);
         } else {
           verdicts.set(idx, v);
-          cache[frame.dhash] = v;
+          cache[key] = v;
+          persist();
         }
       } catch (e) {
         failures++;
@@ -288,7 +333,8 @@ export async function judgeRun(
     }
   };
   await Promise.all(Array.from({ length: opts.backend.concurrency }, worker));
-  await writeFile(cachePath, JSON.stringify(cache, null, 2));
+  persist(true);
+  await saving;
 
   // Walk forward, holding the last judged score across visually identical frames.
   let lastScore = 0;

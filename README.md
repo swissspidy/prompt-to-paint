@@ -36,6 +36,14 @@ earlier.
 
 That comparison is pinned as a test, not a claim: `test/curve.test.ts`.
 
+### What a frame is scored on
+
+A frame is a **viewport screenshot** — 1280×800 by default, no scrolling — and
+the text inside that same rectangle. The judge is told to credit only what it
+can see, and entity coverage counts only what it could have seen, so "on screen"
+means one thing across the whole metric. `target.viewport` is how a brief says
+how much of the page it means to score.
+
 ### Two numbers fall out of the curve
 
 - **Time to first render** — the first frame that is not an error page, an empty
@@ -371,6 +379,17 @@ Without that check a misspelled model is discovered at the end of a fifteen
 minute run, as one failure per frame. The scoring pass itself gives up after
 three failures with no successful call, for the same reason.
 
+Calls are made at **temperature 0**, and verdicts are cached in `.p2p-cache/`
+(override with `P2P_CACHE_DIR`) keyed by the brief, the rubric, the judge, and a
+SHA-256 of the screenshot's bytes. `--max-judged` caps model calls per run
+(default 60) and `--judge-width` sets the width screenshots are downscaled to
+before sending. See [docs/METRIC.md](docs/METRIC.md#the-verdict-cache) for why
+the key is the bytes and not a perceptual hash.
+
+Runs that are not on one scale refuse to be ranked together — different
+horizons, briefs, judges, judged-vs-unjudged, or prompted-vs-unprompted. See
+[what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
+
 ## Recovering an interrupted run
 
 `result.json` is assembled once, after the browser and the agent are torn down.
@@ -626,6 +645,13 @@ definitions arrive in one pull request.
   decomposition is untrustworthy. The curve and wall clock stay valid.
 - **Entity coverage is text-only** — it cannot see text baked into images,
   canvas, or shadow DOM.
+- **On screen means in the viewport.** The judge scores a 1280×800 screenshot
+  with no scrolling, and entity coverage counts only text inside that same
+  rectangle, so both halves of the metric agree. A brief that means to score
+  more of the page says so with `target.viewport`; `landing-page` runs at
+  1280×2400 because its rubric asks for a pricing section and a footer.
+- **Judges are scored at temperature 0 and cached by screenshot bytes.** Runs
+  scored by different judges refuse to be ranked together.
 - **The protocol suffix is part of the measurement.** These numbers describe
   agents that were told a browser is watching and asked to render early. That
   is a fair instruction because every agent gets it verbatim, but it is not the
@@ -633,6 +659,11 @@ definitions arrive in one pull request.
 - **A run ended by quiescence could have missed a late improvement.** It never
   changes the AUC, since the curve holds forward either way, and the report
   names the runs it happened to.
+- **Ctrl-C tears down properly.** The browser, the agent and its dev server are
+  stopped on `SIGINT`/`SIGTERM`/`SIGHUP`, because a leaked dev server on the
+  target port is what gives the *next* run a near-zero first render for an app
+  nobody built. Playwright's own signal handlers are disabled so they cannot
+  pre-empt that; see [docs/METRIC.md](docs/METRIC.md#interrupting-a-run).
 
 Full definitions, conventions and edge cases: [`docs/METRIC.md`](docs/METRIC.md).
 

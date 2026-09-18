@@ -132,6 +132,36 @@ document with no `<title>` gets) is not a signal. Counting it would fire on
 every blank page ever served, including the error page shown before anything is
 listening.
 
+### On screen means in the viewport
+
+One rule, applied to both halves of the metric.
+
+The judge scores a **viewport screenshot** — 1280×800 by default, no scrolling —
+and its prompt says to credit only what is visible. Entity coverage used to read
+`document.body.innerText`, the entire document, fold or no fold. So the two
+halves disagreed: a page whose content sat below 800px could be called
+*reviewable* by one and empty by the other, and TTFRR could fire on text nobody
+could see without scrolling.
+
+Now the text a frame records is the text inside the viewport, measured per text
+node against the visible rectangle. `classify` and `entityCoverage` both read
+it, so the judge, the render classification and the reviewability threshold all
+mean the same thing by "on screen".
+
+`offscreenTextChars` records what was left out, and a run says so when it
+matters. When *nothing* is in frame the warning is emphatic, because that case
+is invisible otherwise: every frame is blank, coverage is 0, the judge gets an
+empty screenshot, and the run reads as an agent that built nothing when it built
+something nobody was shown.
+
+**A brief sets how much page is in scope** with `target.viewport`. That is not a
+thumb on the scale, it is the brief saying what it means to score. The bundled
+`landing-page` brief asks for a pricing section and a footer; on a normally
+proportioned marketing page those sit well below 800px, so through a
+laptop-sized window three of its ten rubric points were unwinnable however good
+the page was — a cap on the achievable AUC indistinguishable from an agent doing
+badly. It runs at 1280×2400.
+
 ## Latency decomposition
 
 Wall clock is partitioned so every millisecond lands in exactly one bucket.
@@ -376,6 +406,58 @@ so a `quiet` run says so in its caveats. The quiescence window itself is
 excluded from the latency denominator on the same grounds as the settle window:
 it is defined as a stretch in which nothing happened.
 
+## The verdict cache
+
+Scoring is the expensive part of a run, so verdicts are cached on disk in
+`.p2p-cache/` (override with `P2P_CACHE_DIR`; the default is relative to the
+working directory). The file is keyed by the brief, its rubric **and the judge**,
+so two judges can never answer for each other — that would defeat the one thing
+`p2p rescore --judge` exists to do.
+
+Inside the file, each verdict is keyed by a **SHA-256 of the screenshot's
+bytes**. It was previously keyed by the frame's `dhash`, which is wrong in a way
+that leaves no trace: a dhash is a 64-bit perceptual hash of a 9×8 downscale,
+built to answer "are these nearly the same picture" with a distance threshold,
+and it collides readily on pages differing only in their text. Two 1280×800
+screenshots with entirely different copy hash identically — there is a test. As
+an exact key in a file shared by every run of one brief, that let a verdict
+earned by one agent's page be served for another agent's different page, with
+the collision rate rising as the cache filled. Caches written under the old
+scheme are ignored rather than migrated.
+
+Perceptual similarity still has a job: it is how `selectFramesToJudge` decides a
+frame is not worth a fresh call. That is a threshold applied within one run, not
+an identity claim across all of them.
+
+Judge calls are made at **temperature 0**, recorded in `result.json`. At a
+provider's default the same screenshot can score differently on two runs, which
+puts sampling noise in the headline number — and the cache then freezes whichever
+sample landed first, so the noise becomes permanent and looks like a
+measurement. It does not make a judge deterministic; no provider promises that.
+It removes the variance that is ours to remove.
+
+## What may be ranked together
+
+`compare` and `leaderboard` refuse a set of runs that is not on one scale. Each
+check guards a table that would otherwise look completely normal:
+
+- **different horizons** — AUC is normalised by horizon.
+- **different briefs** — different rubrics.
+- **different judges** — they disagree at the margin, so a ranking across them is
+  partly a ranking of the judges.
+- **judged mixed with unjudged** — entity coverage and rubric correctness are
+  different quantities that happen to share a 0..1 range.
+- **prompted mixed with unprompted** — different questions. `compare` refuses
+  this; `leaderboard` allows it *because* it ranks within each condition and
+  never across, and reports the prompt effect between them.
+
+`--repeat` aggregates carry the same information: the judge is named, a mixed
+one is flagged, and bucket medians are shown in seconds with **no percentages**.
+Each bucket's median is taken independently, so the median install and the median
+build can come from different runs and their sum can exceed the median wall
+clock. Rendering each as a share of that sum — which this did — produced a tidy
+breakdown of a run that never happened.
+
 ## Port hygiene
 
 A run **refuses to start** if anything is already answering on the target port,
@@ -401,6 +483,27 @@ and a `frames/` directory with nothing to read it by. macOS only: Linux has
 If no lookup tool is installed at all, the run says so in its warnings rather
 than assuming the port is clear — an unexamined port is how a leaked server
 survives into the next run.
+
+Success is checked by asking the port again, not by asking whether the pid still
+exists. `process.kill(pid, 0)` succeeds for a *zombie* — a killed child still in
+the process table because nothing has reaped it — so a pid check reports a dead
+server as a survivor indefinitely. It is also the wrong question: what the next
+run needs to know is whether anything is still listening.
+
+### Interrupting a run
+
+`SIGINT`, `SIGTERM` and `SIGHUP` stop the browser, the agent and the agent's dev
+server before exiting, bounded by a 20s deadline so a wedged teardown cannot
+turn a Ctrl-C into a hang — and a hang into a second Ctrl-C, which would leave
+everything running.
+
+Chromium is launched with Playwright's `handleSIGINT` / `handleSIGTERM` /
+`handleSIGHUP` set to **false**. They default to true, and they kill the browser
+and then exit the process, pre-empting the harness's teardown after its first
+step. The visible result was a Ctrl-C that looked tidy — the window vanished —
+while the agent and its dev server ran on and poisoned the next run against that
+port. An end-to-end test interrupts a real run and asserts the port is free
+afterwards; it fails if those options are ever put back.
 
 ## Repeats
 

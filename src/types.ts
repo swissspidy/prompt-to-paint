@@ -61,6 +61,17 @@ export interface Brief {
     url?: string;
     port?: number;
     /**
+     * The window the run is observed through. Defaults to 1280x800.
+     *
+     * Taller is not cheating: it is the brief saying how much of the page it
+     * means to score. A marketing page whose rubric asks for a pricing section
+     * and a footer is asking about content that sits well below 800px, and
+     * scoring it through a laptop-sized window makes those criteria impossible
+     * to meet -- a cap on the achievable AUC that looks exactly like an agent
+     * doing badly.
+     */
+    viewport?: { width: number; height: number };
+    /**
      * Serve the workdir over HTTP instead of waiting for the agent to.
      * Only for briefs that genuinely ask for a static file; for an app brief,
      * getting it running is part of the task.
@@ -92,7 +103,20 @@ export interface Frame {
   colorSig: string | null;
   /** Fraction of non-uniform pixels; drives the blank test. */
   inkRatio: number;
+  /**
+   * Text inside the viewport at capture time, which is what the judge can see
+   * and therefore what entity coverage counts.
+   */
   text: string;
+  /**
+   * Characters of text that were in the DOM but outside the viewport.
+   *
+   * Non-zero means the page has content nothing in this run scored: the judge
+   * is shown a viewport screenshot and told to credit only what is visible. A
+   * brief whose rubric asks about that content needs a taller
+   * `target.viewport`.
+   */
+  offscreenTextChars: number;
   title: string;
   /**
    * Absolute href of the icon the page declares, or null if it declares none.
@@ -419,6 +443,8 @@ export interface RunResult {
     model: string | null;
     framesJudged: number;
     degraded: boolean;
+    /** Sampling temperature used. Recorded so a run can say how it was scored. */
+    temperature?: number;
     /**
      * Written before judging, so an interrupted or failed scoring pass still
      * leaves a replayable run on disk. `p2p rescore` clears it.

@@ -42,8 +42,26 @@ export function parseBrief(raw: unknown, source: string): Brief {
     need(typeof c.description === 'string' && c.description.trim(), `${source}: criterion "${c.id}" has no description`);
     need(typeof c.weight === 'number' && c.weight > 0, `${source}: criterion "${c.id}" needs a positive weight`);
   }
+  const t = b.target;
+  if (t?.port !== undefined)
+    need(
+      Number.isInteger(t.port) && t.port > 0 && t.port < 65536,
+      `${source}: "target.port" must be a TCP port, got ${JSON.stringify(t.port)}`,
+    );
+  if (t?.viewport !== undefined)
+    need(
+      Number.isInteger(t.viewport.width) && t.viewport.width >= 320 &&
+        Number.isInteger(t.viewport.height) && t.viewport.height >= 320,
+      `${source}: "target.viewport" needs integer width and height of at least 320`,
+    );
+
+  const iterIds = new Set<string>();
   for (const it of b.iterations ?? []) {
     need(typeof it.id === 'string' && it.id, `${source}: iteration without an id`);
+    // Iteration ids key results, report rows and the scripted adapter's steps.
+    // Two that share one silently measure the wrong edit.
+    need(!iterIds.has(it.id), `${source}: duplicate iteration id "${it.id}"`);
+    iterIds.add(it.id);
     need(typeof it.prompt === 'string' && it.prompt.trim(), `${source}: iteration "${it.id}" has no prompt`);
     need(
       typeof it.check === 'string' && it.check.trim(),

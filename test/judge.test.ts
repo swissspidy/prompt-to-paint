@@ -1,6 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt } from '../src/judge/judge.ts';
+import { parseVerdict, scoreFromVerdict, selectFramesToJudge, buildJudgePrompt, keyOf } from '../src/judge/judge.ts';
+import { PNG } from 'pngjs';
+import { dhash, decodeGray } from '../src/probe/pixels.ts';
+import { readdir, readFile } from 'node:fs/promises';
+
+/** A flat page with thin dark runs: enough to move a hash, or not to. */
+function flatPng(w: number, h: number, runs: Array<[number, number]>): Buffer {
+  const p = new PNG({ width: w, height: h });
+  p.data.fill(255);
+  for (let i = 3; i < p.data.length; i += 4) p.data[i] = 255;
+  for (const [row, len] of runs) {
+    for (let y = row; y < row + 2 && y < h; y++)
+      for (let x = 20; x < Math.min(20 + len, w); x++) {
+        const o = (y * w + x) * 4;
+        p.data[o] = 20; p.data[o + 1] = 20; p.data[o + 2] = 20;
+      }
+  }
+  return PNG.sync.write(p);
+}
 import { parseJudge, pickBackend, preflightJudge, DEFAULT_JUDGE } from '../src/judge/backends.ts';
 import { judgeRun } from '../src/judge/judge.ts';
 import type { JudgeBackend } from '../src/judge/backends.ts';
@@ -56,7 +74,7 @@ test('a missing criterion counts as unmet, never as absent from the denominator'
 
 const frame = (index: number, dhash: string, cls: Frame['class'] = 'render'): Frame => ({
   index, tMs: index * 1000, class: cls, reason: '', screenshotPath: `f${index}.png`,
-  dhash, colorSig: null, inkRatio: 0.2, text: '', title: '', favicon: null, tabSignal: false,
+  dhash, colorSig: null, inkRatio: 0.2, text: '', title: '', favicon: null, tabSignal: false, offscreenTextChars: 0,
   httpStatus: 200, consoleErrors: [],
   entityCoverage: 0, entitiesFound: [], domSignature: '', captureMs: 5,
 });
@@ -217,7 +235,7 @@ test('two judges do not share a verdict cache', async () => {
     const frames = [{
       index: 0, tMs: 1000, class: 'render' as const, reason: 'r', screenshotPath: shot,
       dhash: 'abcdef0123456789', colorSig: '0'.repeat(16), inkRatio: 0.5, text: 'x',
-      title: 't', favicon: null, tabSignal: false, httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
+      title: 't', favicon: null, tabSignal: false, offscreenTextChars: 0, httpStatus: 200, consoleErrors: [], entityCoverage: 0.5,
       entitiesFound: ['x'], domSignature: 'D', captureMs: 1,
     }];
     const single: Brief = { ...brief, rubric: [{ id: 'renders', description: 'renders', weight: 1 }] };
@@ -290,4 +308,98 @@ test('a judge that never once answers stops instead of grinding every frame', as
   // The run is still returned, scored mechanically and saying so.
   assert.equal(out.frames.length, 40);
   assert.ok(out.frames.every((f) => f.scoreSource !== 'judge'));
+});
+
+test('two different screenshots that share a perceptual hash get their own verdicts', async () => {
+  // The bug this guards: the verdict cache was keyed on the frame's dhash, a
+  // 64-bit perceptual hash of a 9x8 downscale. That is a near-duplicate
+  // detector used with a threshold, not an identity, and it collides on pages
+  // that differ only in their text -- so inside a cache file shared by every
+  // run of one brief, a verdict earned by one agent's page was served for
+  // another agent's different page, silently.
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-key-'));
+  try {
+    const a = flatPng(1280, 800, [[300, 90]]);
+    const b = flatPng(1280, 800, [[300, 40]]);
+    assert.equal(dhash(decodeGray(a)), dhash(decodeGray(b)), 'these two do collide perceptually');
+    assert.notEqual(keyOf(a), keyOf(b), 'but they are not the same screenshot');
+
+    await writeFile(join(dir, 'a.png'), a);
+    await writeFile(join(dir, 'b.png'), b);
+    const shared = dhash(decodeGray(a));
+    const frames: Frame[] = [
+      { ...frame(0, shared), screenshotPath: join(dir, 'a.png'), colorSig: '0'.repeat(16) },
+      { ...frame(1, shared), screenshotPath: join(dir, 'b.png'), colorSig: 'f'.repeat(16) },
+    ];
+
+    const asked: string[] = [];
+    const backend: JudgeBackend = {
+      name: 'ai', model: 'test:model', concurrency: 1,
+      ask: async ({ png }) => {
+        asked.push(keyOf(png));
+        return JSON.stringify({ criteria: { renders: { met: true } } });
+      },
+    };
+    await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0, maxImageWidth: 4096 });
+    assert.equal(asked.length, 2, 'both frames were sent; neither answered for the other');
+    assert.notEqual(asked[0], asked[1], 'and they were genuinely different images');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an identical screenshot is served from cache rather than re-judged', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-hit-'));
+  try {
+    const png = flatPng(400, 300, [[100, 50]]);
+    await writeFile(join(dir, 'a.png'), png);
+    await writeFile(join(dir, 'copy.png'), png);
+    const h = dhash(decodeGray(png));
+    const frames: Frame[] = [
+      { ...frame(0, h), screenshotPath: join(dir, 'a.png'), colorSig: '0'.repeat(16) },
+      { ...frame(1, h), screenshotPath: join(dir, 'copy.png'), colorSig: 'f'.repeat(16) },
+    ];
+    let calls = 0;
+    const backend: JudgeBackend = {
+      name: 'ai', model: 'test:model', concurrency: 1,
+      ask: async () => { calls++; return JSON.stringify({ criteria: { renders: { met: true } } }); },
+    };
+    await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0 });
+    assert.equal(calls, 1, 'the same bytes are paid for once');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('verdicts survive a scoring pass that does not finish', async () => {
+  // The pass is the expensive part of a run; a process that died in the middle
+  // of it used to lose every call it had already paid for.
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-persist-'));
+  try {
+    const pngs = [10, 20, 30, 40].map((n) => flatPng(400, 300, [[n, 50]]));
+    const frames: Frame[] = [];
+    for (const [i, png] of pngs.entries()) {
+      await writeFile(join(dir, `f${i}.png`), png);
+      frames.push({ ...frame(i, dhash(decodeGray(png))), screenshotPath: join(dir, `f${i}.png`) });
+    }
+    const backend: JudgeBackend = {
+      name: 'ai', model: 'test:model', concurrency: 1,
+      ask: async () => JSON.stringify({ criteria: { renders: { met: true } } }),
+    };
+    const out = await judgeRun(frames, brief, { backend, cacheDir: dir, distinctThreshold: 0 });
+    const files = (await readdir(dir)).filter((f) => f.startsWith('judge-v2-'));
+    assert.equal(files.length, 1, 'the cache is written under a v2 name');
+    const saved = JSON.parse(await readFile(join(dir, files[0]!), 'utf8')) as Record<string, unknown>;
+    assert.ok(out.framesJudged > 0, 'something was judged');
+    assert.equal(
+      Object.keys(saved).length,
+      out.framesJudged,
+      'every verdict that was paid for reached disk',
+    );
+    // Keyed by the screenshot, so the entries map back to real files.
+    const keys = new Set(Object.keys(saved));
+    assert.ok(pngs.some((png) => keys.has(keyOf(png))), 'keyed by the screenshot itself');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

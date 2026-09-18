@@ -13,6 +13,14 @@ export interface ProberOptions {
   framesDir: string;
   t0Epoch: number;
   intervalMs?: number;
+  /**
+   * The window every number in the run is measured through.
+   *
+   * It decides what the judge is shown and, since text is read from the same
+   * rectangle, what entity coverage counts. A brief whose rubric asks about a
+   * pricing table and a footer needs a window tall enough to contain them, or
+   * those criteria are unwinnable however good the page is.
+   */
   viewport?: { width: number; height: number };
   /** Consecutive failed server probes before we call a live page stale. */
   serverDownGrace?: number;
@@ -40,7 +48,10 @@ export interface ProberOptions {
 }
 
 interface PageObservation {
+  /** Text inside the viewport. What the judge can see, so what counts. */
   text: string;
+  /** Characters of text outside it -- present in the DOM, below the fold. */
+  offscreenChars: number;
   title: string;
   /** Absolute href of the page's declared icon, or null if it declares none. */
   favicon: string | null;
@@ -49,7 +60,7 @@ interface PageObservation {
   domSignature: string;
 }
 
-const OBSERVE = `(() => {
+export const OBSERVE = `(() => {
   const sels = ${JSON.stringify(ERROR_SELECTORS)};
   let overlayHit = null;
   for (const s of sels) { try { if (document.querySelector(s)) { overlayHit = s; break; } } catch {} }
@@ -58,7 +69,46 @@ const OBSERVE = `(() => {
     const r = el.getBoundingClientRect();
     if (r.width > 8 && r.height > 8) mediaBoxes++;
   }
-  const text = (document.body && document.body.innerText) ? document.body.innerText : '';
+  // Text the viewport actually shows, not the whole document.
+  //
+  // The judge scores a viewport screenshot and is told to credit only what it
+  // can see. Entity coverage -- which decides time to first *reviewable*
+  // render -- used to read document.body.innerText, the entire page, fold or no
+  // fold. So the two halves of one metric disagreed about what "on screen"
+  // meant, and a page whose content sat below 800px could be called reviewable
+  // by one and empty by the other. One rule, applied to both: on screen means
+  // in the viewport. A brief that wants more of the page in scope says so with
+  // a taller target.viewport.
+  let text = '';
+  let offscreenChars = 0;
+  if (document.body) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    const parts = [];
+    let seen = 0;
+    for (let n = walker.nextNode(); n && seen < 4000; n = walker.nextNode()) {
+      const raw = n.nodeValue;
+      if (!raw || !raw.trim()) continue;
+      const parent = n.parentElement;
+      if (!parent || parent.closest('script,style,noscript,template')) continue;
+      seen++;
+      let onScreen = false;
+      try {
+        range.selectNodeContents(n);
+        const rects = range.getClientRects();
+        for (let i = 0; i < rects.length; i++) {
+          const r = rects[i];
+          if (r.width <= 0 || r.height <= 0) continue;
+          if (r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw) { onScreen = true; break; }
+        }
+      } catch {}
+      if (onScreen) parts.push(raw.trim());
+      else offscreenChars += raw.trim().length;
+    }
+    text = parts.join('\\n');
+  }
   // The last declared icon wins, the way the browser resolves it. .href is the
   // resolved absolute URL; the attribute would be whatever relative string the
   // page happened to write.
@@ -73,6 +123,7 @@ const OBSERVE = `(() => {
   const domSignature = Object.keys(tags).sort().map(k => k + k[0] + tags[k]).join('|');
   return {
     text: text.slice(0, 20000),
+    offscreenChars,
     title: document.title || '',
     favicon,
     overlayHit,
@@ -249,6 +300,17 @@ export class Prober {
       headless: !this.opts.headed,
       executablePath: findChromium(this.opts.executablePath),
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      // Playwright installs its own SIGINT/SIGTERM/SIGHUP handlers by default.
+      // They kill the browser and then exit the process -- which pre-empts the
+      // harness's own teardown mid-flight. The visible result of a Ctrl-C was a
+      // browser that closed tidily, an agent still running, and its dev server
+      // still holding the target port: precisely the leak the harness's handler
+      // exists to prevent, defeated by the one step that ran before it. The
+      // browser is closed in `stop()`, which the harness calls on those signals
+      // itself, so nothing is lost by owning them.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
     });
     const viewport = this.opts.viewport ?? { width: 1280, height: 800 };
     // Playwright names the recording itself and only finalises it when the
@@ -320,6 +382,7 @@ export class Prober {
       colorSig: null,
       inkRatio: 0,
       text: '',
+      offscreenTextChars: 0,
       title: '',
       favicon: null,
       tabSignal: false,
@@ -514,6 +577,7 @@ export class Prober {
       colorSig: sig,
       inkRatio: ink,
       text: obs.text,
+      offscreenTextChars: obs.offscreenChars,
       title: obs.title,
       favicon: obs.favicon,
       tabSignal: tabSignalFrom(obs.title, obs.favicon, this.opts.url),

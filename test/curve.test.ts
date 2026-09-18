@@ -17,6 +17,7 @@ function frame(tMs: number, score: number, over: Partial<ScoredFrame> = {}): Sco
     title: '',
     favicon: null,
     tabSignal: false,
+    offscreenTextChars: 0,
     httpStatus: 200,
     consoleErrors: [],
     entityCoverage: score,

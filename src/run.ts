@@ -14,6 +14,7 @@ import {
 } from './decompose/attribute.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { judgeRun, mechanicalScores } from './judge/judge.ts';
+import { JUDGE_TEMPERATURE } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
@@ -53,6 +54,10 @@ export interface RunOptions {
   quietForMs?: number;
   /** Drop the "render something early" clause from the protocol suffix. */
   noRenderEarly?: boolean;
+  /** Cap on model calls in the scoring pass. */
+  maxJudged?: number;
+  /** Width screenshots are downscaled to before they are sent to the judge. */
+  maxImageWidth?: number;
   /** Show the prober's browser window. Needs a display. */
   headed?: boolean;
   /** Record the prober's session to this path as WebM. */
@@ -296,6 +301,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     framesDir,
     t0Epoch,
     intervalMs: opts.pollMs ?? 1000,
+    viewport: brief.target?.viewport,
     headed: opts.headed,
     videoPath: opts.videoPath,
     onFrame: (f) => {
@@ -431,6 +437,44 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         );
     }
   };
+
+  // Tear down on Ctrl-C.
+  //
+  // Without this the harness exits and leaves Chromium, the agent and the
+  // agent's dev server running. The leaked dev server is the expensive part: it
+  // keeps answering on the target port, so the *next* run finds something
+  // already serving and reports a near-zero first render for an app nobody
+  // built -- the exact wrong-but-plausible number this project exists to
+  // refuse. The frame log means an interrupted run is still recoverable; this
+  // means it does not poison the one after it.
+  //
+  // `once`, and removed in the finally, so `--repeat` cannot stack a listener
+  // per run. A second Ctrl-C during teardown is honoured by the default
+  // handler, because someone pressing it twice means it now.
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const onSignal = (sig: NodeJS.Signals): void => {
+    log(`${sig} received; stopping the browser, the agent and its dev server`);
+    void (async () => {
+      // Bounded, and the exit happens either way.
+      //
+      // Teardown closes a browser, terminates an agent and shells out to find a
+      // listener, and any of those can be slow or wedged. Waiting on it
+      // unconditionally means a Ctrl-C that appears to do nothing, and a second
+      // Ctrl-C then kills the harness outright -- leaving exactly the dev server
+      // this path exists to stop. So it gets a deadline, and what it managed to
+      // finish is what gets cleaned up.
+      const raced = await Promise.race([
+        cleanup().then(() => 'done' as const).catch(() => 'failed' as const),
+        sleep(20_000).then(() => 'timeout' as const),
+      ]);
+      if (raced === 'timeout')
+        log(`teardown did not finish in 20s; exiting anyway. Check for a stray process on port ${port}.`);
+      await Promise.race([framesLog.catch(() => undefined), sleep(2000)]);
+      // 128 + signal number, as a process killed by that signal would report.
+      process.exit(sig === 'SIGINT' ? 130 : sig === 'SIGHUP' ? 129 : 143);
+    })();
+  };
+  for (const sig of signals) process.once(sig, onSignal);
 
   try {
     if (brief.target?.serveStatic) {
@@ -624,6 +668,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // the agent and its dev server running, and a survivor on this port would
     // corrupt the next run.
     await cleanup();
+    for (const sig of signals) process.removeListener(sig, onSignal);
   }
 
   if (coldEndMs === 0) coldEndMs = Date.now() - t0Epoch;
@@ -735,6 +780,47 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         `${workdir} it was given. Whatever this run measured was built outside the run directory, so ` +
         'nothing here reproduces it and the workdir contents are not the app that was on screen.',
     );
+  }
+
+  // Content the judge was never shown.
+  //
+  // The judge scores a viewport screenshot and is told to credit only what it
+  // can see, so a page with a lot of text below the fold has criteria it cannot
+  // meet however well it was built -- a ceiling on the AUC that looks exactly
+  // like an agent doing badly.
+  //
+  // Read off the last frame that saw any text at all, rather than the last
+  // *rendering* one. A page whose content sits entirely below the fold is the
+  // case that needs saying most, and it never produces a rendering frame: the
+  // viewport is empty, so every frame is classified blank and looking only at
+  // renders would stay silent exactly when the explanation is load-bearing.
+  const lastWithText = [...prober.frames]
+    .reverse()
+    .find((f) => f.offscreenTextChars > 0 || f.text.length > 0);
+  const offscreen = lastWithText?.offscreenTextChars ?? 0;
+  const onscreen = lastWithText?.text.length ?? 0;
+  if (offscreen > 0) {
+    const vp = brief.target?.viewport ?? { width: 1280, height: 800 };
+    const window_ = `${vp.width}x${vp.height} viewport`;
+    if (onscreen === 0) {
+      // The whole page is out of frame. Qualitatively worse than some of it
+      // being hidden, and it does not even produce a rendering frame to notice
+      // -- the viewport is empty, so the run reads as an agent that built
+      // nothing when in fact it built something nobody was shown.
+      warnings.push(
+        `THE PAGE IS OUTSIDE THE VIEWPORT: ${offscreen} characters of text are in the DOM and none of ` +
+          `them are inside the ${window_} the run observes. Every frame is therefore blank, entity ` +
+          'coverage is 0, and the judge sees an empty screenshot -- the run reads as an agent that built ' +
+          "nothing. Raise the brief's target.viewport, or the app is genuinely rendering off-screen.",
+      );
+    } else if (offscreen > 200 && offscreen > onscreen * 0.25) {
+      warnings.push(
+        `${offscreen} characters of this page's text were outside the ${window_} at the end of the run ` +
+          `(${onscreen} were inside it). The judge scores a viewport screenshot and credits only what it ` +
+          'can see, so any rubric criterion about that content could not be met. ' +
+          "Raise the brief's target.viewport if those parts are meant to be in scope.",
+      );
+    }
   }
 
   // An empty workdir is not proof of anything on its own -- a run the agent
@@ -870,6 +956,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       framesJudged: 0,
       degraded: true,
       pending: true,
+      temperature: JUDGE_TEMPERATURE,
     },
     [
       'judge: scores in this file are provisional -- the scoring pass had not finished when it ' +
@@ -883,6 +970,8 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   try {
     judged = await judgeRun(coldFrames, brief, {
       backend: opts.judgeBackend,
+      maxJudged: opts.maxJudged,
+      maxImageWidth: opts.maxImageWidth,
       onProgress: (d, t) => d % 5 === 0 && log(`  judged ${d}/${t}`),
     });
   } catch (e) {
@@ -904,6 +993,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       model: opts.judgeBackend.model,
       framesJudged: judged.framesJudged,
       degraded: judged.degraded,
+      temperature: JUDGE_TEMPERATURE,
     },
     judged.warnings,
   );

@@ -6,7 +6,7 @@ import type { Frame } from '../src/types.ts';
 
 const frame = (over: Partial<Frame> = {}): Frame => ({
   index: 0, tMs: 0, class: 'render', reason: '', screenshotPath: 'frames/f0.png',
-  dhash: 'a', colorSig: 'b', inkRatio: 0.2, text: '', title: '', favicon: null, tabSignal: false,
+  dhash: 'a', colorSig: 'b', inkRatio: 0.2, text: '', title: '', favicon: null, tabSignal: false, offscreenTextChars: 0,
   httpStatus: 200,
   consoleErrors: [], entityCoverage: 0.5, entitiesFound: [], domSignature: 'x', captureMs: 5,
   ...over,

@@ -9,7 +9,7 @@ import type { Frame } from '../src/types.ts';
 const frame = (index: number, tMs: number, over: Partial<Frame> = {}): Frame => ({
   index, tMs, class: 'render', reason: 'r', screenshotPath: `frames/f${index}.png`,
   dhash: 'a'.repeat(16), colorSig: '0'.repeat(16), inkRatio: 0.4, text: 'Orbit',
-  title: 'Orbit', favicon: null, tabSignal: true, httpStatus: 200, consoleErrors: [],
+  title: 'Orbit', favicon: null, tabSignal: true, offscreenTextChars: 0, httpStatus: 200, consoleErrors: [],
   entityCoverage: 0.6, entitiesFound: ['app-name'], domSignature: 'DIVD3', captureMs: 9, ...over,
 });
 

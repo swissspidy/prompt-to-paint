@@ -4,7 +4,7 @@ import { PNG } from 'pngjs';
 import { classify } from '../src/probe/classify.ts';
 import { entityCoverage } from '../src/probe/entities.ts';
 import { decodeGray, dhash, hamming, inkRatio, colorSignature, colorDelta } from '../src/probe/pixels.ts';
-import { captureWithRetry, tabSignalFrom } from '../src/probe/prober.ts';
+import { captureWithRetry, tabSignalFrom, OBSERVE } from '../src/probe/prober.ts';
 
 const base = { reachable: true, httpStatus: 200, overlayHit: null, mediaBoxes: 0, inkRatio: 0.3 };
 
@@ -207,4 +207,21 @@ test('a tab signal never depends on the page having rendered', () => {
   // tab already says the right thing. classify() is untouched by it.
   assert.equal(classify({ ...base, text: '', inkRatio: 0 }).class, 'blank');
   assert.equal(tabSignalFrom('Orbit', null, URL_UNDER_TEST), true);
+});
+
+test('the injected observation script is valid JavaScript', () => {
+  // This is not paranoia about a constant. OBSERVE is built with a template
+  // literal, so a `\n` written in the source becomes a real newline in the
+  // string handed to the page -- and a real newline inside a JS string literal
+  // is a syntax error. Nothing about the source looks wrong; every capture just
+  // starts failing, every frame comes back `unreachable`, and the run reports
+  // that the app never rendered.
+  assert.doesNotThrow(() => new Function(`return ${OBSERVE}`));
+});
+
+test('the observation script asks the page only for what a frame records', () => {
+  // A cheap guard that the contract has not drifted: these are the keys
+  // PageObservation destructures, and a missing one is a silent undefined.
+  for (const key of ['text', 'offscreenChars', 'title', 'favicon', 'overlayHit', 'mediaBoxes', 'domSignature'])
+    assert.ok(OBSERVE.includes(key), `OBSERVE should return ${key}`);
 });

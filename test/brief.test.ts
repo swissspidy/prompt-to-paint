@@ -53,3 +53,27 @@ test('the bundled briefs are all valid', async () => {
     }
   }
 });
+
+test('two iterations cannot share an id', () => {
+  // Iteration ids key results, report rows and the scripted adapter's steps.
+  // Two that share one silently measure the wrong edit.
+  assert.throws(
+    () => parseBrief({ ...valid, iterations: [
+      { id: 'blue', prompt: 'p', check: 'true', description: 'd' },
+      { id: 'blue', prompt: 'q', check: 'true', description: 'd' },
+    ] }, 'b.json'),
+    /duplicate iteration id "blue"/,
+  );
+});
+
+test('a target that cannot be observed is refused up front', () => {
+  assert.throws(() => parseBrief({ ...valid, target: { port: 0 } }, 'b.json'), /target\.port/);
+  assert.throws(() => parseBrief({ ...valid, target: { port: 99999 } }, 'b.json'), /target\.port/);
+  assert.throws(
+    () => parseBrief({ ...valid, target: { viewport: { width: 1280, height: 10 } } }, 'b.json'),
+    /target\.viewport/,
+  );
+  assert.doesNotThrow(
+    () => parseBrief({ ...valid, target: { port: 5173, viewport: { width: 1280, height: 2400 } } }, 'b.json'),
+  );
+});

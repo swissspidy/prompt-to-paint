@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, chmod, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, chmod, mkdir, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { listenersOn } from '../../src/port.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -438,6 +442,140 @@ test('an edit records what the agent did, so a slow toolchain is not charged to 
     assert.ok(it.timeToCorrectChangeMs !== null && it.timeToCorrectChangeMs > 3000);
     assert.ok(it.afterAgentMs !== null && it.afterAgentMs !== undefined);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('what the judge sees and what counts as reviewable are the same rectangle', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-fold-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    // Everything the brief names is in the document, but pushed far below the
+    // fold. The judge is shown a viewport screenshot and told to credit only
+    // what it can see; entity coverage used to read the whole document, so the
+    // two halves of one metric disagreed and a page nobody could see was called
+    // reviewable.
+    const buried = '<!doctype html><meta charset=utf-8><body><div style="height:3000px"></div>'
+      + '<h1>DevConf 2026</h1><ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul>'
+      + '<footer>See you in Berlin</footer></body>';
+
+    const below = await runBenchmark({
+      brief: { ...base, horizonSec: 25, iterations: [], target: { ...base.target, port: 5292 } },
+      adapter: new ScriptedAdapter({ steps: [{ atMs: 0, write: { path: 'index.html', content: buried } }] }),
+      runDir: dir, label: 'below-fold', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    const last = [...below.frames].reverse().find((f) => f.class === 'render' || f.offscreenTextChars > 0);
+    assert.ok(last, 'the page was observed');
+    assert.ok(last.offscreenTextChars > 0, 'the buried text is recorded as outside the viewport');
+    assert.equal(last.entityCoverage, 0, 'and does not count towards reviewable');
+    assert.equal(below.curve.ttfnbrMs, null, 'an empty viewport is not a render, whatever the DOM holds');
+    assert.ok(
+      below.warnings.some((w) => /THE PAGE IS OUTSIDE THE VIEWPORT/.test(w)),
+      'and the run says so, rather than reading as an agent that built nothing',
+    );
+
+    // The same page through a window tall enough to contain it. This is what a
+    // brief whose rubric asks about below-the-fold content has to do.
+    const dir2 = await tmp('p2p-fold2-');
+    try {
+      const tall = await runBenchmark({
+        brief: {
+          ...base, horizonSec: 25, iterations: [],
+          target: { ...base.target, port: 5293, viewport: { width: 1280, height: 3600 } },
+        },
+        adapter: new ScriptedAdapter({ steps: [{ atMs: 0, write: { path: 'index.html', content: buried } }] }),
+        runDir: dir2, label: 'tall', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+      });
+      assert.ok(tall.curve.ttfrrMs !== null, 'the same page is reviewable through a window that shows it');
+      assert.ok(
+        !tall.warnings.some((w) => /OUTSIDE THE VIEWPORT|outside the .* viewport/.test(w)),
+        'and nothing is being hidden from the judge',
+      );
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Ctrl-C takes the agent\'s dev server with it', { skip: needsBrowser, timeout: 180_000 }, async () => {
+  // A leaked dev server is not untidiness. It keeps answering on the target
+  // port, so the *next* run finds something already serving and reports a
+  // near-zero first render for an app nobody built -- a wrong number that looks
+  // entirely plausible, which is the failure this project exists to refuse.
+  //
+  // This was broken in a way nothing local would show: Playwright installs its
+  // own SIGINT/SIGTERM/SIGHUP handlers by default, and they kill the browser
+  // and exit the process. The harness's teardown got as far as closing the
+  // browser and was then pre-empted, so a Ctrl-C looked tidy -- the window
+  // vanished -- while the agent and its server ran on.
+  const PORT = 5289;
+  const dir = await tmp('p2p-sigint-');
+  const serve = `node -e "require('http').createServer((q,s)=>s.end('<h1>Orbit</h1>')).listen(${PORT},'127.0.0.1')" & sleep 600`;
+
+  for (const pid of (await listenersOn(PORT)).pids) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* not ours */ }
+  }
+
+  // The agent serves this port itself, so the brief must target it and must not
+  // ask the harness to serve the workdir -- otherwise the port under test is not
+  // the one teardown clears.
+  const base = JSON.parse(await readFile('test/fixtures/calibration-brief.json', 'utf8'));
+  const briefPath = join(dir, 'brief.json');
+  await mkdir(dir, { recursive: true });
+  await writeFile(briefPath, JSON.stringify({
+    ...base, horizonSec: 300, iterations: [], target: { port: PORT },
+  }));
+
+  const cli = spawn(process.execPath, [
+    'src/cli.ts', 'run',
+    '--brief', briefPath,
+    '--adapter', 'exec', '--command', serve,
+    '--judge', 'none', '--out', dir, '--no-progress', '--no-iterate',
+  ], { cwd: process.cwd(), stdio: 'ignore' });
+
+  try {
+    // Wait for the agent's server to come up *and* for the run to be underway:
+    // interrupting before the first frame lands would test nothing about what
+    // survives an interrupt.
+    const runDir = async (): Promise<string | null> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      const d = entries.find((e) => e.isDirectory());
+      return d ? join(dir, d.name) : null;
+    };
+    let ready = false;
+    for (let i = 0; i < 90 && !ready; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const rd = await runDir();
+      ready = (await listenersOn(PORT)).pids.length > 0 && rd !== null && existsSync(join(rd, 'frames.ndjson'));
+    }
+    assert.ok(ready, 'the agent had a server listening and the run had started');
+
+    cli.kill('SIGINT');
+    await once(cli, 'exit');
+
+    // The harness waits for its own teardown before exiting, so by the time the
+    // process is gone the port should be too.
+    let free = false;
+    for (let i = 0; i < 20 && !free; i++) {
+      free = (await listenersOn(PORT)).pids.length === 0;
+      if (!free) await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.ok(free, `port ${PORT} is still held after the harness exited`);
+
+    // And the run it was interrupted mid-flight is still readable.
+    const runDirs = (await readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+    assert.equal(runDirs.length, 1);
+    assert.ok(existsSync(join(dir, runDirs[0]!, 'frames.ndjson')), 'the timeline survived the interrupt');
+  } finally {
+    if (cli.exitCode === null && cli.signalCode === null) cli.kill('SIGKILL');
+    for (const pid of (await listenersOn(PORT)).pids) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* not ours */ }
+    }
     await rm(dir, { recursive: true, force: true });
   }
 });

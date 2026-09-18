@@ -31,12 +31,25 @@ export interface Aggregate {
   brief: string;
   label: string;
   runs: number;
+  /**
+   * Which judge scored these, so two aggregates cannot be laid side by side
+   * without it being visible that they were scored by different models.
+   * `null` when the runs disagreed, which is itself the answer.
+   */
+  judge: string | null;
   auc: Spread;
   ttfnbrMs: Spread;
   ttfrrMs: Spread;
   finalScore: Spread;
+  /**
+   * Median wall clock across the runs. The denominator the bucket medians are
+   * shown against -- and the reason they are not shown as percentages of each
+   * other; see `renderAggregate`.
+   */
+  wallMs: Spread;
   bucketMedians: Record<string, number>;
   runIds: string[];
+  warnings: string[];
 }
 
 /**
@@ -47,16 +60,31 @@ export function aggregate(runs: RunResult[]): Aggregate {
   for (const b of BUCKET_ORDER) {
     bucketMedians[b] = spread(runs.map((r) => r.decomposition.buckets[b])).median ?? 0;
   }
+  const judges = [...new Set(runs.map((r) => r.judge.model ?? `none:${r.judge.backend}`))];
+  const warnings: string[] = [];
+  if (judges.length > 1)
+    warnings.push(
+      `These runs were scored by different judges (${judges.join(', ')}), so the spread below mixes ` +
+        'agent variance with judge disagreement and cannot be read as either.',
+    );
+  if (runs.some((r) => r.judge.degraded) && !runs.every((r) => r.judge.degraded))
+    warnings.push(
+      'Some of these runs were scored by a rubric and some by entity coverage. Those are different ' +
+        'quantities, and a median over both is not a measurement of anything.',
+    );
   return {
     brief: runs[0]?.brief ?? '',
     label: runs[0]?.label ?? '',
     runs: runs.length,
+    judge: judges.length === 1 ? judges[0]! : null,
     auc: spread(runs.map((r) => r.curve.auc)),
     ttfnbrMs: spread(runs.map((r) => r.curve.ttfnbrMs)),
     ttfrrMs: spread(runs.map((r) => r.curve.ttfrrMs)),
     finalScore: spread(runs.map((r) => r.curve.finalScore)),
+    wallMs: spread(runs.map((r) => r.decomposition.wallMs)),
     bucketMedians,
     runIds: runs.map((r) => r.runId),
+    warnings,
   };
 }
 
@@ -83,19 +111,30 @@ function line(name: string, s: Spread, fmt: (v: number | null) => string): strin
 export function renderAggregate(a: Aggregate): string {
   const L: string[] = [];
   L.push(`\n  ${a.brief} / ${a.label}  --  ${a.runs} runs (median, [min .. max])`);
+  L.push(`  judge: ${a.judge ?? 'MIXED -- see the warning below'}`);
   L.push(`  ${'-'.repeat(64)}`);
   L.push(line('AUC', a.auc, fmtN));
   L.push(line('First render', a.ttfnbrMs, fmtMs));
   L.push(line('First reviewable', a.ttfrrMs, fmtMs));
   L.push(line('Final score', a.finalScore, fmtN));
   L.push('');
-  L.push('  Median time per phase');
-  const total = Object.values(a.bucketMedians).reduce((s, v) => s + v, 0) || 1;
+  // Absolute medians only, with no percentage beside them.
+  //
+  // Each bucket's median is taken independently, so they describe no single run
+  // and need not add up to one: the median install and the median build can
+  // come from different runs, and their sum can exceed the median wall clock.
+  // Rendering each as a share of that sum -- which this did -- produced a
+  // tidy-looking breakdown of a run that never happened.
+  L.push(`  Median time per phase  (each median taken independently; they do not sum to a run)`);
   for (const b of BUCKET_ORDER) {
     const ms = a.bucketMedians[b] ?? 0;
     if (ms <= 0) continue;
-    L.push(`    ${BUCKET_LABEL[b].padEnd(20)} ${(ms / 1000).toFixed(1).padStart(7)}s  ${((ms / total) * 100).toFixed(0).padStart(3)}%`);
+    L.push(`    ${BUCKET_LABEL[b].padEnd(20)} ${(ms / 1000).toFixed(1).padStart(7)}s`);
   }
+  if (a.wallMs.median !== null)
+    L.push(`    ${'-'.repeat(30)}`);
+  if (a.wallMs.median !== null)
+    L.push(`    ${'median wall clock'.padEnd(20)} ${(a.wallMs.median / 1000).toFixed(1).padStart(7)}s`);
   if (a.auc.median !== null && a.auc.max !== null && a.auc.min !== null) {
     const width = a.auc.max - a.auc.min;
     if (width > 0.15) {
@@ -103,6 +142,10 @@ export function renderAggregate(a: Aggregate): string {
       L.push(`  ! AUC ranges over ${width.toFixed(3)} across ${a.runs} runs. Treat any ranking against`);
       L.push('    another agent as unresolved unless the gap exceeds that.');
     }
+  }
+  for (const w of a.warnings) {
+    L.push('');
+    L.push(`  ! ${w}`);
   }
   L.push('');
   return L.join('\n');

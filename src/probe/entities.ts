@@ -15,6 +15,16 @@ const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
  */
 const MATCHERS = new Map<string, RegExp | string | null>();
 
+/**
+ * Bound on the matcher cache.
+ *
+ * A run uses a handful of aliases, so this is never reached in practice; it
+ * exists because the map is module-global and would otherwise grow without
+ * limit in anything long-lived that scores many briefs. Cleared rather than
+ * evicted one at a time: the cost of a cold rebuild is a few regex compiles.
+ */
+const MAX_MATCHERS = 2000;
+
 /** Word-boundary match for alphanumeric aliases, substring for the rest. */
 function matcherFor(alias: string): RegExp | string | null {
   const a = norm(alias);
@@ -29,6 +39,7 @@ function matcherFor(alias: string): RegExp | string | null {
 function aliasPresent(haystack: string, alias: string): boolean {
   let m = MATCHERS.get(alias);
   if (m === undefined) {
+    if (MATCHERS.size >= MAX_MATCHERS) MATCHERS.clear();
     m = matcherFor(alias);
     MATCHERS.set(alias, m);
   }

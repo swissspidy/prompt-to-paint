@@ -25,6 +25,7 @@ function frame(tMs: number, screenshotPath: string | null): ScoredFrame {
     title: '',
     favicon: null,
     tabSignal: false,
+    offscreenTextChars: 0,
     httpStatus: 200,
     consoleErrors: [],
     entityCoverage: 0,
