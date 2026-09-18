@@ -21,6 +21,17 @@ export interface IterateOptions {
   changeThreshold?: number;
   /** Worst-cell colour distance counting as a visible change (0..255). */
   colorThreshold?: number;
+  /**
+   * Baseline samples taken before the prompt is sent.
+   *
+   * More than one because the check is arbitrary JavaScript evaluated in a live
+   * page: it throws mid-reload, and it reads a style that has not been applied
+   * yet. A single sample that happened to land in one of those moments reports
+   * a header that was already blue as not-blue, and the very first frame after
+   * the prompt then scores a near-instant success for an edit the agent never
+   * made. Two samples cost a few hundred milliseconds before the clock starts.
+   */
+  baselineSamples?: number;
 }
 
 const isBroken = (c: Frame['class'] | undefined): boolean =>
@@ -55,7 +66,11 @@ export async function runIteration(
   prober.setCheck(spec.check);
 
   // Baseline: the state a human would be looking at as they type the prompt.
-  const baseline = await prober.sample();
+  const samples: Array<Awaited<ReturnType<typeof prober.sample>>> = [];
+  for (let i = 0; i < Math.max(1, opts.baselineSamples ?? 2); i++) {
+    samples.push(await prober.sample());
+  }
+  const baseline = samples.at(-1) ?? null;
   const baselineHash = baseline?.dhash ?? null;
   const baselineSig = baseline?.colorSig ?? null;
   const firstNewFrame = prober.frames.length;
@@ -64,7 +79,16 @@ export async function runIteration(
   // this edit: the very first frame would report a near-instant success for a
   // change the agent never made. That is a broken check, not a fast agent, so
   // the iteration is reported invalid rather than given a flattering number.
-  const baselineAlreadyPassing = baseline?.checkPassed === true;
+  //
+  // *Any* sample passing is enough. The two mistakes are not symmetrical: a
+  // false "void" costs one measurement and says exactly why, while a false
+  // "already correct at 0.2s" is a wrong number that looks like a very good
+  // one and will be believed.
+  const checks = samples.map((f) => f?.checkPassed === true);
+  const baselineAlreadyPassing = checks.some(Boolean);
+  // Disagreement means the predicate itself is flapping, so neither answer
+  // about this edit is worth anything -- including a later "it landed".
+  const baselineUnstable = checks.some(Boolean) && !checks.every(Boolean);
 
   const turnsBefore = handle.turns();
   const promptSentEpoch = Date.now();
@@ -73,7 +97,10 @@ export async function runIteration(
 
   let agentDoneMs: number | null = null;
   let doneAtWallMs = Number.POSITIVE_INFINITY;
-  void handle.waitForTurn(turnsBefore).then(() => {
+  // Kept, not discarded: a fast loop finishes the *edit* before the agent
+  // finishes the *turn*, and in that case this promise is the only thing that
+  // will ever know when the turn ended. See the bounded wait below.
+  const turnDone = handle.waitForTurn(turnsBefore).then(() => {
     agentDoneMs = Date.now() - t0Epoch;
     doneAtWallMs = Date.now();
   });
@@ -141,15 +168,44 @@ export async function runIteration(
   prober.setCheck(null);
   prober.setInterval(coldInterval);
 
+  // Wait for the turn to end before asking when it ended.
+  //
+  // The measurement loop stops the moment the check passes, which on a fast
+  // loop is *before* the agent stops talking -- exactly the case the signed
+  // `afterAgentMs` exists to describe. Reading it right there found
+  // `agentDoneMs` still null and reported no answer for the one situation the
+  // number was introduced to show. Nothing measured is affected: `endedMs` and
+  // `brokenMs` above are already fixed, and this window sits outside every
+  // clock. Bounded, because a turn that never completes must not hold the run.
+  if (timeToCorrectChangeMs !== null && agentDoneMs === null) {
+    const waitCtl = new AbortController();
+    try {
+      await Promise.race([turnDone, sleep(grace, waitCtl.signal)]);
+    } finally {
+      waitCtl.abort();
+    }
+  }
+
+  // The part of the edit the agent is not accountable for: it had finished and
+  // the page had not caught up. Deliberately signed -- a negative number means
+  // the change was on screen before the agent stopped talking, which is what a
+  // fast loop looks like and is worth being able to see.
+  const correctAtMs = timeToCorrectChangeMs !== null ? promptSentMs + timeToCorrectChangeMs : null;
+  const afterAgentMs =
+    correctAtMs !== null && agentDoneMs !== null ? correctAtMs - agentDoneMs : null;
+
   return {
     id: spec.id,
     baselineAlreadyPassing,
+    baselineUnstable,
     mode: opts.mode ?? 'restart',
     prompt: spec.prompt,
     promptSentMs,
     timeToFirstChangeMs,
     timeToCorrectChangeMs,
     agentDoneMs,
+    afterAgentMs,
+    endedMs,
     brokenMs,
     ok: timeToCorrectChangeMs !== null && !baselineAlreadyPassing,
   };

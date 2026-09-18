@@ -237,7 +237,7 @@ export function renderLeaderboard(
   outPath: string,
   opts: { title?: string; runDirs?: string[] } = {},
 ): string {
-  assertComparable(runs);
+  assertComparable(runs, { allowMixedConditions: true });
   const pageDir = dirname(outPath);
   const horizonMs = runs[0]?.curve.horizonMs ?? 0;
   // Ranked within each condition, never across: rows carry the index of the run
@@ -634,7 +634,7 @@ above are separate on purpose and must not be read as one table.</p>
  * measurement, and the difference is invisible in the numbers alone.
  */
 export function renderLeaderboardText(runs: RunResult[]): string {
-  assertComparable(runs);
+  assertComparable(runs, { allowMixedConditions: true });
   const rows = orderByCondition(runs);
   const effects = promptEffects(runs);
   const mixed = new Set(rows.map((row) => row.condition)).size > 1;

@@ -36,6 +36,14 @@ earlier.
 
 That comparison is pinned as a test, not a claim: `test/curve.test.ts`.
 
+### What a frame is scored on
+
+A frame is a **viewport screenshot** — 1280×800 by default, no scrolling — and
+the text inside that same rectangle. The judge is told to credit only what it
+can see, and entity coverage counts only what it could have seen, so "on screen"
+means one thing across the whole metric. `target.viewport` is how a brief says
+how much of the page it means to score.
+
 ### Two numbers fall out of the curve
 
 - **Time to first render** — the first frame that is not an error page, an empty
@@ -43,6 +51,21 @@ That comparison is pinned as a test, not a claim: `test/curve.test.ts`.
 - **Time to first *reviewable* render** — the first frame a human could give
   useful feedback on. Operationalised as "enough of the things the brief named
   are on screen", so it is judgeable rather than vibes.
+
+### And one that deliberately does not
+
+- **Time to tab title/icon** — the first frame where the browser chrome
+  identified the app, however empty the viewport still was. An app whose
+  `index.html` sets `<title>` and a favicon says "Orbit" in the tab while the
+  page is still a grey rectangle, and that is real evidence to the person
+  waiting that the right thing is starting.
+
+  It is reported beside the render times and **never folded into them**. A
+  titled blank page is still a blank page to someone waiting to react to it, so
+  letting this move a frame's class would change every AUC ever recorded. It is
+  also invisible to the judge by construction: browser chrome is not in the
+  screenshot. A title Chromium derived from the address — what a document with
+  no `<title>` gets — does not count, or every blank page would trip it.
 
 ## Where the time actually goes
 
@@ -77,6 +100,29 @@ blue" — into the **same live session** and times it:
 - **correct change** — the edit actually landed, decided by an in-page predicate
   shipped with the brief, not by a judge
 - **broken for** — how long the app was white-screened in between
+
+**Wall clock alone would misattribute this.** One tool call behind an
+eleven-second Vite rebuild and nine tool calls of flailing produce the same
+"correct change" number, so ranking on it charges the model for a slow dev
+server. Each edit therefore also records what the agent did — tool calls, their
+names, thinking time, and the toolchain phases that ran inside the window — plus
+**`afterAgentMs`**, the gap between the agent finishing and the change reaching
+the screen. That gap is the part the agent is not accountable for:
+
+```
+  Iteration (prompt -> visible change)   [live-session]
+    header-blue      first change    7.2s   correct    7.2s
+                     1 tool call  ·  thinking 7.0s  ·  0.2s waiting on the toolchain after the agent finished
+```
+
+Tool calls read `--` rather than `0` when the adapter's stream cannot show them:
+"it made none" and "we could not see" are opposite claims about an agent.
+
+**If the check was already true before the prompt**, the edit is void, not fast
+— an agent that happened to build a blue header during cold start makes
+`header-blue` unmeasurable, and the run says so instead of reporting a
+near-instant success for a change nobody made. See
+[docs/METRIC.md](docs/METRIC.md#a-check-that-was-already-true).
 
 ## Quickstart
 
@@ -120,7 +166,9 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe -
 Each run writes a directory containing `result.json` (every frame, phase and
 event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
-was given), `phases.jsonl` and `agent.log`. With `--video`, also `video.webm`.
+was given), `run.json` and `frames.ndjson` (the timeline as it happens — see
+[Recovering an interrupted run](#recovering-an-interrupted-run)), `phases.jsonl`
+and `agent.log`. With `--video`, also `video.webm`.
 
 `result.json` holds the whole run: cold-start frames and, when the brief has
 iterations, the frames captured while those edits landed. Each carries a
@@ -132,8 +180,10 @@ iteration frames are kept so the run can be replayed in full.
 **`frames/` is not the timeline and cannot be replayed as one.** Consecutive
 identical screenshots share a file, so a forty-observation run can hold four
 PNGs; stitching the directory listing gives a four-frame video in which a blank
-minute and a finished app get equal screen time. The timeline is in
-`result.json`, where every observation carries its own `tMs`:
+minute and a finished app get equal screen time. A long run whose page barely
+moved is the extreme case — 1300 observations of a page that changed three times
+is three PNGs, and that is deduplication working, not captures going missing.
+The timeline is in `result.json`, where every observation carries its own `tMs`:
 
 ```bash
 npm run p2p -- video runs/todo-app-claude-code-abc123
@@ -311,6 +361,107 @@ scores land. `result.json` is therefore written **twice**: once with the
 complete timeline and provisional scores (`judge.pending: true`), and again with
 the real scores when the judge returns. An interrupted or failed scoring pass
 leaves a run that still replays and still rescores, rather than no run at all.
+
+A judge is also checked **before** the run rather than after it. `--judge` names
+a provider and a model, and only the provider knows whether that model exists,
+so the harness sends it one 1×1 pixel and quotes whatever comes back:
+
+```
+error: the judge "google:gemini-3.5-flash-low" did not answer a test request.
+
+  models/gemini-3.5-flash-low is not found for API version v1beta
+
+  The provider was sent that model id exactly as written, so a typo, a model that has
+  been renamed, and one your key cannot reach all look like this.
+```
+
+Without that check a misspelled model is discovered at the end of a fifteen
+minute run, as one failure per frame. The scoring pass itself gives up after
+three failures with no successful call, for the same reason.
+
+Calls are made at **temperature 0**, and verdicts are cached in `.p2p-cache/`
+(override with `P2P_CACHE_DIR`) keyed by the brief, the rubric, the judge, and a
+SHA-256 of the screenshot's bytes. `--max-judged` caps model calls per run
+(default 60) and `--judge-width` sets the width screenshots are downscaled to
+before sending. See [docs/METRIC.md](docs/METRIC.md#the-verdict-cache) for why
+the key is the bytes and not a perceptual hash.
+
+Runs that are not on one scale refuse to be ranked together — different
+horizons, briefs, judges, judge temperatures, viewports, judged-vs-unjudged,
+prompted-vs-unprompted, or a run whose judging never finished. See
+[what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
+
+## Recovering an interrupted run
+
+`result.json` is assembled once, after the browser and the agent are torn down.
+Until then the timeline lives only in the harness's memory, so anything that
+kills the process — a Ctrl-C, an OOM, the harness [killing its own
+port](#freeing-a-port) — used to leave a `frames/` directory full of screenshots
+with no record of when any of them were taken.
+
+Two files are now written *while* the run happens: `run.json` (which brief,
+which agent, which clock) and `frames.ndjson` (one line per observation, plus a
+marker for the end of the cold-start window and one per completed iteration).
+They cost one append per frame and they are on disk the moment each frame is:
+
+```bash
+npm run p2p -- salvage runs/todo-app-antigravity-abc123
+```
+
+That rebuilds `result.json` and `report.html` from the frame log, after which
+`p2p video` and `p2p rescore` work normally. A salvaged run is explicitly not a
+complete one and says so in its warnings: the agent's event stream and the
+toolchain phases were never on disk, so it has a timeline and no latency
+decomposition, and its scores are entity coverage until you follow up with
+`p2p rescore`.
+
+## Freeing a port
+
+A dev server the agent started is not reliably killed by killing the agent, and
+a survivor would corrupt the next run: the harness would find something already
+serving and report a near-zero first render for an app the agent never built. So
+the port is cleared at teardown, and `--kill-port` clears it at startup too.
+
+Clearing it means **listening sockets only**. `lsof -i tcp:5173` matches every
+socket with that number at either end, which includes every *client* of the port
+— and the harness polls the app under test once a second, so it is always one.
+Piping that list into `kill -9` made the harness SIGKILL itself during teardown:
+the run died immediately after its last measured frame, losing `result.json`,
+the judging pass and the report, and printing `Killed: 9` with no explanation.
+It only reproduced on macOS, which has no `fuser` and fell through to the `lsof`
+line; Linux has `fuser`, which matches local ports only, so CI never saw it.
+The lookup now filters to `LISTEN` state and refuses to signal this process or
+any of its parents, whatever a tool reports.
+
+## Antigravity and the scratch folder
+
+`agy` runs a conversation that is not in a **Project** in "an isolated local
+scratch folder", and a child-process cwd alone does not bind one. An unbound run
+looks almost right — the agent builds an app, its dev server serves it, the page
+renders and the curve is a curve — while the workdir the harness handed over
+stays empty and nothing in the run directory reproduces what was measured. It
+turns up as `~/.gemini/antigravity-cli/scratch/<name>/`.
+
+The adapter passes `--add-dir <workdir>` by default. That is the narrower of the
+two plausible mechanisms — it names a directory rather than creating persistent
+state — but Antigravity's published headless documentation describes neither it
+nor the Project flags, so it is a default, not a certainty. To try the other:
+
+```bash
+npm run p2p -- run --brief briefs/todo-app.json --adapter antigravity   --no-add-dir --agent-arg --new-project
+```
+
+**The run checks the outcome either way.** `agy` reports a `cwd` in its `init`
+event; the harness compares it to the directory it handed over and fails the run
+loudly when they differ, rather than leaving it to be discovered from an empty
+workdir afterwards:
+
+```
+! AGENT WORKED SOMEWHERE ELSE: it reported its working directory as
+  /Users/you/.gemini/antigravity-cli/scratch/orbit, not the runs/…/workdir it was
+  given. Whatever this run measured was built outside the run directory, so
+  nothing here reproduces it.
+```
 
 ## Which agents this works with
 
@@ -495,6 +646,13 @@ definitions arrive in one pull request.
   decomposition is untrustworthy. The curve and wall clock stay valid.
 - **Entity coverage is text-only** — it cannot see text baked into images,
   canvas, or shadow DOM.
+- **On screen means in the viewport.** The judge scores a 1280×800 screenshot
+  with no scrolling, and entity coverage counts only text inside that same
+  rectangle, so both halves of the metric agree. A brief that means to score
+  more of the page says so with `target.viewport`; `landing-page` runs at
+  1280×2400 because its rubric asks for a pricing section and a footer.
+- **Judges are scored at temperature 0 and cached by screenshot bytes.** Runs
+  scored by different judges refuse to be ranked together.
 - **The protocol suffix is part of the measurement.** These numbers describe
   agents that were told a browser is watching and asked to render early. That
   is a fair instruction because every agent gets it verbatim, but it is not the
@@ -502,6 +660,11 @@ definitions arrive in one pull request.
 - **A run ended by quiescence could have missed a late improvement.** It never
   changes the AUC, since the curve holds forward either way, and the report
   names the runs it happened to.
+- **Ctrl-C tears down properly.** The browser, the agent and its dev server are
+  stopped on `SIGINT`/`SIGTERM`/`SIGHUP`, because a leaked dev server on the
+  target port is what gives the *next* run a near-zero first render for an app
+  nobody built. Playwright's own signal handlers are disabled so they cannot
+  pre-empt that; see [docs/METRIC.md](docs/METRIC.md#interrupting-a-run).
 
 Full definitions, conventions and edge cases: [`docs/METRIC.md`](docs/METRIC.md).
 

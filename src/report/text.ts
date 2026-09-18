@@ -20,6 +20,11 @@ export function renderText(r: RunResult): string {
   }
   L.push(`  ${'-'.repeat(64)}`);
   L.push(`  AUC (headline)        ${r.curve.auc.toFixed(3)}   ${bar(r.curve.auc)}`);
+  // Printed above first render because it is normally the earlier of the two,
+  // and the gap between them is the point: it is how long the tab says "Orbit"
+  // at an empty grey page.
+  if (r.curve.firstTabSignalMs != null)
+    L.push(`  Tab title/icon        ${secs(r.curve.firstTabSignalMs)}`);
   L.push(`  First render          ${secs(r.curve.ttfnbrMs)}`);
   L.push(`  First reviewable      ${secs(r.curve.ttfrrMs)}`);
   L.push(`  Final / peak score    ${r.curve.finalScore.toFixed(2)} / ${r.curve.peakScore.toFixed(2)}${r.curve.regression > 0.01 ? '   <- regressed' : ''}`);
@@ -43,7 +48,28 @@ export function renderText(r: RunResult): string {
     if (r.iterations.some((i) => i.mode === 'restart'))
       L.push('    note: restart mode -- these include agent startup and context re-read');
     for (const it of r.iterations) {
-      L.push(`    ${it.id.padEnd(16)} first change ${secs(it.timeToFirstChangeMs).padStart(7)}   correct ${secs(it.timeToCorrectChangeMs).padStart(7)}${it.brokenMs > 0 ? `   broken ${secs(it.brokenMs)}` : ''}${it.ok ? '' : '   NEVER LANDED'}`);
+      L.push(`    ${it.id.padEnd(16)} first change ${secs(it.timeToFirstChangeMs).padStart(7)}   correct ${secs(it.timeToCorrectChangeMs).padStart(7)}${it.brokenMs > 0 ? `   broken ${secs(it.brokenMs)}` : ''}${it.baselineAlreadyPassing ? '   VOID (check already passed)' : it.ok ? '' : '   NEVER LANDED'}`);
+      const w = it.work;
+      if (!w && it.afterAgentMs == null) continue;
+      // The second line is the answer to "whose time was that". An edit that
+      // took eight seconds of which the agent spent two is a toolchain result,
+      // not an agent one, and the headline number cannot say which it was.
+      const bits: string[] = [];
+      if (w?.toolCalls !== null && w?.toolCalls !== undefined)
+        bits.push(`${w.toolCalls} tool call${w.toolCalls === 1 ? '' : 's'}${
+          w.toolNames.length ? ` (${[...new Set(w.toolNames)].slice(0, 4).join(', ')})` : ''}`);
+      else if (w) bits.push('tool calls not visible in this adapter\'s stream');
+      if (w?.modelMs != null) bits.push(`thinking ${secs(w.modelMs)}`);
+      if (it.afterAgentMs != null)
+        bits.push(
+          it.afterAgentMs >= 0
+            ? `${secs(it.afterAgentMs)} waiting on the toolchain after the agent finished`
+            : `on screen ${secs(-it.afterAgentMs)} before the agent finished`,
+        );
+      const phases = (w?.phases ?? []).filter((p) => p.ms !== null && p.ms > 500);
+      if (phases.length)
+        bits.push(phases.map((p) => `${p.kind} ${secs(p.ms)}`).join(' + '));
+      if (bits.length) L.push(`    ${' '.repeat(16)} ${bits.join('  ·  ')}`);
     }
   }
   if (r.warnings.length) {

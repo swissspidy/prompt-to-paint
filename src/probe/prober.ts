@@ -13,6 +13,14 @@ export interface ProberOptions {
   framesDir: string;
   t0Epoch: number;
   intervalMs?: number;
+  /**
+   * The window every number in the run is measured through.
+   *
+   * It decides what the judge is shown and, since text is read from the same
+   * rectangle, what entity coverage counts. A brief whose rubric asks about a
+   * pricing table and a footer needs a window tall enough to contain them, or
+   * those criteria are unwinnable however good the page is.
+   */
   viewport?: { width: number; height: number };
   /** Consecutive failed server probes before we call a live page stale. */
   serverDownGrace?: number;
@@ -40,14 +48,19 @@ export interface ProberOptions {
 }
 
 interface PageObservation {
+  /** Text inside the viewport. What the judge can see, so what counts. */
   text: string;
+  /** Characters of text outside it -- present in the DOM, below the fold. */
+  offscreenChars: number;
   title: string;
+  /** Absolute href of the page's declared icon, or null if it declares none. */
+  favicon: string | null;
   overlayHit: string | null;
   mediaBoxes: number;
   domSignature: string;
 }
 
-const OBSERVE = `(() => {
+export const OBSERVE = `(() => {
   const sels = ${JSON.stringify(ERROR_SELECTORS)};
   let overlayHit = null;
   for (const s of sels) { try { if (document.querySelector(s)) { overlayHit = s; break; } } catch {} }
@@ -56,7 +69,90 @@ const OBSERVE = `(() => {
     const r = el.getBoundingClientRect();
     if (r.width > 8 && r.height > 8) mediaBoxes++;
   }
-  const text = (document.body && document.body.innerText) ? document.body.innerText : '';
+  // Text the viewport actually shows, not the whole document.
+  //
+  // The judge scores a viewport screenshot and is told to credit only what it
+  // can see. Entity coverage -- which decides time to first *reviewable*
+  // render -- used to read document.body.innerText, the entire page, fold or no
+  // fold. So the two halves of one metric disagreed about what "on screen"
+  // meant, and a page whose content sat below 800px could be called reviewable
+  // by one and empty by the other. One rule, applied to both: on screen means
+  // in the viewport. A brief that wants more of the page in scope says so with
+  // a taller target.viewport.
+  let text = '';
+  let offscreenChars = 0;
+  if (document.body) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    const parts = [];
+    let seen = 0;
+    let wordBudget = 20000;
+    // A rect that overlaps the viewport at all. Zero-area rects are what a
+    // display:none or collapsed node produces.
+    const shows = (r) => r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    const anyShows = (rects) => {
+      for (let i = 0; i < rects.length; i++) if (shows(rects[i])) return true;
+      return false;
+    };
+    // Whitespace by code point rather than a regex: an escape like \\s written
+    // in the template literal that builds this script is swallowed before the
+    // page ever sees it, and the result is a subtly wrong matcher rather than
+    // an error anything would catch.
+    const isSpace = (ch) => ch.charCodeAt(0) <= 32;
+    for (let n = walker.nextNode(); n && seen < 4000; n = walker.nextNode()) {
+      const raw = n.nodeValue;
+      if (!raw || !raw.trim()) continue;
+      const parent = n.parentElement;
+      if (!parent || parent.closest('script,style,noscript,template')) continue;
+      seen++;
+      try {
+        range.selectNodeContents(n);
+        const rects = range.getClientRects();
+        if (rects.length <= 1) {
+          if (anyShows(rects)) parts.push(raw.trim());
+          else offscreenChars += raw.trim().length;
+          continue;
+        }
+        // More than one rect means the node wraps across lines, and the lines
+        // need not agree about being on screen: a paragraph can begin inside
+        // the viewport and run past the fold. Crediting the whole node because
+        // one of its lines is visible would let an entity below the fold count
+        // as reviewable -- the exact confusion between "in the DOM" and "on
+        // screen" that this whole rectangle rule exists to settle. So each word
+        // is measured on its own.
+        let visible = '';
+        let hidden = 0;
+        let i = 0;
+        while (i < raw.length && wordBudget > 0) {
+          while (i < raw.length && isSpace(raw[i])) i++;
+          if (i >= raw.length) break;
+          const start = i;
+          while (i < raw.length && !isSpace(raw[i])) i++;
+          wordBudget--;
+          const word = raw.slice(start, i);
+          range.setStart(n, start);
+          range.setEnd(n, i);
+          if (anyShows(range.getClientRects())) visible += (visible ? ' ' : '') + word;
+          else hidden += word.length;
+        }
+        if (visible) parts.push(visible);
+        offscreenChars += hidden;
+      } catch {
+        // A node that cannot be measured is not evidence of anything on screen.
+        offscreenChars += raw.trim().length;
+      }
+    }
+    text = parts.join('\\n');
+  }
+  // The last declared icon wins, the way the browser resolves it. .href is the
+  // resolved absolute URL; the attribute would be whatever relative string the
+  // page happened to write.
+  let favicon = null;
+  const icons = document.querySelectorAll('link[rel~="icon" i],link[rel="shortcut icon" i],link[rel="apple-touch-icon" i]');
+  const lastIcon = icons[icons.length - 1];
+  if (lastIcon && lastIcon.href) favicon = String(lastIcon.href);
   const tags = {};
   for (const el of document.querySelectorAll('*')) {
     tags[el.tagName] = (tags[el.tagName] || 0) + 1;
@@ -64,12 +160,42 @@ const OBSERVE = `(() => {
   const domSignature = Object.keys(tags).sort().map(k => k + k[0] + tags[k]).join('|');
   return {
     text: text.slice(0, 20000),
+    offscreenChars,
     title: document.title || '',
+    favicon,
     overlayHit,
     mediaBoxes,
     domSignature,
   };
 })()`;
+
+/**
+ * Does the browser chrome identify the app yet?
+ *
+ * Asked because the two halves of the tab move before the page does: an app
+ * that sets `<title>` and an icon in its index.html says "Orbit" in the tab
+ * while the viewport is still an empty grey rectangle. That is a real signal to
+ * the person waiting -- it is the first evidence the right thing is starting --
+ * and a screenshot of the viewport cannot contain it.
+ *
+ * A title Chromium derived from the address is not a signal: a document with no
+ * `<title>` is titled after its own URL, so counting that would fire on every
+ * blank page ever served.
+ */
+export function tabSignalFrom(title: string, favicon: string | null, url: string): boolean {
+  if (favicon) return true;
+  const t = title.trim();
+  if (!t) return false;
+  let derived: string[] = [];
+  try {
+    const u = new URL(url);
+    const hostPath = `${u.host}${u.pathname}`.replace(/\/$/, '');
+    derived = [u.href, u.href.replace(/\/$/, ''), u.host, hostPath, `${hostPath}/`];
+  } catch {
+    derived = [url];
+  }
+  return !derived.includes(t);
+}
 
 export interface CaptureAttempt {
   buf: Buffer | null;
@@ -211,6 +337,17 @@ export class Prober {
       headless: !this.opts.headed,
       executablePath: findChromium(this.opts.executablePath),
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      // Playwright installs its own SIGINT/SIGTERM/SIGHUP handlers by default.
+      // They kill the browser and then exit the process -- which pre-empts the
+      // harness's own teardown mid-flight. The visible result of a Ctrl-C was a
+      // browser that closed tidily, an agent still running, and its dev server
+      // still holding the target port: precisely the leak the harness's handler
+      // exists to prevent, defeated by the one step that ran before it. The
+      // browser is closed in `stop()`, which the harness calls on those signals
+      // itself, so nothing is lost by owning them.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
     });
     const viewport = this.opts.viewport ?? { width: 1280, height: 800 };
     // Playwright names the recording itself and only finalises it when the
@@ -282,7 +419,10 @@ export class Prober {
       colorSig: null,
       inkRatio: 0,
       text: '',
+      offscreenTextChars: 0,
       title: '',
+      favicon: null,
+      tabSignal: false,
       httpStatus: null,
       consoleErrors: [],
       entityCoverage: 0,
@@ -474,7 +614,10 @@ export class Prober {
       colorSig: sig,
       inkRatio: ink,
       text: obs.text,
+      offscreenTextChars: obs.offscreenChars,
       title: obs.title,
+      favicon: obs.favicon,
+      tabSignal: tabSignalFrom(obs.title, obs.favicon, this.opts.url),
       httpStatus: status,
       consoleErrors: errs,
       entityCoverage: an.entityCoverage,

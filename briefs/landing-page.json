@@ -5,7 +5,11 @@
   "horizonSec": 420,
   "reviewableThreshold": 0.45,
   "target": {
-    "port": 5173
+    "port": 5173,
+    "viewport": {
+      "width": 1280,
+      "height": 2400
+    }
   },
   "entities": [
     {

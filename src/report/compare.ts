@@ -79,12 +79,27 @@ export function rank(runs: RunResult[]): Ranked[] {
   })).sort((a, b) => a.rankAuc - b.rankAuc);
 }
 
+export interface ComparableOptions {
+  /**
+   * Allow prompted and unprompted runs in one set.
+   *
+   * Only the leaderboard sets this, and only because it ranks *within* each
+   * condition and never across them -- comparing the two is the experiment it
+   * exists to run. A single ordering over both is not.
+   */
+  allowMixedConditions?: boolean;
+}
+
 /**
- * AUC has the horizon in its denominator, so two runs scored against different
- * horizons are not on the same scale and ranking them together is meaningless.
- * Throwing beats printing a plausible table nobody can trust.
+ * Refuse to rank runs that are not on one scale.
+ *
+ * Every check here guards a table that would otherwise look completely normal.
+ * A ranking is a claim that the numbers in it mean the same thing, and each of
+ * these is a way for that to be false while the output stays plausible -- which
+ * is the failure mode this project exists to refuse, so it throws rather than
+ * footnotes.
  */
-export function assertComparable(runs: RunResult[]): void {
+export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}): void {
   const horizons = [...new Set(runs.map((r) => r.curve.horizonMs))];
   if (horizons.length > 1) {
     throw new Error(
@@ -95,6 +110,81 @@ export function assertComparable(runs: RunResult[]): void {
   const briefs = [...new Set(runs.map((r) => r.brief))];
   if (briefs.length > 1) {
     throw new Error(`cannot compare runs from different briefs (${briefs.join(', ')}): rubrics differ.`);
+  }
+
+  // A run whose scoring pass never finished carries provisional scores and says
+  // so. It is not a judged run, whatever its judge block names, and ranking it
+  // presents entity coverage as rubric correctness under a model's byline.
+  const pending = runs.filter((r) => r.judge.pending);
+  if (pending.length) {
+    throw new Error(
+      `cannot compare runs whose judging did not finish (${pending.map((r) => r.label || r.adapter).join(', ')}): ` +
+        'their scores are provisional. Run `p2p rescore <runDir>` on each, then compare.',
+    );
+  }
+
+  // A degraded run's score is entity coverage -- a text match against the
+  // brief's nouns -- and a judged run's is rubric correctness. They are
+  // different quantities that happen to share a 0..1 range.
+  const degraded = runs.filter((r) => r.judge.degraded);
+  if (degraded.length && degraded.length !== runs.length) {
+    throw new Error(
+      `cannot compare judged runs with unjudged ones (${degraded.map((r) => r.label || r.adapter).join(', ')} ` +
+        'scored by entity coverage, the rest by a rubric). Those are different quantities on the same ' +
+        'scale. Run `p2p rescore` on the unjudged ones, or compare within one group.',
+    );
+  }
+
+  // Judges differ at the margin -- that is why `result.json` records which one
+  // scored a run, and why `p2p rescore` under a second judge is a useful thing
+  // to do. Ranking across them turns that disagreement into a result about the
+  // agents.
+  const judges = [...new Set(runs.map((r) => r.judge.model ?? `none:${r.judge.backend}`))];
+  if (judges.length > 1) {
+    throw new Error(
+      `cannot compare runs scored by different judges (${judges.join(', ')}): judges disagree at the ` +
+        'margin, so a ranking across them is partly a ranking of the judges. Re-score them onto one ' +
+        'judge with `p2p rescore <runDir> --judge <provider:model>`.',
+    );
+  }
+
+  // Sampling conditions are part of the judge, not a footnote about it. The
+  // same model at two temperatures produces two score distributions, which is
+  // why the temperature is recorded at all. `unrecorded` is its own value
+  // rather than a wildcard: runs from before it was recorded compare with each
+  // other, and refuse to compare with runs that pinned it.
+  const temps = [...new Set(runs.map((r) => r.judge.temperature ?? 'unrecorded'))];
+  if (temps.length > 1) {
+    throw new Error(
+      `cannot compare runs scored at different judge temperatures (${temps.join(', ')}): the same model ` +
+        'samples differently at each, so part of the gap between these runs is the sampler. Re-score ' +
+        'them onto one setting with `p2p rescore <runDir>`.',
+    );
+  }
+
+  // The window a run was observed through decides what the judge was shown and
+  // what entity coverage counted, so it moves the AUC and ttfrrMs directly. Two
+  // runs of one brief seen through different windows are two measurements.
+  const windows = [...new Set(runs.map((r) => {
+    const v = r.viewport ?? { width: 1280, height: 800 };
+    return `${v.width}x${v.height}`;
+  }))];
+  if (windows.length > 1) {
+    throw new Error(
+      `cannot compare runs observed through different viewports (${windows.join(', ')}): the viewport ` +
+        'decides what the judge could see and what counted as on screen, so the scores are not on one scale.',
+    );
+  }
+
+  if (!opts.allowMixedConditions) {
+    const conditions = [...new Set(runs.map((r) => (r.protocol?.renderEarly === false ? 'unprompted' : 'prompted')))];
+    if (conditions.length > 1) {
+      throw new Error(
+        'cannot compare prompted and unprompted runs in one ranking: an agent told that a rough early ' +
+          'page scores better is answering a different question from one that was not. ' +
+          'Use `p2p leaderboard`, which ranks within each condition and reports the prompt effect between them.',
+      );
+    }
   }
 }
 

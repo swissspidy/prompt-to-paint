@@ -61,6 +61,17 @@ export interface Brief {
     url?: string;
     port?: number;
     /**
+     * The window the run is observed through. Defaults to 1280x800.
+     *
+     * Taller is not cheating: it is the brief saying how much of the page it
+     * means to score. A marketing page whose rubric asks for a pricing section
+     * and a footer is asking about content that sits well below 800px, and
+     * scoring it through a laptop-sized window makes those criteria impossible
+     * to meet -- a cap on the achievable AUC that looks exactly like an agent
+     * doing badly.
+     */
+    viewport?: { width: number; height: number };
+    /**
      * Serve the workdir over HTTP instead of waiting for the agent to.
      * Only for briefs that genuinely ask for a static file; for an app brief,
      * getting it running is part of the task.
@@ -92,8 +103,38 @@ export interface Frame {
   colorSig: string | null;
   /** Fraction of non-uniform pixels; drives the blank test. */
   inkRatio: number;
+  /**
+   * Text inside the viewport at capture time, which is what the judge can see
+   * and therefore what entity coverage counts.
+   */
   text: string;
+  /**
+   * Characters of text that were in the DOM but outside the viewport.
+   *
+   * Non-zero means the page has content nothing in this run scored: the judge
+   * is shown a viewport screenshot and told to credit only what is visible. A
+   * brief whose rubric asks about that content needs a taller
+   * `target.viewport`.
+   */
+  offscreenTextChars: number;
   title: string;
+  /**
+   * Absolute href of the icon the page declares, or null if it declares none.
+   *
+   * Browser chrome, not pixels: it is not in the screenshot, so nothing that
+   * reads a frame's image can see it.
+   */
+  favicon: string | null;
+  /**
+   * The tab is identifying the app while the viewport may still be empty -- a
+   * real `<title>`, a declared icon, or both.
+   *
+   * Deliberately not an input to `classify()`. A titled blank page is still a
+   * blank page to the person waiting for it, and letting this move the class
+   * would change every AUC ever recorded. It is reported beside the render
+   * times instead, as the separate thing it is.
+   */
+  tabSignal: boolean;
   httpStatus: number | null;
   consoleErrors: string[];
   /** Weighted fraction of brief entities visible in the rendered text. */
@@ -254,6 +295,16 @@ export interface Adapter {
   readonly iterationMode?: IterationMode;
   /** May be computed at the end of a run from what was actually parsed. */
   readonly streamFidelity?: StreamFidelity;
+  /**
+   * Where the agent says it is working, if its stream says so at all.
+   *
+   * Read after the run and compared against the workdir it was handed. An
+   * agent that is building somewhere else produces a run that looks almost
+   * right -- it serves an app, the page renders, the curve is a curve -- while
+   * nothing in the run directory reproduces any of it. Null means the adapter
+   * cannot tell, which is not the same as agreeing.
+   */
+  readonly reportedWorkdir?: string | null;
   start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle>;
 }
 
@@ -269,6 +320,15 @@ export interface CurveMetrics {
   ttfnbrMs: number | null;
   /** First frame a human could give useful feedback on. */
   ttfrrMs: number | null;
+  /**
+   * First frame where the tab said something -- title or favicon -- however
+   * empty the page still was.
+   *
+   * Separate from `ttfnbrMs` on purpose, and never mixed into it: this is the
+   * stretch where a person can tell the build is alive but has nothing to
+   * react to yet. Absent on results written before v0.5.
+   */
+  firstTabSignalMs?: number | null;
   finalScore: number;
   peakScore: number;
   timeToPeakMs: number | null;
@@ -299,6 +359,50 @@ export interface IterationResult {
   /** Total ms the app spent blank/error between prompt and correct change. */
   brokenMs: number;
   ok: boolean;
+  /**
+   * The check was already passing in one baseline sample but not the other, so
+   * it is flapping and neither answer about this edit can be trusted.
+   */
+  baselineUnstable?: boolean;
+  /** When this edit's observation window closed, relative to t0. */
+  endedMs?: number;
+  /**
+   * Time between the agent finishing its turn and the change reaching the
+   * screen.
+   *
+   * This is the part of an edit's latency the agent is not responsible for:
+   * HMR, a rebuild, a dev server that has to restart. Negative means the page
+   * updated while the agent was still working, which is what a fast loop looks
+   * like. Null when the edit never landed or the turn never completed.
+   */
+  afterAgentMs?: number | null;
+  /**
+   * What the agent actually did for this edit.
+   *
+   * Time to correct change is wall clock, and wall clock says nothing about
+   * whose time it was. One tool call behind a twelve-second Vite rebuild and
+   * nine tool calls of flailing produce the same number, and ranking agents on
+   * it alone would charge the model for a slow toolchain. Absent when the run
+   * predates this, or when the adapter's stream cannot show it.
+   */
+  work?: IterationWork;
+}
+
+export interface IterationWork {
+  /**
+   * Tool calls the agent made inside this edit's window. Null when the
+   * adapter's stream does not expose tool boundaries -- which is not zero, and
+   * must never be rendered as zero.
+   */
+  toolCalls: number | null;
+  /** Their names in order, so "it only wrote one file" is checkable. */
+  toolNames: string[];
+  /** Attributed thinking time inside the window. Null without a full stream. */
+  modelMs: number | null;
+  /** Attributed tool-execution time inside the window. */
+  toolMs: number | null;
+  /** Toolchain commands the shims saw run inside the window. */
+  phases: Array<{ kind: PhaseKind; cmd: string; ms: number | null }>;
 }
 
 /**
@@ -339,12 +443,24 @@ export interface RunResult {
     model: string | null;
     framesJudged: number;
     degraded: boolean;
+    /** Sampling temperature used. Recorded so a run can say how it was scored. */
+    temperature?: number;
     /**
      * Written before judging, so an interrupted or failed scoring pass still
      * leaves a replayable run on disk. `p2p rescore` clears it.
      */
     pending?: boolean;
   };
+  /**
+   * The window this run was observed through, defaults included.
+   *
+   * It decides what the judge was shown and what entity coverage counted, so it
+   * changes the AUC and `ttfrrMs` as surely as the rubric does. Two runs of the
+   * same brief through different windows are not the same measurement, and
+   * without this recorded they would look like one. Absent on results written
+   * before v0.6, which were all 1280x800.
+   */
+  viewport?: { width: number; height: number };
   /**
    * Set when the agent process died before the harness stopped it. A run that
    * failed to launch must never be mistaken for an agent that built nothing.
@@ -373,6 +489,31 @@ export interface RunResult {
     /** Screenshots actually written; repeats share one file. */
     distinctShots?: number;
     repeatedShots?: number;
+    /**
+     * Append-only copy of the timeline, written frame by frame during the run.
+     *
+     * result.json is assembled once, at the end. Anything that kills the
+     * process before then -- an OOM, a stray SIGKILL, a Ctrl-C -- used to take
+     * the whole run with it, leaving screenshots nobody could put in order.
+     * This file is on disk the moment each frame is, so `p2p salvage` can
+     * rebuild a run from it.
+     */
+    framesLogPath?: string;
+    /**
+     * What the agent left in its working directory, sampled before teardown.
+     *
+     * An empty workdir beside a page that rendered is the signature of an agent
+     * that built somewhere else, so the fact is recorded rather than left for
+     * someone to notice afterwards.
+     */
+    workdir?: {
+      path: string;
+      entries: string[];
+      fileCount: number;
+      empty: boolean;
+      /** What the agent itself said its working directory was, when it says. */
+      reportedByAgent?: string | null;
+    };
   };
   warnings: string[];
 }

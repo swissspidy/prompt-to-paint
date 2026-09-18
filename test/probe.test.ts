@@ -4,7 +4,7 @@ import { PNG } from 'pngjs';
 import { classify } from '../src/probe/classify.ts';
 import { entityCoverage } from '../src/probe/entities.ts';
 import { decodeGray, dhash, hamming, inkRatio, colorSignature, colorDelta } from '../src/probe/pixels.ts';
-import { captureWithRetry } from '../src/probe/prober.ts';
+import { captureWithRetry, tabSignalFrom, OBSERVE } from '../src/probe/prober.ts';
 
 const base = { reachable: true, httpStatus: 200, overlayHit: null, mediaBoxes: 0, inkRatio: 0.3 };
 
@@ -177,4 +177,51 @@ test('a tiny budget still leaves each attempt enough time to answer', async () =
     { budgetMs: 100, attempts: 3, wait: noWait },
   );
   assert.deepEqual(budgets, [500, 500, 500]);
+});
+
+const URL_UNDER_TEST = 'http://127.0.0.1:5173/';
+
+test('the tab counts as a signal once the page names itself', () => {
+  assert.equal(tabSignalFrom('Orbit', null, URL_UNDER_TEST), true);
+  assert.equal(tabSignalFrom('Orbit -- Sprint 14', null, URL_UNDER_TEST), true);
+});
+
+test('a declared favicon is a signal even with no title at all', () => {
+  // The two halves move independently: a Vite scaffold ships an icon before the
+  // app it belongs to renders anything.
+  assert.equal(tabSignalFrom('', 'http://127.0.0.1:5173/vite.svg', URL_UNDER_TEST), true);
+});
+
+test('a title Chromium derived from the address is not a signal', () => {
+  // A document with no <title> is titled after its own URL, so counting these
+  // would fire on every blank page ever served -- including the error page
+  // shown before anything is listening.
+  for (const derived of ['127.0.0.1:5173', '127.0.0.1:5173/', 'http://127.0.0.1:5173/'])
+    assert.equal(tabSignalFrom(derived, null, URL_UNDER_TEST), false, derived);
+  assert.equal(tabSignalFrom('', null, URL_UNDER_TEST), false);
+  assert.equal(tabSignalFrom('   ', null, URL_UNDER_TEST), false);
+});
+
+test('a tab signal never depends on the page having rendered', () => {
+  // Deliberate: this is the case it exists for -- an empty grey viewport whose
+  // tab already says the right thing. classify() is untouched by it.
+  assert.equal(classify({ ...base, text: '', inkRatio: 0 }).class, 'blank');
+  assert.equal(tabSignalFrom('Orbit', null, URL_UNDER_TEST), true);
+});
+
+test('the injected observation script is valid JavaScript', () => {
+  // This is not paranoia about a constant. OBSERVE is built with a template
+  // literal, so a `\n` written in the source becomes a real newline in the
+  // string handed to the page -- and a real newline inside a JS string literal
+  // is a syntax error. Nothing about the source looks wrong; every capture just
+  // starts failing, every frame comes back `unreachable`, and the run reports
+  // that the app never rendered.
+  assert.doesNotThrow(() => new Function(`return ${OBSERVE}`));
+});
+
+test('the observation script asks the page only for what a frame records', () => {
+  // A cheap guard that the contract has not drifted: these are the keys
+  // PageObservation destructures, and a missing one is a silent undefined.
+  for (const key of ['text', 'offscreenChars', 'title', 'favicon', 'overlayHit', 'mediaBoxes', 'domSignature'])
+    assert.ok(OBSERVE.includes(key), `OBSERVE should return ${key}`);
 });

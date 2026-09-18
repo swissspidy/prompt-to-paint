@@ -104,6 +104,67 @@ Mechanical on purpose: "could a human give useful feedback on this" becomes
 "are enough of the named things on screen", which is reproducible across runs
 and judges.
 
+### The tab, which is not one of them
+
+**Time to first tab signal** — the first frame where `document.title` was
+something other than the address Chromium falls back to, or the page declared a
+`<link rel="icon">`. Recorded per frame as `tabSignal`, surfaced once as
+`curve.firstTabSignalMs`.
+
+It sits outside `classify()` on purpose, and nothing downstream of it moves:
+
+- A titled blank page is still a blank page. Someone waiting for something to
+  react to cannot react to a tab, so counting it as a render would move TTFNBR,
+  the curve and every AUC ever recorded — including the ones in this repository's
+  own calibration fixtures.
+- The judge cannot see it either way. Browser chrome is outside the viewport, so
+  it is absent from the screenshot by construction; a frame scored 0 for being
+  empty is scored 0 whatever its tab says.
+
+What it is good for is the gap. `firstTabSignalMs` well before `ttfnbrMs` is a
+dev server that booted and served an `index.html` whose app has not mounted yet
+— the difference between "nothing is happening" and "the bundle is still
+building", which are indistinguishable in the screenshot and very different to
+the person watching.
+
+A title the browser derived from the URL (`127.0.0.1:5173`, which is what a
+document with no `<title>` gets) is not a signal. Counting it would fire on
+every blank page ever served, including the error page shown before anything is
+listening.
+
+### On screen means in the viewport
+
+One rule, applied to both halves of the metric.
+
+The judge scores a **viewport screenshot** — 1280×800 by default, no scrolling —
+and its prompt says to credit only what is visible. Entity coverage used to read
+`document.body.innerText`, the entire document, fold or no fold. So the two
+halves disagreed: a page whose content sat below 800px could be called
+*reviewable* by one and empty by the other, and TTFRR could fire on text nobody
+could see without scrolling.
+
+Now the text a frame records is the text inside the viewport. A text node that
+wraps is measured **word by word**, not as a whole: a paragraph can begin inside
+the viewport and run past the fold, and crediting all of it because its first
+line is visible would put an entity nobody can see back into `ttfrrMs` — the same
+confusion between "in the DOM" and "on screen", one node lower down. `classify` and `entityCoverage` both read
+it, so the judge, the render classification and the reviewability threshold all
+mean the same thing by "on screen".
+
+`offscreenTextChars` records what was left out, and a run says so when it
+matters. When *nothing* is in frame the warning is emphatic, because that case
+is invisible otherwise: every frame is blank, coverage is 0, the judge gets an
+empty screenshot, and the run reads as an agent that built nothing when it built
+something nobody was shown.
+
+**A brief sets how much page is in scope** with `target.viewport`. That is not a
+thumb on the scale, it is the brief saying what it means to score. The bundled
+`landing-page` brief asks for a pricing section and a footer; on a normally
+proportioned marketing page those sit well below 800px, so through a
+laptop-sized window three of its ten rubric points were unwinnable however good
+the page was — a cap on the achievable AUC indistinguishable from an agent doing
+badly. It runs at 1280×2400.
+
 ## Latency decomposition
 
 Wall clock is partitioned so every millisecond lands in exactly one bucket.
@@ -214,6 +275,56 @@ Three numbers, because they answer different questions:
   correct change. White-screening the app for eight seconds mid-edit is a real
   cost that neither timestamp captures.
 
+### Whose time was it?
+
+Time to correct change is wall clock, and wall clock cannot tell two very
+different runs apart. One tool call followed by an eleven-second Vite rebuild
+and nine tool calls of flailing produce the same number, and ranking on that
+number alone charges the model for a slow dev server.
+
+So every edit also records, in `work`:
+
+- **`toolCalls`** and **`toolNames`** — what the agent actually did. `null`,
+  never `0`, when the adapter's stream does not expose tool boundaries: "it made
+  none" and "we could not see" are opposite claims about an agent.
+- **`modelMs`** / **`toolMs`** — thinking and tool execution inside the window,
+  from the same attribution the cold-start decomposition uses.
+- **`phases`** — toolchain commands the shims saw run inside the window, so a
+  rebuild that straddles the end of an edit is visible as the cost it was.
+
+and, beside it, **`afterAgentMs`** — the gap between the agent finishing its
+turn and the change reaching the screen. This is the part of an edit's latency
+the agent is not accountable for. It is signed: negative means the page updated
+while the agent was still working, which is what a fast loop looks like.
+
+Two bounds hold by construction, because breaking either produces a number that
+is not merely wrong but impossible, which is how a split stops being believed:
+attribution is clipped to the edit's window, and it stops at the agent's **last
+event** rather than at the end of the window. Everything after that last event
+is the page catching up, and it belongs to `afterAgentMs`.
+
+### A check that was already true
+
+If the iteration's predicate passes *before* the prompt is sent, the edit cannot
+be measured: the first frame after the prompt would report a near-instant
+success for a change the agent never made. That is a broken check, not a fast
+agent, so the result is marked `baselineAlreadyPassing`, `ok` is false, and the
+run warns.
+
+An agent that happens to build a blue header during the cold start makes
+`header-blue` void this way, which is a property of the brief rather than a
+bug — write checks against a state the app is unlikely to already be in.
+
+The baseline is sampled **twice**, and *any* sample passing marks the edit void.
+The check is arbitrary JavaScript evaluated in a live page: it throws mid-reload
+and reads styles that have not applied yet, so a single unlucky sample reports
+an already-blue header as not-blue and the edit then scores a flattering
+near-zero. The two errors are not symmetrical — a false "void" costs one
+measurement and says why, a false "correct at 0.2s" is a wrong number that looks
+like a very good one. Samples that disagree set `baselineUnstable` and warn
+separately: a flapping predicate invalidates the verdict too, not just the
+timing.
+
 Iteration polls at 250ms by default; cold start polls at 1000ms. Edits are fast
 and deserve finer resolution. Once the agent's turn ends, the harness waits a
 grace period (20s) rather than the full timeout: an agent that has stopped
@@ -298,6 +409,77 @@ so a `quiet` run says so in its caveats. The quiescence window itself is
 excluded from the latency denominator on the same grounds as the settle window:
 it is defined as a stretch in which nothing happened.
 
+## The verdict cache
+
+Scoring is the expensive part of a run, so verdicts are cached on disk in
+`.p2p-cache/` (override with `P2P_CACHE_DIR`; the default is relative to the
+working directory). The file is keyed by the brief, its rubric **and the judge**,
+so two judges can never answer for each other — that would defeat the one thing
+`p2p rescore --judge` exists to do.
+
+The file is also keyed by the width screenshots are downscaled to before they
+are sent (`--judge-width`): the judge sees that image, not the one on disk, so it
+is an input to the verdict as surely as the rubric is.
+
+Inside the file, each verdict is keyed by a **SHA-256 of the screenshot's
+bytes**. It was previously keyed by the frame's `dhash`, which is wrong in a way
+that leaves no trace: a dhash is a 64-bit perceptual hash of a 9×8 downscale,
+built to answer "are these nearly the same picture" with a distance threshold,
+and it collides readily on pages differing only in their text. Two 1280×800
+screenshots with entirely different copy hash identically — there is a test. As
+an exact key in a file shared by every run of one brief, that let a verdict
+earned by one agent's page be served for another agent's different page, with
+the collision rate rising as the cache filled. Caches written under the old
+scheme are ignored rather than migrated.
+
+Verdicts are written as they arrive rather than once at the end, and written
+atomically: a truncating write that stopped halfway would leave unparseable JSON,
+and an unparseable cache is read as a cold one — discarding every verdict already
+paid for. Writing incrementally is only an improvement if the increments cannot
+destroy each other.
+
+Perceptual similarity still has a job: it is how `selectFramesToJudge` decides a
+frame is not worth a fresh call. That is a threshold applied within one run, not
+an identity claim across all of them.
+
+Judge calls are made at **temperature 0**, recorded in `result.json`. At a
+provider's default the same screenshot can score differently on two runs, which
+puts sampling noise in the headline number — and the cache then freezes whichever
+sample landed first, so the noise becomes permanent and looks like a
+measurement. It does not make a judge deterministic; no provider promises that.
+It removes the variance that is ours to remove.
+
+## What may be ranked together
+
+`compare` and `leaderboard` refuse a set of runs that is not on one scale. Each
+check guards a table that would otherwise look completely normal:
+
+- **different horizons** — AUC is normalised by horizon.
+- **different briefs** — different rubrics.
+- **different judges** — they disagree at the margin, so a ranking across them is
+  partly a ranking of the judges.
+- **different judge temperatures** — the same model samples differently at each,
+  so part of the gap would be the sampler. A run from before the temperature was
+  recorded compares with its own kind and refuses to compare with one that
+  pinned it.
+- **different viewports** — the window decides what the judge was shown and what
+  counted as on screen, so it moves the AUC as directly as the rubric does. It
+  is recorded on every result, defaults included.
+- **unfinished judging** — a `judge.pending` result carries provisional scores;
+  ranking it presents entity coverage under a model's byline.
+- **judged mixed with unjudged** — entity coverage and rubric correctness are
+  different quantities that happen to share a 0..1 range.
+- **prompted mixed with unprompted** — different questions. `compare` refuses
+  this; `leaderboard` allows it *because* it ranks within each condition and
+  never across, and reports the prompt effect between them.
+
+`--repeat` aggregates carry the same information: the judge is named, a mixed
+one is flagged, and bucket medians are shown in seconds with **no percentages**.
+Each bucket's median is taken independently, so the median install and the median
+build can come from different runs and their sum can exceed the median wall
+clock. Rendering each as a share of that sum — which this did — produced a tidy
+breakdown of a run that never happened.
+
 ## Port hygiene
 
 A run **refuses to start** if anything is already answering on the target port,
@@ -309,6 +491,41 @@ leaked server would make the next run report a time-to-first-render near zero,
 for an application the agent under test never built — a wrong number that looks
 entirely plausible. Pass `--kill-port` to clear the port instead of aborting,
 and `--keep-server` to leave a finished run's server up for debugging.
+
+Only **listening** sockets are ever killed, and never this process or one of its
+parents. The distinction is not hypothetical: `lsof -i tcp:5173` matches sockets
+with that number at either end, so it returns every client of the port as well
+as the server. The harness polls the app under test once a second and is
+therefore always a client of it, and the old teardown piped that list straight
+into `kill -9`. The result was a run that died with `Killed: 9` immediately
+after its last measured frame — no `result.json`, no scoring pass, no report,
+and a `frames/` directory with nothing to read it by. macOS only: Linux has
+`fuser`, which matches local ports, and it was tried first.
+
+If no lookup tool is installed at all, the run says so in its warnings rather
+than assuming the port is clear — an unexamined port is how a leaked server
+survives into the next run.
+
+Success is checked by asking the port again, not by asking whether the pid still
+exists. `process.kill(pid, 0)` succeeds for a *zombie* — a killed child still in
+the process table because nothing has reaped it — so a pid check reports a dead
+server as a survivor indefinitely. It is also the wrong question: what the next
+run needs to know is whether anything is still listening.
+
+### Interrupting a run
+
+`SIGINT`, `SIGTERM` and `SIGHUP` stop the browser, the agent and the agent's dev
+server before exiting, bounded by a 20s deadline so a wedged teardown cannot
+turn a Ctrl-C into a hang — and a hang into a second Ctrl-C, which would leave
+everything running.
+
+Chromium is launched with Playwright's `handleSIGINT` / `handleSIGTERM` /
+`handleSIGHUP` set to **false**. They default to true, and they kill the browser
+and then exit the process, pre-empting the harness's teardown after its first
+step. The visible result was a Ctrl-C that looked tidy — the window vanished —
+while the agent and its dev server ran on and poisoned the next run against that
+port. An end-to-end test interrupts a real run and asserts the port is free
+afterwards; it fails if those options are ever put back.
 
 ## Repeats
 
