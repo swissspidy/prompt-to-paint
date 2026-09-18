@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
 import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
-import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
+import {
+  ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter,
+  asksToBypassPermissions, type ClaudeCodeOptions,
+} from './adapters/index.ts';
 import {
   pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, appliedTemperature,
 } from './judge/backends.ts';
@@ -551,20 +554,14 @@ async function main(): Promise<void> {
       // looks like an agent that simply built nothing.
       //
       // `--permission-mode bypassPermissions` is the same request by another
-      // name and is refused by the same check, so it has to be caught by the
-      // same guard. Verified as root: the binary prints the
-      // --dangerously-skip-permissions refusal and exits 1 in under a second,
-      // having built nothing, whichever of the two spellings asked for it.
-      const bypassing = values.unsafe || values['permission-mode'] === 'bypassPermissions';
-      if (bypassing && process.getuid?.() === 0) {
-        fail(
-          'the Claude Code CLI refuses --dangerously-skip-permissions as root.\n' +
-            '  Run the harness as a non-root user in your sandbox, or pass\n' +
-            '  --permission-mode acceptEdits for briefs that only need file writes\n' +
-            '  (an agent that must run shell commands will stall on approval).',
-        );
-      }
-      makeAdapter = () => new ClaudeCodeAdapter({
+      // name, as is either spelling forwarded through `--agent-arg`, and the
+      // binary refuses all of them by the same check. Verified as root: it
+      // prints the --dangerously-skip-permissions refusal and exits 1 in under
+      // a second, having built nothing, whichever one asked for it.
+      //
+      // Built once and handed to both the guard and the adapter, so what is
+      // checked is exactly what is run.
+      const claudeOpts: ClaudeCodeOptions = {
         // `--bin` and `--agent-arg` are documented for every agent and were
         // wired only to antigravity, so both were accepted here and silently
         // dropped. A flag that does nothing is worse than one that errors: the
@@ -575,7 +572,17 @@ async function main(): Promise<void> {
         skipPermissions: values.unsafe,
         permissionMode: values['permission-mode'],
         extraArgs: values['agent-arg'],
-      });
+      };
+      if (asksToBypassPermissions(claudeOpts) && process.getuid?.() === 0) {
+        fail(
+          'the Claude Code CLI refuses --dangerously-skip-permissions as root.\n' +
+            '  Run the harness as a non-root user in your sandbox, or pass\n' +
+            '  --permission-mode acceptEdits for briefs that only need file writes\n' +
+            '  (an agent that must run shell commands will stall on approval).\n' +
+            '  Passing it through --agent-arg reaches the same check in the agent.',
+        );
+      }
+      makeAdapter = () => new ClaudeCodeAdapter(claudeOpts);
       label ||= values.model ? `claude-code:${values.model}` : 'claude-code';
       if (!values.unsafe && !values['permission-mode'])
         console.log('  note: running with --permission-mode acceptEdits. An agent that needs to run\n' +

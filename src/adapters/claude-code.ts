@@ -13,6 +13,32 @@ export interface ClaudeCodeOptions {
   extraArgs?: string[];
 }
 
+/**
+ * Do these options ask the agent to bypass permissions?
+ *
+ * The Claude Code CLI refuses to do that as root, exiting in under a second
+ * having built nothing, and three spellings reach the same check: the harness's
+ * own `skipPermissions`, `--permission-mode bypassPermissions`, and either of
+ * those forwarded verbatim through `extraArgs`, which `start` appends after its
+ * own permission arguments. The caller checks this before a run so the refusal
+ * arrives as a usage error rather than as a failed measurement.
+ *
+ * It takes the adapter's own options so the guard and the argument list it
+ * guards read the same object and cannot drift apart.
+ *
+ * `--allow-dangerously-skip-permissions` is deliberately not matched: it offers
+ * the mode rather than entering it, and refusing a run over a flag that would
+ * have worked is the worse mistake.
+ */
+export function asksToBypassPermissions(opts: ClaudeCodeOptions): boolean {
+  if (opts.skipPermissions || opts.permissionMode === 'bypassPermissions') return true;
+  const args = opts.extraArgs ?? [];
+  return args.some((a, i) =>
+    a === '--dangerously-skip-permissions' ||
+    a === '--permission-mode=bypassPermissions' ||
+    (a === '--permission-mode' && args[i + 1] === 'bypassPermissions'));
+}
+
 interface ContentBlock {
   type?: string;
   name?: string;

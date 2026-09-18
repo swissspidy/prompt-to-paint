@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { translateClaudeCodeEvent } from '../src/adapters/claude-code.ts';
+import { translateClaudeCodeEvent, asksToBypassPermissions } from '../src/adapters/claude-code.ts';
 import { translatePiEvent, PiAdapter } from '../src/adapters/pi.ts';
 import { detectToolSignal, AntigravityAdapter } from '../src/adapters/antigravity.ts';
 import { attributeAgentStream, total } from '../src/decompose/attribute.ts';
@@ -70,6 +70,43 @@ test('a realistic claude-code session attributes thinking and tool time', () => 
   const events: AgentEvent[] = wire.flatMap(([t, o]) => translateClaudeCodeEvent(o as never, t));
   const { tool } = attributeAgentStream(events, 40_000);
   assert.equal(total(tool), 300 + 18_000);
+});
+
+test('a bypass request is recognised however it was spelled', () => {
+  // The binary refuses all of these as root, exiting in under a second having
+  // built nothing, so the harness checks before spending a run on it. Wiring
+  // --agent-arg through to this adapter added the forwarded spellings: the
+  // adapter appends them after its own permission arguments, so a guard that
+  // read only the dedicated options let the refused run happen anyway.
+  assert.equal(asksToBypassPermissions({ skipPermissions: true }), true);
+  assert.equal(asksToBypassPermissions({ permissionMode: 'bypassPermissions' }), true);
+  for (const extraArgs of [
+    ['--dangerously-skip-permissions'],
+    ['--permission-mode=bypassPermissions'],
+    ['--permission-mode', 'bypassPermissions'],
+    ['--model', 'x', '--dangerously-skip-permissions'],
+  ]) {
+    assert.equal(asksToBypassPermissions({ extraArgs }), true, extraArgs.join(' '));
+  }
+});
+
+test('a bypass guard that fires on anything else would refuse a run that works', () => {
+  // The opposite mistake costs a run that the binary would have accepted, so
+  // nothing here may be matched loosely. `--allow-dangerously-skip-permissions`
+  // offers the mode rather than entering it, and a permission mode whose value
+  // is something else is not a request to bypass anything.
+  assert.equal(asksToBypassPermissions({}), false);
+  assert.equal(asksToBypassPermissions({ permissionMode: 'acceptEdits' }), false);
+  assert.equal(asksToBypassPermissions({ extraArgs: ['--allow-dangerously-skip-permissions'] }), false);
+  assert.equal(asksToBypassPermissions({ extraArgs: ['--permission-mode', 'acceptEdits'] }), false);
+  assert.equal(
+    asksToBypassPermissions({ extraArgs: ['--allowed-tools', 'Bash,Write,Edit'] }), false,
+    'the flag that makes a root run possible must not be mistaken for one that ends it',
+  );
+  assert.equal(
+    asksToBypassPermissions({ extraArgs: ['--permission-mode'] }), false,
+    'a trailing flag with no value names no mode',
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -158,10 +158,14 @@ export async function runIteration(
     //
     // A person watching an unchanged page would refresh, and the clock keeps
     // running across it, so what is measured is still what they would have
-    // waited. Gated on *no* visible change rather than on the check alone: an
-    // app with an update channel has shown something by now -- the change, a
-    // flash, an error overlay -- so this costs it nothing, and an edit that is
-    // merely wrong is not one this can rescue.
+    // waited. Gated on *no* visible change rather than on the check alone,
+    // because an app that pushes its own updates has usually shown something by
+    // now -- the change, a flash, an error overlay -- so this rarely reaches
+    // one, and an edit that is merely wrong is not one a reload can rescue.
+    //
+    // "Usually", not "always": a slow enough update channel looks identical
+    // from here. That is why the result records only that the page had not
+    // moved and was refreshed, and never claims the app had no way to push it.
     if (
       refreshedAtMs === null &&
       agentDoneMs !== null &&

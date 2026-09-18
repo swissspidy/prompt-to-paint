@@ -53,11 +53,16 @@ export function renderText(r: RunResult): string {
       // page is a different experience from one that arrived on its own, and
       // everything after the refresh includes a page load. Said on its own line
       // rather than folded into the timings, which do not distinguish them.
+      //
+      // Worded as what was seen, not as what it means: the harness observed a
+      // page that had not moved and refreshed it. Whether the app had no way to
+      // push the change or merely had not yet is not something a screenshot can
+      // say.
       if (it.refreshedAtMs != null)
         L.push(
-          `    ${' '.repeat(16)} nothing moved on its own; refreshed at ${
+          `    ${' '.repeat(16)} nothing had changed on screen when the agent stopped; refreshed at ${
             secs(it.refreshedAtMs - it.promptSentMs).trim()
-          } (no update channel -- the timings after it include a page load)`,
+          } (the timings after it include a page load)`,
         );
       const w = it.work;
       if (!w && it.afterAgentMs == null) continue;

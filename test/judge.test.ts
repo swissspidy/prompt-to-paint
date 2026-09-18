@@ -271,7 +271,11 @@ test('the warning a dropped temperature produces names the judge and the consequ
     const warning = out.warnings.find((w) => /sampling temperature/.test(w));
     assert.ok(warning, 'the run says its scores carry sampling variance');
     assert.match(warning, /anthropic:claude-sonnet-5/);
-    assert.match(warning, /rescore/, 'says where the variance shows up');
+    assert.match(warning, /inside the AUC/, 'says where the variance ends up');
+    // Not "on a rescore": verdicts are cached by screenshot bytes, so a rescore
+    // of these same frames returns what was already sampled rather than drawing
+    // again. The variance is between runs, whose screenshots differ.
+    assert.doesNotMatch(warning, /rescore/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -333,6 +337,17 @@ test('two judges do not share a verdict cache', async () => {
     const again = fakeJudge('anthropic:claude-sonnet-5', true);
     await judgeRun(frames, single, { backend: again, cacheDir });
     assert.equal(again.calls, 0, 'the same judge reuses its cached verdict');
+
+    // Same judge, same screenshot, sampled differently. Redundant today --
+    // whether a provider honours `temperature` is a property of the model id,
+    // so one model cannot disagree with itself about it -- but that rests on a
+    // provider never changing its mind about a published model, and a cache
+    // that outlives the change would hand verdicts sampled one way to a run
+    // that sampled the other.
+    const resampled = { ...fakeJudge('anthropic:claude-sonnet-5', false), temperature: () => null };
+    const c = await judgeRun(frames, single, { backend: resampled, cacheDir });
+    assert.equal(resampled.calls, 1, 'a different sampling regime is a different cache identity');
+    assert.equal(c.frames[0]?.score, 0, 'and its own verdict is what got recorded');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

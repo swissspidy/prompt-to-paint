@@ -380,12 +380,16 @@ export interface IterationResult {
    * When the harness refreshed the page because nothing had moved, or null if
    * it never had to.
    *
-   * A number here says the edit did not reach the screen on its own: there was
-   * no update channel to push it. An app with hot reload has already shown the
-   * change by this point, so it never sees a refresh -- and an edit that needed
-   * one is a different experience from an edit that did not, which is why the
-   * report says which happened rather than folding both into one timestamp.
-   * Everything after it includes a page load.
+   * A number here says exactly one thing: the agent had stopped and no visible
+   * change had been observed for the wait, so the page was refreshed -- what a
+   * person looking at a page that had not moved would do. It is an observation
+   * about the screen, not a diagnosis of the app: an app whose own update
+   * channel is merely slower than the wait would be refreshed too.
+   *
+   * What follows from it is the reason it is recorded. The edit reached the
+   * screen only after a reload, so everything timed after this point includes a
+   * page load -- a different experience from an edit that arrived on its own,
+   * and not one to fold into the same timestamp.
    */
   refreshedAtMs?: number | null;
   /**

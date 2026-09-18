@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { Brief, Frame, ScoredFrame } from '../types.ts';
 import { hamming, colorDelta, downscalePngColor } from '../probe/pixels.ts';
-import { JUDGE_TEMPERATURE, type JudgeBackend } from './backends.ts';
+import { JUDGE_TEMPERATURE, appliedTemperature, type JudgeBackend } from './backends.ts';
 
 export interface JudgeOptions {
   backend: JudgeBackend;
@@ -252,6 +252,17 @@ export async function judgeRun(
       // rescore at a different --judge-width reads back verdicts formed from
       // pictures it never sent.
       imageWidth: opts.maxImageWidth ?? DEFAULT_IMAGE_WIDTH,
+      // How the verdict was sampled is an input to it by the same argument.
+      // Today this is redundant -- whether a provider honours `temperature` is
+      // a property of the model id, which is already above, so two runs of one
+      // model cannot disagree about it -- but "redundant" here rests on the
+      // provider never changing its mind about a published model. If one ever
+      // does, a cache keyed without this hands verdicts sampled one way to a
+      // run that sampled the other, under a name that says nothing happened.
+      //
+      // Both CLI paths preflight before judging, so the applied temperature is
+      // settled by the time this is read.
+      temperature: appliedTemperature(opts.backend),
     }))
     .digest('hex')
     .slice(0, 12);
@@ -355,8 +366,8 @@ export async function judgeRun(
   if (opts.backend.temperature?.() === null) {
     warnings.push(
       `judge: ${opts.backend.model ?? opts.backend.name} does not accept a sampling temperature, so ` +
-        `these frames were scored at the provider's default rather than at ${JUDGE_TEMPERATURE}. The ` +
-        'same screenshot can score differently on a rescore, and that variance is inside the AUC. ' +
+        `these frames were scored at the provider's default rather than at ${JUDGE_TEMPERATURE}. Two ` +
+        'runs of the same page can be scored differently, and that variance is inside the AUC. ' +
         'result.json records the temperature as null rather than as the value that was asked for, so ' +
         'p2p compare will not pool this run with one that was scored at a fixed temperature.',
     );
