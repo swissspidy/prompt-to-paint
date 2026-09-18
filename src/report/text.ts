@@ -49,6 +49,21 @@ export function renderText(r: RunResult): string {
       L.push('    note: restart mode -- these include agent startup and context re-read');
     for (const it of r.iterations) {
       L.push(`    ${it.id.padEnd(16)} first change ${secs(it.timeToFirstChangeMs).padStart(7)}   correct ${secs(it.timeToCorrectChangeMs).padStart(7)}${it.brokenMs > 0 ? `   broken ${secs(it.brokenMs)}` : ''}${it.baselineAlreadyPassing ? '   VOID (check already passed)' : it.ok ? '' : '   NEVER LANDED'}`);
+      // An edit that reached the screen only because the harness refreshed the
+      // page is a different experience from one that arrived on its own, and
+      // everything after the refresh includes a page load. Said on its own line
+      // rather than folded into the timings, which do not distinguish them.
+      //
+      // Worded as what was seen, not as what it means: the harness observed a
+      // page that had not moved and refreshed it. Whether the app had no way to
+      // push the change or merely had not yet is not something a screenshot can
+      // say.
+      if (it.refreshedAtMs != null)
+        L.push(
+          `    ${' '.repeat(16)} nothing had changed on screen when the agent stopped; refreshed at ${
+            secs(it.refreshedAtMs - it.promptSentMs).trim()
+          } (the timings after it include a page load)`,
+        );
       const w = it.work;
       if (!w && it.afterAgentMs == null) continue;
       // The second line is the answer to "whose time was that". An edit that

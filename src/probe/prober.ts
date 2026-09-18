@@ -263,6 +263,8 @@ export class Prober {
   private everRendered = false;
   private lastDocHash: string | null = null;
   private reloads = 0;
+  /** Set by requestReload(), cleared by the navigation that honours it. */
+  private reloadRequested = false;
   private lastShot: { dhash: string; colorSig: string; screenshotPath: string } | null = null;
   private distinct = 0;
   private duplicates = 0;
@@ -510,9 +512,14 @@ export class Prober {
     // anything has rendered we stop reloading entirely so HMR is preserved.
     const needsReload =
       this.live &&
-      (docChanged || (!this.everRendered && this.staleTicks >= (this.opts.renavigateAfter ?? 4)));
+      (docChanged ||
+        this.reloadRequested ||
+        (!this.everRendered && this.staleTicks >= (this.opts.renavigateAfter ?? 4)));
 
     if (!this.live || needsReload) {
+      // Cleared whether or not the navigation below succeeds: one request is
+      // one refresh, and a failed one must not queue itself forever.
+      this.reloadRequested = false;
       try {
         if (this.live) this.reloads++;
         const res = await page.goto(this.opts.url, {
@@ -655,6 +662,30 @@ export class Prober {
    */
   setCheck(expr: string | null): void {
     this.check = expr;
+  }
+
+  /**
+   * Refresh the page at the next observation.
+   *
+   * The prober never reloads a live page on its own once anything has rendered:
+   * a reload destroys HMR state and would change the very latency this harness
+   * exists to measure. The one automatic exception keys on the *served
+   * document* changing, which catches a static page being rewritten.
+   *
+   * It does not catch a static page whose edit went into a linked stylesheet.
+   * `index.html` stays byte-identical, nothing fires, and the browser shows the
+   * old CSS for the rest of the run -- observed on a todo-app run where the
+   * agent put the blue header in style.css and served the directory with a
+   * plain file server. The edit was on disk and being served correctly; the
+   * screen never saw it, and the iteration reported NEVER LANDED.
+   *
+   * There is no signal from here that distinguishes that from a page that is
+   * simply not finished yet, so this is the caller's judgement to make and not
+   * the prober's. A flag rather than an immediate reload, so it cannot race an
+   * in-flight capture.
+   */
+  requestReload(): void {
+    this.reloadRequested = true;
   }
 
   /**

@@ -32,10 +32,26 @@ export interface IterateOptions {
    * made. Two samples cost a few hundred milliseconds before the clock starts.
    */
   baselineSamples?: number;
+  /**
+   * How long after the agent stops to wait before refreshing a page that has
+   * not moved at all. Defaults to `STATIC_REFRESH_AFTER_MS`.
+   */
+  refreshAfterMs?: number;
 }
 
 const isBroken = (c: Frame['class'] | undefined): boolean =>
   c === 'error' || c === 'blank' || c === 'unreachable';
+
+/**
+ * How long after the agent stops to wait before refreshing a page that has not
+ * moved at all.
+ *
+ * Long enough that a bundler still rebuilding gets to push its own update: a
+ * slow Vite rebuild is seconds, and refreshing into one would measure a page
+ * load instead of the rebuild. Short enough to leave most of the post-turn
+ * grace for the refreshed page to land.
+ */
+export const STATIC_REFRESH_AFTER_MS = 5000;
 
 /**
  * Measures one edit, from prompt to visible change.
@@ -124,8 +140,42 @@ export async function runIteration(
   const deadline = (): number =>
     agentDoneMs === null ? hardDeadline : Math.min(hardDeadline, doneAtWallMs + grace);
 
+  let refreshedAtMs: number | null = null;
   while (Date.now() < deadline() && timeToCorrectChangeMs === null) {
     await sleep(60);
+
+    // Press refresh, once, on a page that has not moved at all since the agent
+    // stopped.
+    //
+    // Hot reload pushes an edit over its own channel, and the prober otherwise
+    // reloads only when the served document changes -- which is what a rewritten
+    // static page looks like. Neither fires for a static page whose edit went
+    // into a linked stylesheet: index.html stays byte-identical, and the browser
+    // shows the old CSS for the rest of the run. Observed on todo-app, where the
+    // agent put the blue header in style.css and served the directory with a
+    // plain file server: the edit was on disk, correctly served, and reported
+    // NEVER LANDED because nothing ever asked the browser for it again.
+    //
+    // A person watching an unchanged page would refresh, and the clock keeps
+    // running across it, so what is measured is still what they would have
+    // waited. Gated on *no* visible change rather than on the check alone,
+    // because an app that pushes its own updates has usually shown something by
+    // now -- the change, a flash, an error overlay -- so this rarely reaches
+    // one, and an edit that is merely wrong is not one a reload can rescue.
+    //
+    // "Usually", not "always": a slow enough update channel looks identical
+    // from here. That is why the result records only that the page had not
+    // moved and was refreshed, and never claims the app had no way to push it.
+    if (
+      refreshedAtMs === null &&
+      agentDoneMs !== null &&
+      timeToFirstChangeMs === null &&
+      Date.now() - doneAtWallMs >= (opts.refreshAfterMs ?? STATIC_REFRESH_AFTER_MS)
+    ) {
+      refreshedAtMs = Date.now() - t0Epoch;
+      prober.requestReload();
+    }
+
     for (; cursor < prober.frames.length; cursor++) {
       const f: Frame = prober.frames[cursor]!;
       if (f.tMs < promptSentMs) continue;
@@ -157,6 +207,23 @@ export async function runIteration(
         firstPassMs = null;
       }
     }
+  }
+
+  // An edit the predicate confirmed *is* a visible change, whatever the pixel
+  // heuristic made of it.
+  //
+  // The two detectors have different sensitivities, and the predicate is the
+  // stricter one: recolouring an h1 on a mostly-white page moves the check from
+  // false to true while shifting the worst colour cell by less than the eight
+  // levels a "visible change" needs. The report then read `first change  --
+  // correct 3.1s` -- "the page never moved, and here is when it moved" -- on a
+  // static-page run where the heading visibly went blue. Reported time never
+  // outruns the evidence either: whichever detector saw it first is the answer.
+  if (timeToCorrectChangeMs !== null) {
+    timeToFirstChangeMs =
+      timeToFirstChangeMs === null
+        ? timeToCorrectChangeMs
+        : Math.min(timeToFirstChangeMs, timeToCorrectChangeMs);
   }
 
   // Charge the last observed state through to whatever ended the loop, so an
@@ -205,6 +272,7 @@ export async function runIteration(
     timeToCorrectChangeMs,
     agentDoneMs,
     afterAgentMs,
+    refreshedAtMs,
     endedMs,
     brokenMs,
     ok: timeToCorrectChangeMs !== null && !baselineAlreadyPassing,

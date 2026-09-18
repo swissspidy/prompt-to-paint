@@ -7,9 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { loadBrief } from './brief.ts';
 import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
-import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
 import {
-  pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, JUDGE_TEMPERATURE,
+  ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter,
+  asksToBypassPermissions, type ClaudeCodeOptions,
+} from './adapters/index.ts';
+import {
+  pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, appliedTemperature,
 } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
@@ -516,7 +519,7 @@ async function main(): Promise<void> {
         model: backend.model,
         framesJudged: judged.framesJudged,
         degraded: judged.degraded,
-        temperature: JUDGE_TEMPERATURE,
+        temperature: appliedTemperature(backend),
       },
       curve: computeMetrics(judged.frames, {
         horizonMs: brief.horizonSec * 1000,
@@ -549,19 +552,37 @@ async function main(): Promise<void> {
       // The CLI refuses to bypass permissions when running as root, and the
       // resulting failure is opaque: the agent exits instantly and the run
       // looks like an agent that simply built nothing.
-      if (values.unsafe && process.getuid?.() === 0) {
+      //
+      // `--permission-mode bypassPermissions` is the same request by another
+      // name, as is either spelling forwarded through `--agent-arg`, and the
+      // binary refuses all of them by the same check. Verified as root: it
+      // prints the --dangerously-skip-permissions refusal and exits 1 in under
+      // a second, having built nothing, whichever one asked for it.
+      //
+      // Built once and handed to both the guard and the adapter, so what is
+      // checked is exactly what is run.
+      const claudeOpts: ClaudeCodeOptions = {
+        // `--bin` and `--agent-arg` are documented for every agent and were
+        // wired only to antigravity, so both were accepted here and silently
+        // dropped. A flag that does nothing is worse than one that errors: the
+        // run it was meant to configure happens anyway, looks ordinary, and
+        // answers a question nobody asked.
+        bin: values.bin,
+        model: values.model,
+        skipPermissions: values.unsafe,
+        permissionMode: values['permission-mode'],
+        extraArgs: values['agent-arg'],
+      };
+      if (asksToBypassPermissions(claudeOpts) && process.getuid?.() === 0) {
         fail(
           'the Claude Code CLI refuses --dangerously-skip-permissions as root.\n' +
             '  Run the harness as a non-root user in your sandbox, or pass\n' +
             '  --permission-mode acceptEdits for briefs that only need file writes\n' +
-            '  (an agent that must run shell commands will stall on approval).',
+            '  (an agent that must run shell commands will stall on approval).\n' +
+            '  Passing it through --agent-arg reaches the same check in the agent.',
         );
       }
-      makeAdapter = () => new ClaudeCodeAdapter({
-        model: values.model,
-        skipPermissions: values.unsafe,
-        permissionMode: values['permission-mode'],
-      });
+      makeAdapter = () => new ClaudeCodeAdapter(claudeOpts);
       label ||= values.model ? `claude-code:${values.model}` : 'claude-code';
       if (!values.unsafe && !values['permission-mode'])
         console.log('  note: running with --permission-mode acceptEdits. An agent that needs to run\n' +
@@ -572,6 +593,7 @@ async function main(): Promise<void> {
         provider: values.provider,
         model: values.model,
         tools: values.tools,
+        extraArgs: values['agent-arg'],
       });
       label ||= values.model ? `pi:${values.model}` : 'pi';
       if (!values.model)

@@ -607,6 +607,17 @@ Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
 
+**An iteration check reads text the way the browser renders it.**
+`document.body.innerText` is the *rendered* text, so CSS decides its case: a
+column header styled `text-transform: uppercase` reads `BLOCKED`, and
+`.includes('Blocked')` is then false on a page that plainly shows the column.
+That is not a hypothetical — it is how the bundled `add-column` check reported
+`NEVER LANDED` for an edit visible in the screenshot beside it. Match
+case-insensitively (`/\bblocked\b/i.test(...)`), which is what entity coverage
+has always done, or read `textContent` if you mean the source text rather than
+what is on screen. A check that decides a headline number should fail only when
+the edit did.
+
 ## Tests
 
 ```bash

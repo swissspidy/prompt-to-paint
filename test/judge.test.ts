@@ -19,7 +19,10 @@ function flatPng(w: number, h: number, runs: Array<[number, number]>): Buffer {
   }
   return PNG.sync.write(p);
 }
-import { parseJudge, pickBackend, preflightJudge, DEFAULT_JUDGE } from '../src/judge/backends.ts';
+import {
+  parseJudge, pickBackend, preflightJudge, DEFAULT_JUDGE, NullBackend, JUDGE_TEMPERATURE,
+  appliedTemperature, dropsTemperature,
+} from '../src/judge/backends.ts';
 import { judgeRun } from '../src/judge/judge.ts';
 import type { JudgeBackend } from '../src/judge/backends.ts';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -204,6 +207,81 @@ test('the null judge needs no credentials at all', () => {
 });
 
 // ---------------------------------------------------------------------------
+// What temperature was actually applied
+// ---------------------------------------------------------------------------
+
+test('a provider saying it ignored the temperature is recognised in either spelling', () => {
+  // The default judge is one of the models this happens to: asked for 0, the
+  // SDK drops the setting and says so in a warning. Recording the requested 0
+  // anyway is not a cosmetic slip -- p2p compare and the repeat aggregation
+  // both refuse to pool runs whose temperatures differ, so a hardcoded 0
+  // certifies as noise-free a set of runs that carries exactly the sampling
+  // noise the check exists to catch.
+  //
+  // Two shapes because there are two: the provider protocol emits
+  // `unsupported-setting`/`setting`, the `ai` package hands back
+  // `unsupported`/`feature` for the same event.
+  assert.equal(dropsTemperature([{ type: 'unsupported-setting', setting: 'temperature' }]), true);
+  assert.equal(
+    dropsTemperature([{
+      type: 'unsupported',
+      feature: 'temperature',
+      details: 'temperature is not supported by claude-sonnet-5 and will be ignored',
+    }]),
+    true,
+  );
+  assert.equal(
+    dropsTemperature([{ type: 'other', message: 'x' }, { type: 'unsupported', feature: 'temperature' }]),
+    true,
+    'found among warnings about other things',
+  );
+});
+
+test('an unrelated warning does not make the run claim an unknown temperature', () => {
+  // The opposite mistake: null means "a provider told us it ignored this", and
+  // saying it when nothing of the sort happened splits runs that belong
+  // together.
+  assert.equal(dropsTemperature(undefined), false);
+  assert.equal(dropsTemperature([]), false);
+  assert.equal(dropsTemperature([{ type: 'unsupported-setting', setting: 'topK' }]), false);
+  assert.equal(dropsTemperature([{ type: 'unsupported-tool', tool: 'temperature' }]), false);
+  assert.equal(dropsTemperature([{ type: 'other', message: 'temperature' }]), false);
+  assert.equal(dropsTemperature([null, 'temperature', 42]), false, 'junk is not a claim');
+});
+
+test('a backend that never heard otherwise records the temperature it asked for', () => {
+  // Every backend that does not talk to a provider -- the null judge, the fakes
+  // below -- got what it asked for by definition.
+  assert.equal(appliedTemperature(new NullBackend()), JUDGE_TEMPERATURE);
+  const legacy = { name: 'ai', model: 'x:y', concurrency: 1, ask: async (): Promise<string> => '{}' };
+  assert.equal(appliedTemperature(legacy), JUDGE_TEMPERATURE);
+});
+
+test('the warning a dropped temperature produces names the judge and the consequence', async () => {
+  const backend: JudgeBackend = {
+    name: 'ai',
+    model: 'anthropic:claude-sonnet-5',
+    concurrency: 1,
+    ask: async (): Promise<string> => JSON.stringify({ criteria: { renders: { met: true } } }),
+    temperature: () => null,
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-temp-'));
+  try {
+    const out = await judgeRun([frame(0, '0'.repeat(16))], brief, { backend, cacheDir: dir });
+    const warning = out.warnings.find((w) => /sampling temperature/.test(w));
+    assert.ok(warning, 'the run says its scores carry sampling variance');
+    assert.match(warning, /anthropic:claude-sonnet-5/);
+    assert.match(warning, /inside the AUC/, 'says where the variance ends up');
+    // Not "on a rescore": verdicts are cached by screenshot bytes, so a rescore
+    // of these same frames returns what was already sampled rather than drawing
+    // again. The variance is between runs, whose screenshots differ.
+    assert.doesNotMatch(warning, /rescore/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // The verdict cache
 // ---------------------------------------------------------------------------
 
@@ -259,6 +337,17 @@ test('two judges do not share a verdict cache', async () => {
     const again = fakeJudge('anthropic:claude-sonnet-5', true);
     await judgeRun(frames, single, { backend: again, cacheDir });
     assert.equal(again.calls, 0, 'the same judge reuses its cached verdict');
+
+    // Same judge, same screenshot, sampled differently. Redundant today --
+    // whether a provider honours `temperature` is a property of the model id,
+    // so one model cannot disagree with itself about it -- but that rests on a
+    // provider never changing its mind about a published model, and a cache
+    // that outlives the change would hand verdicts sampled one way to a run
+    // that sampled the other.
+    const resampled = { ...fakeJudge('anthropic:claude-sonnet-5', false), temperature: () => null };
+    const c = await judgeRun(frames, single, { backend: resampled, cacheDir });
+    assert.equal(resampled.calls, 1, 'a different sampling regime is a different cache identity');
+    assert.equal(c.frames[0]?.score, 0, 'and its own verdict is what got recorded');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

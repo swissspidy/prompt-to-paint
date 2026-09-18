@@ -377,6 +377,22 @@ export interface IterationResult {
    */
   afterAgentMs?: number | null;
   /**
+   * When the harness refreshed the page because nothing had moved, or null if
+   * it never had to.
+   *
+   * A number here says exactly one thing: the agent had stopped and no visible
+   * change had been observed for the wait, so the page was refreshed -- what a
+   * person looking at a page that had not moved would do. It is an observation
+   * about the screen, not a diagnosis of the app: an app whose own update
+   * channel is merely slower than the wait would be refreshed too.
+   *
+   * What follows from it is the reason it is recorded. The edit reached the
+   * screen only after a reload, so everything timed after this point includes a
+   * page load -- a different experience from an edit that arrived on its own,
+   * and not one to fold into the same timestamp.
+   */
+  refreshedAtMs?: number | null;
+  /**
    * What the agent actually did for this edit.
    *
    * Time to correct change is wall clock, and wall clock says nothing about
@@ -415,6 +431,7 @@ export interface IterationWork {
  */
 export type RunEndReason =
   | 'turn'      // the adapter saw the agent complete its first turn
+  | 'exit'      // the agent process ended without ever completing one
   | 'signal'    // the agent created the done sentinel in its workdir
   | 'quiet'     // page, agent stream and toolchain all idle long enough
   | 'rendered'  // stop-after-render was set and the app rendered
@@ -443,8 +460,17 @@ export interface RunResult {
     model: string | null;
     framesJudged: number;
     degraded: boolean;
-    /** Sampling temperature used. Recorded so a run can say how it was scored. */
-    temperature?: number;
+    /**
+     * Sampling temperature the provider applied. Recorded so a run can say how
+     * it was scored.
+     *
+     * Null when the provider was asked for one and said it ignored the setting,
+     * which is a different fact from "not recorded" (the `undefined` of a run
+     * written before this field existed) and from any number. `p2p compare` and
+     * the repeat aggregation both refuse to pool runs whose temperatures
+     * differ, so this has to be what happened rather than what was requested.
+     */
+    temperature?: number | null;
     /**
      * Written before judging, so an interrupted or failed scoring pass still
      * leaves a replayable run on disk. `p2p rescore` clears it.

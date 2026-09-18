@@ -165,6 +165,10 @@ test('a crashed agent is reported as a failure, not as a zero score', { skip: ne
     assert.equal(result.agentFailure?.exitCode, 3);
     assert.match(result.warnings[0] ?? '', /AGENT FAILED/);
     assert.equal(result.curve.auc, 0, 'still zero -- but now explained');
+    // exec's contract is that the command exiting *is* the turn ending, so a
+    // command that ran and failed did complete one. Contrast the streaming
+    // adapter below, where nothing of the sort happened.
+    assert.equal(result.endReason, 'turn');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -185,6 +189,11 @@ test('an agent binary that does not exist fails the run instead of the harness',
     assert.ok(result.agentFailure, 'the failed spawn is recorded as a failed run');
     const log = await readFile(join(dir, 'agent.log'), 'utf8');
     assert.match(log, /not found on PATH/);
+    // A streaming adapter releases the turn wait when its process goes away, so
+    // that a crash does not hold the run to its horizon. Recording that release
+    // as a completed turn would put "the agent completed its first turn" in
+    // result.json for a binary that never existed.
+    assert.equal(result.endReason, 'exit');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -887,6 +896,96 @@ test('the frames before anything is serving are captured, not skipped', { skip: 
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an edit to a linked stylesheet still reaches the screen', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  // A static file server has no update channel, and the prober reloads a live
+  // page only when the *served document* changes -- deliberately, because
+  // reloading destroys HMR state and would change the latency being measured.
+  // Neither fires for an edit that goes into a linked stylesheet: index.html is
+  // byte-identical, and the browser holds the old CSS for the rest of the run.
+  //
+  // Observed on todo-app, where the agent put the blue header in style.css and
+  // served the directory with a plain file server. The edit was on disk and
+  // being served correctly; the iteration reported NEVER LANDED, and the header
+  // only turned blue on screen when a later, unrelated edit to index.html
+  // happened to change the document and force a reload.
+  const dir = await tmp('p2p-css-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const page = '<!doctype html><meta charset=utf-8><link rel=stylesheet href="style.css">'
+      + '<body><h1>DevConf 2026</h1><p>See you in Berlin</p></body>';
+    const result = await runBenchmark({
+      brief: {
+        ...base,
+        horizonSec: 30,
+        target: { ...base.target, port: 5297, serveStatic: true },
+        iterations: [{
+          id: 'header-blue',
+          prompt: 'Make the heading blue.',
+          description: 'the edit goes into the stylesheet, not the document',
+          check: base.iterations![0]!.check,
+        }],
+      },
+      adapter: new ScriptedAdapter({
+        steps: [
+          { atMs: 0, write: { path: 'index.html', content: page } },
+          { atMs: 100, write: { path: 'style.css', content: 'h1 { color: #111 }' } },
+        ],
+        // index.html is untouched, so nothing the prober watches changes.
+        iterationSteps: { '0': [{ atMs: 200, write: { path: 'style.css', content: 'h1 { color: #1a4fd6 }' } }] },
+      }),
+      runDir: dir, label: 'css-only', judgeBackend: new NullBackend(), settleMs: 1500, killPort: true,
+    });
+
+    const it = result.iterations[0];
+    assert.ok(it, 'the iteration ran');
+    assert.ok(it.ok, 'the edit was on disk and served; it has to be measurable');
+    assert.notEqual(it.refreshedAtMs, null, 'and the run says it took a refresh to see it');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a bundled iteration check survives the CSS a real agent writes', { skip: needsBrowser, timeout: 60_000 }, async () => {
+  // The exact page a claude-code run produced for todo-app: column headers
+  // styled `text-transform: uppercase`, so the fourth column reads BLOCKED. The
+  // brief's check read `document.body.innerText`, which is the text *as
+  // rendered*, and compared it with `.includes('Blocked')`. The edit was in the
+  // screenshot, in the workdir and in the viewport text the same frame
+  // recorded; the harness reported NEVER LANDED.
+  //
+  // Evaluated the way the prober evaluates it, in a real browser, because that
+  // is where the two spellings of the word diverge -- nothing about the check
+  // read wrong on the page.
+  const { chromium } = await import('playwright');
+  const { loadBrief } = await import('../../src/brief.ts');
+  const brief = await loadBrief('briefs/todo-app.json');
+  const check = brief.iterations?.find((i) => i.id === 'add-column')?.check;
+  assert.ok(check, 'todo-app still has the add-column iteration');
+
+  const browser = await chromium.launch({ executablePath: findChromium(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    const board = (columns: string[]): string =>
+      '<style>h2{text-transform:uppercase}</style><body><h1>Orbit</h1>'
+      + columns.map((c) => `<div class="column"><h2>${c}</h2></div>`).join('')
+      + '</body>';
+
+    await page.setContent(board(['Todo', 'In Progress', 'Done']));
+    assert.equal(
+      await page.evaluate(`Boolean(${check})`), false,
+      'before the edit the check must not pass, or the iteration is void',
+    );
+
+    await page.setContent(board(['Todo', 'In Progress', 'Done', 'Blocked']));
+    assert.equal(
+      await page.evaluate(`Boolean(${check})`), true,
+      'the column is on screen, whatever case the CSS renders it in',
+    );
+  } finally {
+    await browser.close();
   }
 });
 

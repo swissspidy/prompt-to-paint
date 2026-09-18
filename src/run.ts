@@ -14,7 +14,7 @@ import {
 } from './decompose/attribute.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { judgeRun, mechanicalScores } from './judge/judge.ts';
-import { JUDGE_TEMPERATURE } from './judge/backends.ts';
+import { appliedTemperature } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
@@ -235,6 +235,19 @@ export interface ProtocolOptions {
    * a different experiment, and not comparable with the default one.
    */
   renderEarly?: boolean;
+  /**
+   * The harness is already serving the working directory at this URL, which is
+   * what `target.serveStatic` briefs do.
+   *
+   * Then "serve the app there" is not just redundant, it is impossible: the
+   * port is held by the harness, so every attempt fails. Observed on
+   * `static-page`, where the agent wrote a correct index.html in the first
+   * fifteen seconds and spent the remaining four and three quarter minutes
+   * trying to get a server onto a port it could never have, then hit the
+   * horizon without finishing. The page was on screen the whole time. What the
+   * run measured was the agent fighting the harness.
+   */
+  served?: boolean;
 }
 
 /**
@@ -256,21 +269,32 @@ export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string 
     'How this run is observed:',
     '',
     `- A browser is already open at ${url} and screenshots it every second, starting`,
-    '  now. Serve the app there, and leave the server running when you are done.',
   ];
+  L.push(
+    opts.served
+      ? '  now. That URL already serves this directory, so a file you save here is on\n' +
+        '  screen at the next screenshot. Do not start a server: the port is already\n' +
+        '  taken, and every attempt will fail.'
+      : '  now. Serve the app there, and leave the server running when you are done.',
+  );
   if (opts.renderEarly !== false)
     L.push(
       '- Get something on screen as early as you can and then refine it in place. A',
       '  rough page that renders in the first minute counts for more here than a',
       '  perfect one that only appears at the end.',
     );
+  if (!opts.served)
+    L.push(
+      '- Start the dev server in the background so it does not block you, e.g.',
+      '  `npm run dev > dev.log 2>&1 &`. A server left in the foreground never returns,',
+      '  so your turn can never finish.',
+    );
   L.push(
-    '- Start the dev server in the background so it does not block you, e.g.',
-    '  `npm run dev > dev.log 2>&1 &`. A server left in the foreground never returns,',
-    '  so your turn can never finish.',
     `- When you consider the app done, create an empty file named \`${DONE_SENTINEL}\` in the`,
     '  project root. That is what stops the clock. Do not create it before the app is',
-    '  serving, and do not stop the server after creating it.',
+    opts.served
+      ? '  on screen.'
+      : '  serving, and do not stop the server after creating it.',
   );
   return `\n\n${L.join('\n')}\n`;
 }
@@ -533,7 +557,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     });
 
     const prompt =
-      brief.prompt + protocolSuffix(url, { renderEarly: !opts.noRenderEarly });
+      brief.prompt +
+      protocolSuffix(url, {
+        renderEarly: !opts.noRenderEarly,
+        served: brief.target?.serveStatic === true,
+      });
     await writeFile(join(opts.runDir, 'prompt.txt'), prompt);
     handle = await adapter.start(prompt, {
       workdir,
@@ -555,6 +583,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         agentFailure = { exitCode, atMs: Date.now() - t0Epoch, logPath: agentLogPath };
       }
     });
+    // Narrowed once here so the callbacks below can read it: `handle` is a let
+    // that the teardown path clears.
+    const agent = handle;
 
     // The cold-start window closes on whichever of these comes first: the
     // agent's first turn completing, the agent creating the done sentinel,
@@ -567,7 +598,13 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // is not a hypothetical: the CLI printed its report and then sat idle for
     // the rest of it.
     const races: Array<Promise<RunEndReason>> = [
-      handle.waitForTurn(0).then((): RunEndReason => 'turn'),
+      // An adapter releases this wait when the agent process goes away, turn or
+      // no turn -- otherwise a crashed agent would hold the run to its horizon.
+      // So the count decides which happened. A binary that exits in under a
+      // second because it refuses the flags it was given has not "completed its
+      // first turn", and recording that it did puts a false claim in
+      // result.json, where the banner about the failed run is not.
+      agent.waitForTurn(0).then((): RunEndReason => (agent.turns() > 0 ? 'turn' : 'exit')),
       sleep(horizonMs, raceCtl.signal).then((): RunEndReason => 'horizon'),
     ];
 
@@ -622,6 +659,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
           : ended === 'rendered' ? 'app rendered'
           : ended === 'signal' ? `agent signalled done (${DONE_SENTINEL})`
           : ended === 'quiet' ? `nothing changed for ${(quietForMs / 1000).toFixed(0)}s`
+          : ended === 'exit' ? 'the agent process ended without completing a turn'
           : 'agent finished its first turn'
       }`,
     );
@@ -1000,7 +1038,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       framesJudged: 0,
       degraded: true,
       pending: true,
-      temperature: JUDGE_TEMPERATURE,
+      temperature: appliedTemperature(opts.judgeBackend),
     },
     [
       'judge: scores in this file are provisional -- the scoring pass had not finished when it ' +
@@ -1037,7 +1075,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       model: opts.judgeBackend.model,
       framesJudged: judged.framesJudged,
       degraded: judged.degraded,
-      temperature: JUDGE_TEMPERATURE,
+      temperature: appliedTemperature(opts.judgeBackend),
     },
     judged.warnings,
   );
