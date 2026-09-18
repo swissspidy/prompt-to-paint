@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { Adapter, AgentContext, AgentEvent, AgentRunHandle, IterationMode } from '../types.ts';
 import { startStreamingProcess } from './streaming-process.ts';
 
@@ -10,8 +11,44 @@ export interface AntigravityOptions {
   skipPermissions?: boolean;
   /** agy defaults to a 5m print timeout, far below a realistic build horizon. */
   printTimeout?: string;
+  /**
+   * Bind the workdir with `--add-dir`. On by default; see the note on
+   * `WORKSPACE_NOTE` for why this is a default rather than a certainty, and
+   * turn it off to test another mechanism.
+   */
+  addDir?: boolean;
   extraArgs?: string[];
 }
+
+/**
+ * Why this adapter passes `--add-dir`, and why that is not settled.
+ *
+ * Antigravity's own docs say a conversation that is not in a Project "runs in
+ * an isolated local scratch folder", and that is exactly what a run of this
+ * harness produced: the agent built and served an app out of
+ * `~/.gemini/antigravity-cli/scratch/<name>/`, so the page rendered, the curve
+ * was a curve, and the workdir the harness handed it stayed empty. Nothing in
+ * the run directory reproduced the thing that had just been measured.
+ *
+ * Two mechanisms could bind the workdir instead, and the published headless
+ * documentation describes neither: `--add-dir <path>`, which the CLI reference
+ * documents as "add a directory to the workspace" and which another harness
+ * adopted for this exact symptom, and Antigravity's Project concept
+ * (`--project`, `--new-project`), which is the feature the scratch-folder
+ * sentence is contrasting against.
+ *
+ * `--add-dir` is the default because it is the narrower claim -- it names a
+ * directory rather than creating persistent state on the user's machine -- but
+ * it has not been checked against a real binary here. `--no-add-dir` and
+ * `--agent-arg` exist so the alternative can be tried without editing this
+ * file, and the run verifies the outcome either way: the adapter reads the cwd
+ * agy reports in its `init` event, and the harness fails the run loudly when it
+ * is not the directory it handed over.
+ */
+const WORKSPACE_NOTE =
+  'agy runs conversations outside a Project in an isolated scratch folder. The harness passes ' +
+  '--add-dir to bind the run workdir; if that is not the right mechanism for your agy version, ' +
+  'pass --no-add-dir and try --agent-arg --new-project (or --agent-arg --project=<id>).';
 
 interface StepLike {
   [k: string]: unknown;
@@ -81,6 +118,15 @@ export class AntigravityAdapter implements Adapter {
 
   private sawToolBoundary = false;
   private sawSteps = false;
+  private initCwd: string | null = null;
+
+  /** The cwd agy announced in its `init` event, if it announced one. */
+  get reportedWorkdir(): string | null {
+    return this.initCwd;
+  }
+
+  /** Printed with the mismatch warning, so the next thing to try is in the message. */
+  static readonly workspaceNote = WORKSPACE_NOTE;
 
   private opts: AntigravityOptions;
 
@@ -103,6 +149,9 @@ export class AntigravityAdapter implements Adapter {
    */
   async start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle> {
     const args = ['--input-format', 'stream-json', '--output-format', 'stream-json'];
+    // See WORKSPACE_NOTE: a child-process cwd alone does not bind the workdir,
+    // and an unbound session works in agy's own scratch folder.
+    if (this.opts.addDir !== false) args.push('--add-dir', resolve(ctx.workdir));
     if (this.opts.model) args.push('--model', this.opts.model);
     if (this.opts.effort) args.push('--effort', this.opts.effort);
     if (this.opts.agent) args.push('--agent', this.opts.agent);
@@ -143,7 +192,15 @@ export class AntigravityAdapter implements Adapter {
   /** Public so the wire format can be tested without spawning a binary. */
   translate(obj: Record<string, unknown>, tMs: number): AgentEvent[] {
     const kind = (obj.event ?? obj.type) as string | undefined;
-    if (kind === 'init') return [{ tMs, type: 'system', subtype: 'init', raw: obj }];
+    if (kind === 'init') {
+      // The headless docs specify that `init` carries a `cwd`. It is the only
+      // thing agy says about where it is actually working, and comparing it to
+      // the directory we handed over is the difference between finding out now
+      // and finding out from an empty workdir after the run.
+      const cwd = (obj.cwd ?? (obj.data as Record<string, unknown> | undefined)?.cwd) as unknown;
+      if (typeof cwd === 'string' && cwd) this.initCwd = cwd;
+      return [{ tMs, type: 'system', subtype: 'init', raw: obj }];
+    }
     if (kind === 'result') {
       // `duration_seconds` is wall clock for the turn, not API time, so it is
       // deliberately not fed to the model-time cross-check: comparing wall

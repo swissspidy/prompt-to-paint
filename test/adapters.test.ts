@@ -183,3 +183,22 @@ test('describeSpawnError only blames a missing binary for ENOENT', async () => {
   assert.doesNotMatch(describeSpawnError(denied, 'x'), /not found on PATH/);
   assert.match(describeSpawnError(denied, 'x'), /EACCES/);
 });
+
+test('antigravity reads back the cwd agy announces, so a scratch folder is caught', () => {
+  // agy runs a conversation that is not in a Project in its own scratch folder.
+  // A run against one looks almost right -- an app is built, served and
+  // measured -- while the workdir the harness handed over stays empty and
+  // nothing in the run directory reproduces what was on screen. The init event
+  // is the only place agy says where it actually is.
+  const ag = new AntigravityAdapter();
+  assert.equal(ag.reportedWorkdir, null, 'nothing claimed before the agent speaks');
+  ag.translate({ event: 'init', cwd: '/Users/x/.gemini/antigravity-cli/scratch/orbit/src' }, 0);
+  assert.equal(ag.reportedWorkdir, '/Users/x/.gemini/antigravity-cli/scratch/orbit/src');
+});
+
+test('antigravity tolerates an init event that says nothing about cwd', () => {
+  const ag = new AntigravityAdapter();
+  ag.translate({ event: 'init' }, 0);
+  // Null, not the workdir: "it did not say" must never be read as "it agreed".
+  assert.equal(ag.reportedWorkdir, null);
+});

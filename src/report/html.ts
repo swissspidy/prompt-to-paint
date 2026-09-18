@@ -154,15 +154,35 @@ function iterationTable(r: RunResult): string {
   const note = restart
     ? `<p class="muted" style="font-size:13px;margin:0 0 10px">These follow-ups <b>re-ran the agent</b> rather than continuing a live session, so the timings include process startup and context re-read. Not comparable to live-session numbers.</p>`
     : `<p class="muted" style="font-size:13px;margin:0 0 10px">Follow-ups were injected into the same live session.</p>`;
-  return `${note}<table class="data"><thead><tr><th>Edit</th><th class="num">First visible change</th><th class="num">Correct change</th><th class="num">Agent done</th><th class="num">Broken for</th></tr></thead><tbody>
+  // "Tool calls" and "After agent" are the columns that say whose time the
+  // correct-change number was. Without them a slow dev server is indexed
+  // against the model, which is the misattribution this whole report exists to
+  // prevent -- and it is the same mistake at the scale of one edit that the
+  // cold-start decomposition prevents at the scale of a run.
+  return `${note}<table class="data"><thead><tr><th>Edit</th><th class="num">First visible change</th><th class="num">Correct change</th><th class="num">Agent done</th><th class="num">Tool calls</th><th class="num">After agent</th><th class="num">Broken for</th></tr></thead><tbody>
     ${r.iterations
-      .map(
-        (it) => `<tr><td>${esc(it.prompt)}${it.ok ? '' : ' <span class="bad">never landed</span>'}</td>
+      .map((it) => {
+        const status = it.baselineAlreadyPassing
+          ? ' <span class="bad">void: check already passed</span>'
+          : it.ok ? '' : ' <span class="bad">never landed</span>';
+        const calls = it.work?.toolCalls;
+        const callCell = calls == null
+          ? '<span class="muted" title="This adapter\'s stream does not expose tool boundaries, so this is unknown, not zero.">--</span>'
+          : `${calls}${it.work?.toolNames.length ? ` <span class="muted">(${esc([...new Set(it.work.toolNames)].slice(0, 3).join(', '))})</span>` : ''}`;
+        const after = it.afterAgentMs;
+        const afterCell = after == null
+          ? '--'
+          : after >= 0
+            ? `<span title="The agent had finished; this is the toolchain catching up.">+${secs(after)}</span>`
+            : `<span class="muted" title="The change was on screen before the agent stopped working.">-${secs(-after)}</span>`;
+        return `<tr><td>${esc(it.prompt)}${status}</td>
         <td class="num">${secs(it.timeToFirstChangeMs)}</td>
         <td class="num"><b>${secs(it.timeToCorrectChangeMs)}</b></td>
         <td class="num">${secs(it.agentDoneMs === null ? null : it.agentDoneMs - it.promptSentMs)}</td>
-        <td class="num">${it.brokenMs > 0 ? secs(it.brokenMs) : '--'}</td></tr>`,
-      )
+        <td class="num">${callCell}</td>
+        <td class="num">${afterCell}</td>
+        <td class="num">${it.brokenMs > 0 ? secs(it.brokenMs) : '--'}</td></tr>`;
+      })
       .join('')}</tbody></table>`;
 }
 

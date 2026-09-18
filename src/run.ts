@@ -1,15 +1,17 @@
 import { mkdir, writeFile, readFile, stat, appendFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Server } from 'node:http';
 import type {
-  Adapter, AgentEvent, AgentRunHandle, Brief, Frame, RunEndReason, RunResult, IterationResult,
-  ScoredFrame,
+  Adapter, AgentEvent, AgentRunHandle, Brief, Frame, IterationWork, PhaseEvent, RunEndReason,
+  RunResult, IterationResult, ScoredFrame,
 } from './types.ts';
 import { Prober } from './probe/prober.ts';
 import { entityCoverage } from './probe/entities.ts';
 import { setupShims } from './decompose/shims.ts';
-import { parsePhaseLog, attributeAgentStream, decompose } from './decompose/attribute.ts';
+import {
+  parsePhaseLog, attributeAgentStream, decompose, total, countToolUses, type Interval,
+} from './decompose/attribute.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { judgeRun, mechanicalScores } from './judge/judge.ts';
 import type { JudgeBackend } from './judge/backends.ts';
@@ -114,6 +116,82 @@ async function inventory(dir: string): Promise<{ path: string; entries: string[]
   } catch {
     return { path: dir, entries: [], fileCount: 0, empty: true };
   }
+}
+
+/**
+ * What the agent and the toolchain each did inside one edit's window.
+ *
+ * Time to correct change is wall clock, and wall clock cannot tell a model that
+ * flailed through nine tool calls from one that got it right in a single edit
+ * and then waited eleven seconds for Vite. Both produce the same number, and
+ * ranking on that number alone charges the agent for a slow dev server. This
+ * splits the window the same way the cold-start decomposition splits a run,
+ * over the same event stream and the same shim log.
+ *
+ * `toolCalls` is null rather than 0 when the adapter's stream does not expose
+ * tool boundaries: "we could not see" and "it made none" are opposite claims
+ * and a report that conflates them is worse than one that omits the column.
+ */
+export function iterationWork(
+  events: AgentEvent[],
+  phases: PhaseEvent[],
+  opts: { from: number; to: number; fidelity: 'full' | 'turns-only' | 'none' },
+): IterationWork {
+  const { from, to, fidelity } = opts;
+  const inWindow = events.filter((e) => e.tMs >= from && e.tMs <= to);
+  const full = fidelity === 'full';
+  // Attribution stops at the agent's last event, not at the end of the window.
+  // Everything after it is the page catching up, which `afterAgentMs` already
+  // reports as the toolchain's -- and attributeAgentStream's own tail rule,
+  // written for a run that was cut off mid-turn, would charge it to thinking.
+  // That is the exact misattribution this split exists to prevent, so it must
+  // not be reintroduced by the way the function is called.
+  const lastEventMs = inWindow.at(-1)?.tMs ?? from;
+  const stream = full ? attributeAgentStream(inWindow, lastEventMs) : { model: [], tool: [] };
+
+  // Clip to the window before totalling.
+  //
+  // attributeAgentStream measures a whole run: on its inference path the model
+  // cursor starts at t0, so a slice of events hands back a thinking interval
+  // that begins when the *run* began rather than when this prompt was sent. An
+  // eight-second edit reported twelve seconds of thinking, which is not merely
+  // wrong but impossible, and impossible numbers are how a split loses its
+  // credibility. Clipping also gives the right answer for the stretch between
+  // the prompt landing and the agent's first event, which is thinking nobody
+  // emitted an event for.
+  const clip = (ivs: Interval[]): number =>
+    Math.round(total(
+      ivs
+        .map((i) => ({ start: Math.max(i.start, from), end: Math.min(i.end, lastEventMs) }))
+        .filter((i) => i.end > i.start),
+    ));
+
+  // Adapters express a tool call in one of two ways, and the count has to
+  // follow the same preference order the attribution does or the two halves of
+  // the same row would disagree: explicit `tool_use` events when the agent
+  // emits them (claude-code, antigravity), otherwise the tool_use blocks inside
+  // an assistant message, which carry no names.
+  const explicit = inWindow.filter((e) => e.type === 'tool_use');
+  const inferred = inWindow
+    .filter((e) => e.type === 'assistant')
+    .reduce((n, e) => n + countToolUses(e), 0);
+
+  return {
+    toolCalls: full ? (explicit.length || inferred) : null,
+    toolNames: full ? explicit.map((e) => e.toolName ?? 'unknown') : [],
+    modelMs: full ? clip(stream.model) : null,
+    toolMs: full ? clip(stream.tool) : null,
+    // A phase that merely overlaps the window counts: a dev server started
+    // before the prompt is not this edit's cost, but a rebuild that straddles
+    // the end of it is exactly the thing being looked for.
+    phases: phases
+      .filter((p) => p.startMs <= to && (p.endMs ?? to) >= from)
+      .map((p) => ({
+        kind: p.kind,
+        cmd: [p.cmd, ...p.argv].join(' ').slice(0, 60),
+        ms: p.endMs === null ? null : Math.round(p.endMs - p.startMs),
+      })),
+  };
 }
 
 export interface ProtocolOptions {
@@ -604,6 +682,25 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     reportedApiMs,
   });
 
+  // Iteration attribution, filled in here rather than in runIteration: the shim
+  // log is only parsed once the run is over, and an edit's toolchain time comes
+  // from it.
+  for (const it of iterations) {
+    it.work = iterationWork(agentEvents, phases, {
+      from: it.promptSentMs,
+      to: it.endedMs ?? wallMs,
+      fidelity: adapter.streamFidelity ?? 'none',
+    });
+  }
+  for (const it of iterations) {
+    if (it.baselineUnstable)
+      warnings.push(
+        `Iteration "${it.id}" has an unstable check: it passed in one baseline sample and failed in ` +
+          'another, before the prompt was even sent. Neither this edit\'s timing nor its verdict means ' +
+          'anything until the check is made deterministic.',
+      );
+  }
+
   if (iterations.some((i) => i.mode === 'restart')) {
     warnings.push(
       'Iteration timings come from re-running the agent, not from continuing a live session, so they include process startup and however long the agent takes to re-read the project. They are not comparable to live-session iteration numbers from another adapter.',
@@ -628,6 +725,18 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       'AGENT PRODUCED NO OUTPUT: no assistant events were seen. The adapter may not have started the agent correctly; check agent.log.',
     );
   }
+  // The agent's own account of where it worked, when it gives one. This is the
+  // cheap version of the check below: it is knowable in the first seconds of a
+  // run rather than from an empty directory at the end of one.
+  const reportedWorkdir = adapter.reportedWorkdir ?? null;
+  if (reportedWorkdir && resolve(reportedWorkdir) !== resolve(workdir)) {
+    warnings.unshift(
+      `AGENT WORKED SOMEWHERE ELSE: it reported its working directory as ${reportedWorkdir}, not the ` +
+        `${workdir} it was given. Whatever this run measured was built outside the run directory, so ` +
+        'nothing here reproduces it and the workdir contents are not the app that was on screen.',
+    );
+  }
+
   // An empty workdir is not proof of anything on its own -- a run the agent
   // never started has one too -- but beside a page that rendered it is the
   // only evidence that the app came from somewhere this harness cannot see.
@@ -737,7 +846,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       distinctShots: prober.distinctShots,
       repeatedShots: prober.repeatedShots,
       framesLogPath,
-      ...(workdirState ? { workdir: workdirState } : {}),
+      ...(workdirState ? { workdir: { ...workdirState, reportedByAgent: reportedWorkdir } } : {}),
     },
     warnings: [...warnings, ...judgeWarnings],
   });

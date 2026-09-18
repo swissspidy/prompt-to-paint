@@ -405,6 +405,43 @@ test('a page whose tab names the app before it paints is measured saying so', { 
   }
 });
 
+test('an edit records what the agent did, so a slow toolchain is not charged to it', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  const dir = await tmp('p2p-iterwork-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const page = (color: string): string =>
+      `<!doctype html><meta charset=utf-8><body><h1 style="color:${color}">DevConf 2026</h1>`
+      + '<ul><li>09:00 - Opening keynote - Ada Lovelace</li></ul><footer>See you in Berlin</footer></body>';
+
+    // One tool call, then a long wait before the page changes. Wall clock says
+    // this edit took many seconds; the agent was responsible for almost none of
+    // them, and the point of the split is to be able to tell.
+    const result = await runBenchmark({
+      brief: { ...base, horizonSec: 40, target: { ...base.target, port: 5297 } },
+      adapter: new ScriptedAdapter({
+        steps: [{ atMs: 0, write: { path: 'index.html', content: page('#111111') } }],
+        iterationSteps: { '0': [{ atMs: 6000, write: { path: 'index.html', content: page('#1544d6') } }] },
+      }),
+      runDir: dir, label: 'iter-work', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    const it = result.iterations[0];
+    assert.ok(it, 'the iteration ran');
+    assert.equal(it.ok, true, 'the edit landed');
+    assert.ok(it.work, 'the edit records what the agent did');
+    assert.equal(it.work.toolCalls, 1, 'one tool call, not a number of seconds');
+    assert.ok(typeof it.endedMs === 'number' && it.endedMs >= it.promptSentMs);
+
+    // The headline number for this edit is several seconds; the agent's own
+    // share of it is a fraction. Without this an agent behind a slow dev server
+    // ranks below one in front of a fast one, for the same work.
+    assert.ok(it.timeToCorrectChangeMs !== null && it.timeToCorrectChangeMs > 3000);
+    assert.ok(it.afterAgentMs !== null && it.afterAgentMs !== undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The control run: the toolchain measured with no model in the loop.
 // ---------------------------------------------------------------------------

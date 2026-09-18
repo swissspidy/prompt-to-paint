@@ -271,6 +271,16 @@ export interface Adapter {
   readonly iterationMode?: IterationMode;
   /** May be computed at the end of a run from what was actually parsed. */
   readonly streamFidelity?: StreamFidelity;
+  /**
+   * Where the agent says it is working, if its stream says so at all.
+   *
+   * Read after the run and compared against the workdir it was handed. An
+   * agent that is building somewhere else produces a run that looks almost
+   * right -- it serves an app, the page renders, the curve is a curve -- while
+   * nothing in the run directory reproduces any of it. Null means the adapter
+   * cannot tell, which is not the same as agreeing.
+   */
+  readonly reportedWorkdir?: string | null;
   start(prompt: string, ctx: AgentContext): Promise<AgentRunHandle>;
 }
 
@@ -325,6 +335,50 @@ export interface IterationResult {
   /** Total ms the app spent blank/error between prompt and correct change. */
   brokenMs: number;
   ok: boolean;
+  /**
+   * The check was already passing in one baseline sample but not the other, so
+   * it is flapping and neither answer about this edit can be trusted.
+   */
+  baselineUnstable?: boolean;
+  /** When this edit's observation window closed, relative to t0. */
+  endedMs?: number;
+  /**
+   * Time between the agent finishing its turn and the change reaching the
+   * screen.
+   *
+   * This is the part of an edit's latency the agent is not responsible for:
+   * HMR, a rebuild, a dev server that has to restart. Negative means the page
+   * updated while the agent was still working, which is what a fast loop looks
+   * like. Null when the edit never landed or the turn never completed.
+   */
+  afterAgentMs?: number | null;
+  /**
+   * What the agent actually did for this edit.
+   *
+   * Time to correct change is wall clock, and wall clock says nothing about
+   * whose time it was. One tool call behind a twelve-second Vite rebuild and
+   * nine tool calls of flailing produce the same number, and ranking agents on
+   * it alone would charge the model for a slow toolchain. Absent when the run
+   * predates this, or when the adapter's stream cannot show it.
+   */
+  work?: IterationWork;
+}
+
+export interface IterationWork {
+  /**
+   * Tool calls the agent made inside this edit's window. Null when the
+   * adapter's stream does not expose tool boundaries -- which is not zero, and
+   * must never be rendered as zero.
+   */
+  toolCalls: number | null;
+  /** Their names in order, so "it only wrote one file" is checkable. */
+  toolNames: string[];
+  /** Attributed thinking time inside the window. Null without a full stream. */
+  modelMs: number | null;
+  /** Attributed tool-execution time inside the window. */
+  toolMs: number | null;
+  /** Toolchain commands the shims saw run inside the window. */
+  phases: Array<{ kind: PhaseKind; cmd: string; ms: number | null }>;
 }
 
 /**
@@ -416,7 +470,14 @@ export interface RunResult {
      * that built somewhere else, so the fact is recorded rather than left for
      * someone to notice afterwards.
      */
-    workdir?: { path: string; entries: string[]; fileCount: number; empty: boolean };
+    workdir?: {
+      path: string;
+      entries: string[];
+      fileCount: number;
+      empty: boolean;
+      /** What the agent itself said its working directory was, when it says. */
+      reportedByAgent?: string | null;
+    };
   };
   warnings: string[];
 }

@@ -242,6 +242,56 @@ Three numbers, because they answer different questions:
   correct change. White-screening the app for eight seconds mid-edit is a real
   cost that neither timestamp captures.
 
+### Whose time was it?
+
+Time to correct change is wall clock, and wall clock cannot tell two very
+different runs apart. One tool call followed by an eleven-second Vite rebuild
+and nine tool calls of flailing produce the same number, and ranking on that
+number alone charges the model for a slow dev server.
+
+So every edit also records, in `work`:
+
+- **`toolCalls`** and **`toolNames`** — what the agent actually did. `null`,
+  never `0`, when the adapter's stream does not expose tool boundaries: "it made
+  none" and "we could not see" are opposite claims about an agent.
+- **`modelMs`** / **`toolMs`** — thinking and tool execution inside the window,
+  from the same attribution the cold-start decomposition uses.
+- **`phases`** — toolchain commands the shims saw run inside the window, so a
+  rebuild that straddles the end of an edit is visible as the cost it was.
+
+and, beside it, **`afterAgentMs`** — the gap between the agent finishing its
+turn and the change reaching the screen. This is the part of an edit's latency
+the agent is not accountable for. It is signed: negative means the page updated
+while the agent was still working, which is what a fast loop looks like.
+
+Two bounds hold by construction, because breaking either produces a number that
+is not merely wrong but impossible, which is how a split stops being believed:
+attribution is clipped to the edit's window, and it stops at the agent's **last
+event** rather than at the end of the window. Everything after that last event
+is the page catching up, and it belongs to `afterAgentMs`.
+
+### A check that was already true
+
+If the iteration's predicate passes *before* the prompt is sent, the edit cannot
+be measured: the first frame after the prompt would report a near-instant
+success for a change the agent never made. That is a broken check, not a fast
+agent, so the result is marked `baselineAlreadyPassing`, `ok` is false, and the
+run warns.
+
+An agent that happens to build a blue header during the cold start makes
+`header-blue` void this way, which is a property of the brief rather than a
+bug — write checks against a state the app is unlikely to already be in.
+
+The baseline is sampled **twice**, and *any* sample passing marks the edit void.
+The check is arbitrary JavaScript evaluated in a live page: it throws mid-reload
+and reads styles that have not applied yet, so a single unlucky sample reports
+an already-blue header as not-blue and the edit then scores a flattering
+near-zero. The two errors are not symmetrical — a false "void" costs one
+measurement and says why, a false "correct at 0.2s" is a wrong number that looks
+like a very good one. Samples that disagree set `baselineUnstable` and warn
+separately: a flapping predicate invalidates the verdict too, not just the
+timing.
+
 Iteration polls at 250ms by default; cold start polls at 1000ms. Edits are fast
 and deserve finer resolution. Once the agent's turn ends, the harness waits a
 grace period (20s) rather than the full timeout: an agent that has stopped

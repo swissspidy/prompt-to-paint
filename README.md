@@ -93,6 +93,29 @@ blue" — into the **same live session** and times it:
   shipped with the brief, not by a judge
 - **broken for** — how long the app was white-screened in between
 
+**Wall clock alone would misattribute this.** One tool call behind an
+eleven-second Vite rebuild and nine tool calls of flailing produce the same
+"correct change" number, so ranking on it charges the model for a slow dev
+server. Each edit therefore also records what the agent did — tool calls, their
+names, thinking time, and the toolchain phases that ran inside the window — plus
+**`afterAgentMs`**, the gap between the agent finishing and the change reaching
+the screen. That gap is the part the agent is not accountable for:
+
+```
+  Iteration (prompt -> visible change)   [live-session]
+    header-blue      first change    7.2s   correct    7.2s
+                     1 tool call  ·  thinking 7.0s  ·  0.2s waiting on the toolchain after the agent finished
+```
+
+Tool calls read `--` rather than `0` when the adapter's stream cannot show them:
+"it made none" and "we could not see" are opposite claims about an agent.
+
+**If the check was already true before the prompt**, the edit is void, not fast
+— an agent that happened to build a blue header during cold start makes
+`header-blue` unmeasurable, and the run says so instead of reporting a
+near-instant success for a change nobody made. See
+[docs/METRIC.md](docs/METRIC.md#a-check-that-was-already-true).
+
 ## Quickstart
 
 Requires **Node 24 or newer**. `.nvmrc` pins `lts/*`, so `nvm use` picks up a
@@ -389,6 +412,36 @@ It only reproduced on macOS, which has no `fuser` and fell through to the `lsof`
 line; Linux has `fuser`, which matches local ports only, so CI never saw it.
 The lookup now filters to `LISTEN` state and refuses to signal this process or
 any of its parents, whatever a tool reports.
+
+## Antigravity and the scratch folder
+
+`agy` runs a conversation that is not in a **Project** in "an isolated local
+scratch folder", and a child-process cwd alone does not bind one. An unbound run
+looks almost right — the agent builds an app, its dev server serves it, the page
+renders and the curve is a curve — while the workdir the harness handed over
+stays empty and nothing in the run directory reproduces what was measured. It
+turns up as `~/.gemini/antigravity-cli/scratch/<name>/`.
+
+The adapter passes `--add-dir <workdir>` by default. That is the narrower of the
+two plausible mechanisms — it names a directory rather than creating persistent
+state — but Antigravity's published headless documentation describes neither it
+nor the Project flags, so it is a default, not a certainty. To try the other:
+
+```bash
+npm run p2p -- run --brief briefs/todo-app.json --adapter antigravity   --no-add-dir --agent-arg --new-project
+```
+
+**The run checks the outcome either way.** `agy` reports a `cwd` in its `init`
+event; the harness compares it to the directory it handed over and fails the run
+loudly when they differ, rather than leaving it to be discovered from an empty
+workdir afterwards:
+
+```
+! AGENT WORKED SOMEWHERE ELSE: it reported its working directory as
+  /Users/you/.gemini/antigravity-cli/scratch/orbit, not the runs/…/workdir it was
+  given. Whatever this run measured was built outside the run directory, so
+  nothing here reproduces it.
+```
 
 ## Which agents this works with
 

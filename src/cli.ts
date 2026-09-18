@@ -83,6 +83,10 @@ Options for run:
   --tools      comma-separated tool allowlist for pi
   --effort     low | medium | high, for antigravity
   --print-timeout  agy print timeout (default 30m; agy's own default is 5m)
+  --no-add-dir drop the --add-dir that binds the run workdir for antigravity
+               (agy works in its own scratch folder without something binding it;
+                pair with --agent-arg to try --new-project or --project=<id>)
+  --agent-arg  extra argument passed straight through to the agent, repeatable
   --bin        override the agent binary name/path
   --repeat N   run N times and report a median with its full range
 
@@ -419,6 +423,7 @@ async function main(): Promise<void> {
       repeat: { type: 'string' }, 'permission-mode': { type: 'string' },
       provider: { type: 'string' }, tools: { type: 'string' }, effort: { type: 'string' },
       'print-timeout': { type: 'string' }, bin: { type: 'string' },
+      'no-add-dir': { type: 'boolean' }, 'agent-arg': { type: 'string', multiple: true },
       'quiet-for': { type: 'string' }, 'stop-after-render': { type: 'string' },
       'no-render-early': { type: 'boolean' }, headed: { type: 'boolean' },
       video: { type: 'boolean' }, 'no-progress': { type: 'boolean' },
@@ -554,11 +559,16 @@ async function main(): Promise<void> {
         effort: values.effort,
         skipPermissions: values.unsafe,
         printTimeout: values['print-timeout'],
+        addDir: !values['no-add-dir'],
+        extraArgs: values['agent-arg'],
       });
       label ||= values.model ? `antigravity:${values.model}` : 'antigravity';
       if (!values.unsafe)
         console.log('  note: agy soft-denies tools needing approval. Without --unsafe the agent\n' +
                     '        cannot write files or run commands.');
+      if (values['no-add-dir'] && !values['agent-arg']?.length)
+        console.log('  note: --no-add-dir with no --agent-arg leaves the workdir unbound, so agy will\n' +
+                    '        work in its own scratch folder and the run directory will be empty.');
     } else if (kind === 'exec') {
       if (!values.command) fail('--adapter exec needs --command');
       // Captured outside the closure: the narrowing from fail() (which returns

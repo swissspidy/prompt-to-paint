@@ -264,7 +264,7 @@ export function attributeAgentStream(events: AgentEvent[], endMs: number): Strea
 /**
  * Count tool_use blocks in an assistant message, for the inference path.
  */
-function countToolUses(e: AgentEvent): number {
+export function countToolUses(e: AgentEvent): number {
   const msg = (e.raw as { message?: { content?: unknown } } | undefined)?.message;
   const content = msg?.content;
   if (!Array.isArray(content)) return 0;

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   union, subtract, total, classifyPhase, parsePhaseLog, attributeAgentStream, decompose,
 } from '../src/decompose/attribute.ts';
-import type { AgentEvent, PhaseEvent } from '../src/types.ts';
+import { iterationWork } from '../src/run.ts';
+import type { AgentEvent, PhaseEvent, PhaseKind } from '../src/types.ts';
 
 test('union merges overlapping and touching intervals', () => {
   assert.deepEqual(union([{ start: 0, end: 10 }, { start: 5, end: 20 }]), [{ start: 0, end: 20 }]);
@@ -239,4 +240,99 @@ test('an unclosed tool span runs to the end of the run', () => {
   ];
   const { tool } = attributeAgentStream(events, 10_000);
   assert.equal(total(tool), 1_000 + 7_000);
+});
+
+// ---------------------------------------------------------------------------
+// Iteration attribution: whose time was an edit's latency?
+// ---------------------------------------------------------------------------
+
+const ev = (tMs: number, type: AgentEvent['type'], over: Partial<AgentEvent> = {}): AgentEvent =>
+  ({ tMs, type, ...over });
+
+const shimPhase = (kind: PhaseKind, startMs: number, endMs: number | null, cmd = 'npm'): PhaseEvent =>
+  ({ kind, cmd, argv: ['run', 'build'], startMs, endMs, exitCode: 0, source: 'shim' });
+
+test('an edit reports the tool calls it took, scoped to its own window', () => {
+  const events = [
+    ev(1000, 'tool_use', { toolId: 'a', toolName: 'Read' }),   // before the prompt
+    ev(1500, 'tool_result', { toolId: 'a', toolName: 'Read' }),
+    ev(5200, 'tool_use', { toolId: 'b', toolName: 'Edit' }),
+    ev(5900, 'tool_result', { toolId: 'b', toolName: 'Edit' }),
+    ev(6100, 'tool_use', { toolId: 'c', toolName: 'Bash' }),
+    ev(6400, 'tool_result', { toolId: 'c', toolName: 'Bash' }),
+    ev(99_000, 'tool_use', { toolId: 'd', toolName: 'Write' }), // after the window
+  ];
+  const w = iterationWork(events, [], { from: 5000, to: 9000, fidelity: 'full' });
+  assert.equal(w.toolCalls, 2, 'only the calls inside this edit');
+  assert.deepEqual(w.toolNames, ['Edit', 'Bash']);
+});
+
+test('an adapter that cannot see tool boundaries reports unknown, never zero', () => {
+  // "It made no tool calls" and "we could not tell" are opposite claims about
+  // an agent, and a report that renders both as 0 is worse than one that omits
+  // the column.
+  const events = [ev(5200, 'assistant', { text: 'ok' })];
+  const w = iterationWork(events, [], { from: 5000, to: 9000, fidelity: 'turns-only' });
+  assert.equal(w.toolCalls, null);
+  assert.equal(w.modelMs, null);
+  assert.equal(w.toolMs, null);
+});
+
+test('a rebuild straddling the end of an edit still counts against it', () => {
+  // The case this exists for: one tool call, then eleven seconds of Vite. The
+  // wall clock is the same as nine tool calls of flailing, and only this tells
+  // them apart.
+  const w = iterationWork([], [
+    shimPhase('devserver', 0, null),       // started long before; not this edit's cost
+    shimPhase('build', 6000, 17_000),      // straddles the window end: it is
+  ], { from: 5000, to: 9000, fidelity: 'full' });
+  assert.deepEqual(w.phases.map((p) => p.kind), ['devserver', 'build']);
+  assert.equal(w.phases[1]?.ms, 11_000);
+});
+
+test('a phase that finished before the prompt is not charged to the edit', () => {
+  const w = iterationWork([], [shimPhase('install', 0, 4000)], { from: 5000, to: 9000, fidelity: 'full' });
+  assert.deepEqual(w.phases, []);
+});
+
+test('tool calls are counted whichever way an adapter expresses them', () => {
+  // Some adapters emit a tool_use event per call; others put tool_use blocks
+  // inside the assistant message. The count has to follow the same preference
+  // order the attribution does, or the two halves of one row disagree.
+  const inferred = [
+    ev(5100, 'assistant', { raw: { message: { content: [{ type: 'tool_use' }, { type: 'tool_use' }] } } }),
+    ev(5800, 'tool_result'),
+  ];
+  assert.equal(iterationWork(inferred, [], { from: 5000, to: 9000, fidelity: 'full' }).toolCalls, 2);
+
+  // An agent that genuinely did nothing is 0, and stays distinct from null.
+  const silent = [ev(5100, 'assistant', { text: 'already done' })];
+  assert.equal(iterationWork(silent, [], { from: 5000, to: 9000, fidelity: 'full' }).toolCalls, 0);
+  assert.equal(iterationWork(silent, [], { from: 5000, to: 9000, fidelity: 'none' }).toolCalls, null);
+});
+
+test('an edit can never be attributed more time than it lasted', () => {
+  // attributeAgentStream measures a whole run: on its inference path the model
+  // cursor starts at t0, so a slice of events came back with a thinking
+  // interval that began when the run began. A seven-second edit reported
+  // twelve seconds of thinking -- not merely wrong but impossible, which is how
+  // a split stops being believed.
+  const events = [
+    ev(1000, 'assistant', { text: 'cold start work' }),
+    ev(12_417, 'assistant', { raw: { message: { content: [{ type: 'tool_use' }] } } }),
+    ev(12_418, 'tool_result'),
+  ];
+  const from = 5416;
+  const to = 12_605;
+  const w = iterationWork(events, [], { from, to, fidelity: 'full' });
+  assert.ok(w.modelMs !== null && w.toolMs !== null);
+  assert.ok(w.modelMs <= to - from, `thinking ${w.modelMs}ms must fit in a ${to - from}ms window`);
+  assert.ok(w.modelMs + w.toolMs <= to - from, 'and so must the two together');
+  // The honest answer: the prompt landed at `from` and the agent's first act in
+  // this window was at 12417, so that gap is thinking nobody emitted an event
+  // for. Charging it from t0 instead is what produced the impossible number.
+  assert.equal(w.modelMs, 12_417 - from);
+  // And the 187ms between the agent's last event and the end of the window is
+  // the page catching up, not the agent thinking. afterAgentMs reports it.
+  assert.equal(w.modelMs + w.toolMs, 12_418 - from);
 });
