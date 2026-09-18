@@ -899,6 +899,55 @@ test('the frames before anything is serving are captured, not skipped', { skip: 
   }
 });
 
+test('an edit to a linked stylesheet still reaches the screen', { skip: needsBrowser, timeout: 120_000 }, async () => {
+  // A static file server has no update channel, and the prober reloads a live
+  // page only when the *served document* changes -- deliberately, because
+  // reloading destroys HMR state and would change the latency being measured.
+  // Neither fires for an edit that goes into a linked stylesheet: index.html is
+  // byte-identical, and the browser holds the old CSS for the rest of the run.
+  //
+  // Observed on todo-app, where the agent put the blue header in style.css and
+  // served the directory with a plain file server. The edit was on disk and
+  // being served correctly; the iteration reported NEVER LANDED, and the header
+  // only turned blue on screen when a later, unrelated edit to index.html
+  // happened to change the document and force a reload.
+  const dir = await tmp('p2p-css-');
+  try {
+    const base = await loadBrief('test/fixtures/calibration-brief.json');
+    const page = '<!doctype html><meta charset=utf-8><link rel=stylesheet href="style.css">'
+      + '<body><h1>DevConf 2026</h1><p>See you in Berlin</p></body>';
+    const result = await runBenchmark({
+      brief: {
+        ...base,
+        horizonSec: 30,
+        target: { ...base.target, port: 5297, serveStatic: true },
+        iterations: [{
+          id: 'header-blue',
+          prompt: 'Make the heading blue.',
+          description: 'the edit goes into the stylesheet, not the document',
+          check: base.iterations![0]!.check,
+        }],
+      },
+      adapter: new ScriptedAdapter({
+        steps: [
+          { atMs: 0, write: { path: 'index.html', content: page } },
+          { atMs: 100, write: { path: 'style.css', content: 'h1 { color: #111 }' } },
+        ],
+        // index.html is untouched, so nothing the prober watches changes.
+        iterationSteps: { '0': [{ atMs: 200, write: { path: 'style.css', content: 'h1 { color: #1a4fd6 }' } }] },
+      }),
+      runDir: dir, label: 'css-only', judgeBackend: new NullBackend(), settleMs: 1500, killPort: true,
+    });
+
+    const it = result.iterations[0];
+    assert.ok(it, 'the iteration ran');
+    assert.ok(it.ok, 'the edit was on disk and served; it has to be measurable');
+    assert.notEqual(it.refreshedAtMs, null, 'and the run says it took a refresh to see it');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('a bundled iteration check survives the CSS a real agent writes', { skip: needsBrowser, timeout: 60_000 }, async () => {
   // The exact page a claude-code run produced for todo-app: column headers
   // styled `text-transform: uppercase`, so the fourth column reads BLOCKED. The

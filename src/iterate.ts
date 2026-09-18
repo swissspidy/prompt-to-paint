@@ -32,10 +32,26 @@ export interface IterateOptions {
    * made. Two samples cost a few hundred milliseconds before the clock starts.
    */
   baselineSamples?: number;
+  /**
+   * How long after the agent stops to wait before refreshing a page that has
+   * not moved at all. Defaults to `STATIC_REFRESH_AFTER_MS`.
+   */
+  refreshAfterMs?: number;
 }
 
 const isBroken = (c: Frame['class'] | undefined): boolean =>
   c === 'error' || c === 'blank' || c === 'unreachable';
+
+/**
+ * How long after the agent stops to wait before refreshing a page that has not
+ * moved at all.
+ *
+ * Long enough that a bundler still rebuilding gets to push its own update: a
+ * slow Vite rebuild is seconds, and refreshing into one would measure a page
+ * load instead of the rebuild. Short enough to leave most of the post-turn
+ * grace for the refreshed page to land.
+ */
+export const STATIC_REFRESH_AFTER_MS = 5000;
 
 /**
  * Measures one edit, from prompt to visible change.
@@ -124,8 +140,38 @@ export async function runIteration(
   const deadline = (): number =>
     agentDoneMs === null ? hardDeadline : Math.min(hardDeadline, doneAtWallMs + grace);
 
+  let refreshedAtMs: number | null = null;
   while (Date.now() < deadline() && timeToCorrectChangeMs === null) {
     await sleep(60);
+
+    // Press refresh, once, on a page that has not moved at all since the agent
+    // stopped.
+    //
+    // Hot reload pushes an edit over its own channel, and the prober otherwise
+    // reloads only when the served document changes -- which is what a rewritten
+    // static page looks like. Neither fires for a static page whose edit went
+    // into a linked stylesheet: index.html stays byte-identical, and the browser
+    // shows the old CSS for the rest of the run. Observed on todo-app, where the
+    // agent put the blue header in style.css and served the directory with a
+    // plain file server: the edit was on disk, correctly served, and reported
+    // NEVER LANDED because nothing ever asked the browser for it again.
+    //
+    // A person watching an unchanged page would refresh, and the clock keeps
+    // running across it, so what is measured is still what they would have
+    // waited. Gated on *no* visible change rather than on the check alone: an
+    // app with an update channel has shown something by now -- the change, a
+    // flash, an error overlay -- so this costs it nothing, and an edit that is
+    // merely wrong is not one this can rescue.
+    if (
+      refreshedAtMs === null &&
+      agentDoneMs !== null &&
+      timeToFirstChangeMs === null &&
+      Date.now() - doneAtWallMs >= (opts.refreshAfterMs ?? STATIC_REFRESH_AFTER_MS)
+    ) {
+      refreshedAtMs = Date.now() - t0Epoch;
+      prober.requestReload();
+    }
+
     for (; cursor < prober.frames.length; cursor++) {
       const f: Frame = prober.frames[cursor]!;
       if (f.tMs < promptSentMs) continue;
@@ -222,6 +268,7 @@ export async function runIteration(
     timeToCorrectChangeMs,
     agentDoneMs,
     afterAgentMs,
+    refreshedAtMs,
     endedMs,
     brokenMs,
     ok: timeToCorrectChangeMs !== null && !baselineAlreadyPassing,

@@ -43,6 +43,7 @@ function fakeProber(baseline: Frame, afterPrompt: Frame[]) {
   let interval = 1000;
   return {
     frames,
+    reloads: 0,
     get intervalMs(): number {
       return interval;
     },
@@ -54,9 +55,46 @@ function fakeProber(baseline: Frame, afterPrompt: Frame[]) {
       frames.push(baseline);
       return baseline;
     },
+    requestReload(): void {
+      this.reloads++;
+    },
     /** Called when the prompt goes out: frames only appear after it. */
     release(): void {
       frames.push(...afterPrompt);
+    },
+  };
+}
+
+/**
+ * A prober whose page only changes once someone asks for a refresh.
+ *
+ * A static file server with the edit in a linked stylesheet: the served
+ * document is byte-identical, so nothing the prober watches on its own will
+ * ever fire, and the browser holds the old CSS until a reload.
+ */
+function staleProber(baseline: Frame, afterRefresh: Frame[], stale: Frame[]) {
+  const frames: Frame[] = [];
+  let interval = 1000;
+  return {
+    frames,
+    reloads: 0,
+    get intervalMs(): number {
+      return interval;
+    },
+    setInterval(ms: number): void {
+      interval = ms;
+    },
+    setCheck(_expr: string | null): void {},
+    async sample(): Promise<Frame | null> {
+      frames.push(baseline);
+      return baseline;
+    },
+    requestReload(): void {
+      this.reloads++;
+      frames.push(...afterRefresh);
+    },
+    release(): void {
+      frames.push(...stale);
     },
   };
 }
@@ -140,6 +178,62 @@ test('a pixel change the heuristic does see still reports the earlier moment', (
       `first change ${res.timeToFirstChangeMs} should precede correct ${res.timeToCorrectChangeMs}`,
     );
   });
+});
+
+test('a page with no update channel is refreshed once, and the edit is found', async () => {
+  // Observed on a todo-app run: the agent put the blue header in style.css and
+  // served the directory with a plain file server. index.html stayed
+  // byte-identical, so the prober -- which reloads only when the served
+  // document changes, to keep HMR timing intact -- never refreshed, and the
+  // browser showed the old CSS for the rest of the run. The edit was on disk
+  // and correctly served; the iteration reported NEVER LANDED.
+  const t0Epoch = Date.now();
+  const baseline = frame({ tMs: 0, checkPassed: false });
+  const stale = [frame({ tMs: 200, checkPassed: false }), frame({ tMs: 500, checkPassed: false })];
+  const landed = [
+    frame({ tMs: 9_000, checkPassed: true, colorSig: flat(40) }),
+    frame({ tMs: 9_250, checkPassed: true, colorSig: flat(40) }),
+  ];
+  const prober = staleProber(baseline, landed, stale);
+
+  const res = await runIteration(spec, {
+    prober: prober as unknown as Prober,
+    handle: fakeHandle(() => prober.release()),
+    t0Epoch,
+    intervalMs: 50,
+    timeoutMs: 10_000,
+    refreshAfterMs: 120,
+  });
+  assert.equal(prober.reloads, 1, 'refreshed exactly once, not on every tick');
+  assert.ok(res.ok, 'the edit that was already on disk is found');
+  assert.notEqual(res.refreshedAtMs, null, 'the run says the change needed a refresh');
+});
+
+test('a page that moved on its own is never refreshed', async () => {
+  // The refresh exists for a page with no update channel. An app with hot
+  // reload has shown something by the time the agent stops -- the change, a
+  // flash, an error overlay -- and reloading it would destroy the HMR state and
+  // measure a page load instead of the rebuild.
+  const t0Epoch = Date.now();
+  const baseline = frame({ tMs: 0, checkPassed: false });
+  const moved = [
+    frame({ tMs: 300, checkPassed: false, colorSig: flat(40) }), // repaint, not yet right
+    frame({ tMs: 9_000, checkPassed: true, colorSig: flat(40) }),
+    frame({ tMs: 9_250, checkPassed: true, colorSig: flat(40) }),
+  ];
+  const prober = fakeProber(baseline, moved);
+
+  const res = await runIteration(spec, {
+    prober: prober as unknown as Prober,
+    handle: fakeHandle(() => prober.release()),
+    t0Epoch,
+    intervalMs: 50,
+    timeoutMs: 10_000,
+    refreshAfterMs: 120,
+  });
+  assert.equal(prober.reloads, 0);
+  assert.equal(res.refreshedAtMs, null, 'nothing to report: it arrived on its own');
+  assert.ok(res.ok);
 });
 
 test('an edit that never lands still reports no visible change as none', () => {

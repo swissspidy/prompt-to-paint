@@ -377,6 +377,18 @@ export interface IterationResult {
    */
   afterAgentMs?: number | null;
   /**
+   * When the harness refreshed the page because nothing had moved, or null if
+   * it never had to.
+   *
+   * A number here says the edit did not reach the screen on its own: there was
+   * no update channel to push it. An app with hot reload has already shown the
+   * change by this point, so it never sees a refresh -- and an edit that needed
+   * one is a different experience from an edit that did not, which is why the
+   * report says which happened rather than folding both into one timestamp.
+   * Everything after it includes a page load.
+   */
+  refreshedAtMs?: number | null;
+  /**
    * What the agent actually did for this edit.
    *
    * Time to correct change is wall clock, and wall clock says nothing about
