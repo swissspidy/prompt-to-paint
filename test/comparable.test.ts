@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertComparable } from '../src/report/compare.ts';
+import { assertComparable, IncomparableRunsError } from '../src/report/compare.ts';
 import { aggregate, renderAggregate } from '../src/report/aggregate.ts';
 import type { RunResult } from '../src/types.ts';
 
@@ -126,4 +126,14 @@ test('an aggregate separates the judge it prints from the judge it pools on', ()
 
   const clean = aggregate([run(), run()]);
   assert.equal(clean.judge, 'anthropic:claude-sonnet-5', 'and the printed name stays readable');
+});
+
+test('a refusal to rank is typed, so the CLI can print it without a stack trace', () => {
+  // Every one of these messages is decided by which runs the caller named, and
+  // names a command that fixes it. The type is what lets `p2p compare` print
+  // that sentence as a usage error rather than dumping a trace over it.
+  assert.throws(
+    () => assertComparable([run(), run({ label: 'b', curve: { ...run().curve, horizonMs: 20_000 } })]),
+    IncomparableRunsError,
+  );
 });

@@ -290,6 +290,18 @@ export interface DecomposeInput {
    * than a symptom of anything being wrong.
    */
   hasStream?: boolean;
+  /**
+   * Whether this run could have had a toolchain phase at all. Defaults to true.
+   *
+   * False for the runs that rule one out by construction: a `target.serveStatic`
+   * brief, where the harness serves the workdir and the brief tells the agent
+   * "no build step, no dependencies" in as many words, and the `static` floor
+   * template, whose whole description is "the no-toolchain floor". For those,
+   * "no install phase observed" is not a measurement that went missing -- there
+   * was never one to make, and a caveat that reads as a warning about the shims
+   * is noise on exactly the runs that guarantee it has nothing to say.
+   */
+  toolchain?: boolean;
 }
 
 /**
@@ -369,7 +381,7 @@ export function decompose(input: DecomposeInput): Decomposition {
     );
   }
   if (input.serverReadyMs === null) notes.push('Dev server never answered; first_paint and devserver_boot are unmeasured.');
-  if (!input.phases.some((p) => p.kind === 'install')) notes.push('No install phase observed (warm cache, vendored deps, or an unshimmed package manager).');
+  if (input.toolchain !== false && !input.phases.some((p) => p.kind === 'install')) notes.push('No install phase observed (warm cache, vendored deps, or an unshimmed package manager).');
 
   const attributedModelMs = buckets.model;
   return {

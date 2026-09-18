@@ -19,7 +19,7 @@ import { judgeRun } from './judge/judge.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
-import { renderCompareText, renderCompareHtml } from './report/compare.ts';
+import { renderCompareText, renderCompareHtml, IncomparableRunsError } from './report/compare.ts';
 import { renderLeaderboard, renderLeaderboardText } from './report/leaderboard.ts';
 import {
   buildSegments, inferIntervalMs, renderConcat, ffmpegArgs, resolveShot, writeBlankFrame, timelineSpanMs,
@@ -536,6 +536,7 @@ async function main(): Promise<void> {
   let brief;
   let makeAdapter: () => Adapter;
   let label = values.label ?? '';
+  let floorTemplateId = '';
 
   if (cmd === 'floor') {
     const t = FLOOR_TEMPLATES[values.template ?? 'vite-react'];
@@ -544,6 +545,7 @@ async function main(): Promise<void> {
     brief = floorBrief(t, port, Number(values.horizon ?? 300));
     makeAdapter = () => new ExecAdapter({ command: t.script.replaceAll('{{PORT}}', String(port)) });
     label ||= `floor:${t.id}`;
+    floorTemplateId = t.id;
   } else if (cmd === 'run') {
     if (!values.brief) fail('run needs --brief <file>');
     brief = await loadBrief(values.brief);
@@ -680,6 +682,10 @@ async function main(): Promise<void> {
         iterationPollMs: values['iter-poll'] ? Number(values['iter-poll']) : undefined,
         settleMs: values.settle ? Number(values.settle) : undefined,
         skipIterations: values['no-iterate'] || cmd === 'floor',
+        // The `static` floor template writes one HTML file and serves it with
+        // python: it is the no-toolchain control, so it has no install phase to
+        // miss. Every other template is a package manager by definition.
+        expectsToolchain: cmd === 'floor' ? floorTemplateId !== 'static' : undefined,
         killPort: values['kill-port'],
         // A control run has no agent turn to wait for: its dev server runs forever.
         stopAfterRenderMs:
@@ -727,6 +733,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
+  // A set of runs that cannot be ranked together is something the caller chose
+  // by naming those runs, not a bug they can act on a stack trace for. Anything
+  // else is unexpected and keeps its trace, which is the only thing that makes
+  // it debuggable.
+  if (e instanceof IncomparableRunsError) fail(e.message);
   console.error(e);
   process.exit(1);
 });

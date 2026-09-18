@@ -357,3 +357,28 @@ test('an edit can never be attributed more time than it lasted', () => {
   // the page catching up, not the agent thinking. afterAgentMs reports it.
   assert.equal(w.modelMs + w.toolMs, 12_418 - from);
 });
+
+test('a statically served brief is not warned about a missing install phase', () => {
+  // `target.serveStatic` means the harness serves the workdir and the brief
+  // tells the agent there is no build step and no dependencies. There was never
+  // an install to observe, so the note would read as a warning about the shims
+  // on the one kind of run that guarantees it has nothing to say.
+  const served = decompose({
+    wallMs: 10_000,
+    phases: [],
+    stream: { model: [{ start: 0, end: 10_000 }], tool: [] },
+    serverReadyMs: 0, firstPaintMs: 5_000, reportedApiMs: null,
+    toolchain: false,
+  });
+  assert.ok(!served.notes.some((n) => n.includes('No install phase observed')));
+
+  // A run the agent was expected to serve itself keeps the note: there, a
+  // missing install really is something that might not have been measured.
+  const unserved = decompose({
+    wallMs: 10_000,
+    phases: [],
+    stream: { model: [{ start: 0, end: 10_000 }], tool: [] },
+    serverReadyMs: 0, firstPaintMs: 5_000, reportedApiMs: null,
+  });
+  assert.ok(unserved.notes.some((n) => n.includes('No install phase observed')));
+});

@@ -164,7 +164,9 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe -
 ```
 
 Each run writes a directory containing `result.json` (every frame, phase and
-event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
+event), `report.html` (curve, decomposition, filmstrip — screenshots are inlined
+rather than linked, so the page can be attached or archived on its own and still
+render), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
 was given), `run.json` and `frames.ndjson` (the timeline as it happens — see
 [Recovering an interrupted run](#recovering-an-interrupted-run)), `phases.jsonl`

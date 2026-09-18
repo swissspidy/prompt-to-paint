@@ -52,6 +52,14 @@ export interface RunOptions {
    * the AUC by nothing and saves the rest of the horizon.
    */
   quietForMs?: number;
+  /**
+   * Whether this run could involve a package manager or bundler at all.
+   *
+   * Defaults to whatever the brief implies: a `target.serveStatic` brief rules
+   * a toolchain out. The floor sets it explicitly, because its `static`
+   * template is a no-toolchain control that no brief field describes.
+   */
+  expectsToolchain?: boolean;
   /** Drop the "render something early" clause from the protocol suffix. */
   noRenderEarly?: boolean;
   /** Cap on model calls in the scoring pass. */
@@ -801,6 +809,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     serverReadyMs,
     firstPaintMs,
     reportedApiMs,
+    toolchain: opts.expectsToolchain ?? brief.target?.serveStatic !== true,
   });
 
   // Iteration attribution, filled in here rather than in runIteration: the shim

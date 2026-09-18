@@ -91,6 +91,23 @@ export interface ComparableOptions {
 }
 
 /**
+ * A set of runs that may not be ranked together.
+ *
+ * Its own type because these messages are for the reader rather than the
+ * maintainer: every one of them is decided by which runs were named on the
+ * command line, and names a command that fixes it. The CLI prints them as usage
+ * errors, the way `parse` prints a flag it cannot read, and for the same reason
+ * -- a stack trace buries the one sentence that matters, exactly when the
+ * reader is already looking for it.
+ */
+export class IncomparableRunsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IncomparableRunsError';
+  }
+}
+
+/**
  * Refuse to rank runs that are not on one scale.
  *
  * Every check here guards a table that would otherwise look completely normal.
@@ -102,14 +119,14 @@ export interface ComparableOptions {
 export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}): void {
   const horizons = [...new Set(runs.map((r) => r.curve.horizonMs))];
   if (horizons.length > 1) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare runs with different horizons (${horizons.map((h) => `${h / 1000}s`).join(', ')}): ` +
         'AUC is normalised by horizon, so the numbers are not on the same scale.',
     );
   }
   const briefs = [...new Set(runs.map((r) => r.brief))];
   if (briefs.length > 1) {
-    throw new Error(`cannot compare runs from different briefs (${briefs.join(', ')}): rubrics differ.`);
+    throw new IncomparableRunsError(`cannot compare runs from different briefs (${briefs.join(', ')}): rubrics differ.`);
   }
 
   // A run whose scoring pass never finished carries provisional scores and says
@@ -117,7 +134,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   // presents entity coverage as rubric correctness under a model's byline.
   const pending = runs.filter((r) => r.judge.pending);
   if (pending.length) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare runs whose judging did not finish (${pending.map((r) => r.label || r.adapter).join(', ')}): ` +
         'their scores are provisional. Run `p2p rescore <runDir>` on each, then compare.',
     );
@@ -128,7 +145,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   // different quantities that happen to share a 0..1 range.
   const degraded = runs.filter((r) => r.judge.degraded);
   if (degraded.length && degraded.length !== runs.length) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare judged runs with unjudged ones (${degraded.map((r) => r.label || r.adapter).join(', ')} ` +
         'scored by entity coverage, the rest by a rubric). Those are different quantities on the same ' +
         'scale. Run `p2p rescore` on the unjudged ones, or compare within one group.',
@@ -141,7 +158,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   // agents.
   const judges = [...new Set(runs.map((r) => r.judge.model ?? `none:${r.judge.backend}`))];
   if (judges.length > 1) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare runs scored by different judges (${judges.join(', ')}): judges disagree at the ` +
         'margin, so a ranking across them is partly a ranking of the judges. Re-score them onto one ' +
         'judge with `p2p rescore <runDir> --judge <provider:model>`.',
@@ -155,7 +172,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   // other, and refuse to compare with runs that pinned it.
   const temps = [...new Set(runs.map((r) => r.judge.temperature ?? 'unrecorded'))];
   if (temps.length > 1) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare runs scored at different judge temperatures (${temps.join(', ')}): the same model ` +
         'samples differently at each, so part of the gap between these runs is the sampler. Re-score ' +
         'them onto one setting with `p2p rescore <runDir>`.',
@@ -170,7 +187,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
     return `${v.width}x${v.height}`;
   }))];
   if (windows.length > 1) {
-    throw new Error(
+    throw new IncomparableRunsError(
       `cannot compare runs observed through different viewports (${windows.join(', ')}): the viewport ` +
         'decides what the judge could see and what counted as on screen, so the scores are not on one scale.',
     );
@@ -179,7 +196,7 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   if (!opts.allowMixedConditions) {
     const conditions = [...new Set(runs.map((r) => (r.protocol?.renderEarly === false ? 'unprompted' : 'prompted')))];
     if (conditions.length > 1) {
-      throw new Error(
+      throw new IncomparableRunsError(
         'cannot compare prompted and unprompted runs in one ranking: an agent told that a rough early ' +
           'page scores better is answering a different question from one that was not. ' +
           'Use `p2p leaderboard`, which ranks within each condition and reports the prompt effect between them.',
