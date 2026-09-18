@@ -235,6 +235,19 @@ export interface ProtocolOptions {
    * a different experiment, and not comparable with the default one.
    */
   renderEarly?: boolean;
+  /**
+   * The harness is already serving the working directory at this URL, which is
+   * what `target.serveStatic` briefs do.
+   *
+   * Then "serve the app there" is not just redundant, it is impossible: the
+   * port is held by the harness, so every attempt fails. Observed on
+   * `static-page`, where the agent wrote a correct index.html in the first
+   * fifteen seconds and spent the remaining four and three quarter minutes
+   * trying to get a server onto a port it could never have, then hit the
+   * horizon without finishing. The page was on screen the whole time. What the
+   * run measured was the agent fighting the harness.
+   */
+  served?: boolean;
 }
 
 /**
@@ -256,21 +269,32 @@ export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string 
     'How this run is observed:',
     '',
     `- A browser is already open at ${url} and screenshots it every second, starting`,
-    '  now. Serve the app there, and leave the server running when you are done.',
   ];
+  L.push(
+    opts.served
+      ? '  now. That URL already serves this directory, so a file you save here is on\n' +
+        '  screen at the next screenshot. Do not start a server: the port is already\n' +
+        '  taken, and every attempt will fail.'
+      : '  now. Serve the app there, and leave the server running when you are done.',
+  );
   if (opts.renderEarly !== false)
     L.push(
       '- Get something on screen as early as you can and then refine it in place. A',
       '  rough page that renders in the first minute counts for more here than a',
       '  perfect one that only appears at the end.',
     );
+  if (!opts.served)
+    L.push(
+      '- Start the dev server in the background so it does not block you, e.g.',
+      '  `npm run dev > dev.log 2>&1 &`. A server left in the foreground never returns,',
+      '  so your turn can never finish.',
+    );
   L.push(
-    '- Start the dev server in the background so it does not block you, e.g.',
-    '  `npm run dev > dev.log 2>&1 &`. A server left in the foreground never returns,',
-    '  so your turn can never finish.',
     `- When you consider the app done, create an empty file named \`${DONE_SENTINEL}\` in the`,
     '  project root. That is what stops the clock. Do not create it before the app is',
-    '  serving, and do not stop the server after creating it.',
+    opts.served
+      ? '  on screen.'
+      : '  serving, and do not stop the server after creating it.',
   );
   return `\n\n${L.join('\n')}\n`;
 }
@@ -533,7 +557,11 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     });
 
     const prompt =
-      brief.prompt + protocolSuffix(url, { renderEarly: !opts.noRenderEarly });
+      brief.prompt +
+      protocolSuffix(url, {
+        renderEarly: !opts.noRenderEarly,
+        served: brief.target?.serveStatic === true,
+      });
     await writeFile(join(opts.runDir, 'prompt.txt'), prompt);
     handle = await adapter.start(prompt, {
       workdir,

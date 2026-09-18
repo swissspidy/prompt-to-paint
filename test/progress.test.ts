@@ -99,3 +99,18 @@ test('the early-render clause can be dropped without losing the mechanics', () =
   assert.match(s, /in the background/);
   assert.ok(s.includes(DONE_SENTINEL));
 });
+
+test('a brief the harness serves itself does not ask the agent for a server', () => {
+  // The port is held by the harness, so "serve the app there" is an instruction
+  // that cannot be followed. A run against static-page spent four and three
+  // quarter minutes of a five minute horizon trying, with the finished page
+  // already on screen, and hit the horizon without finishing.
+  const s = protocolSuffix('http://127.0.0.1:5173/', { served: true });
+  assert.match(s, /already serves this directory/);
+  assert.match(s, /Do not start a server/);
+  assert.doesNotMatch(s, /in the background/, 'no dev-server instruction to follow');
+  assert.doesNotMatch(s, /Serve the app there/);
+  assert.match(s, /as early as you can/, 'the early-render clause is unaffected');
+  assert.ok(s.includes(DONE_SENTINEL), 'the clock still stops the same way');
+  assert.doesNotMatch(s, /do not stop the server/, 'there is no server of theirs to stop');
+});

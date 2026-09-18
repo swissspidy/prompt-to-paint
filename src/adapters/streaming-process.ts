@@ -70,10 +70,25 @@ export function startStreamingProcess(opts: StreamingProcessOptions): StreamingP
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (!line) continue;
+      let obj: Record<string, unknown>;
       try {
-        opts.onObject(JSON.parse(line) as Record<string, unknown>, tMs);
+        obj = JSON.parse(line) as Record<string, unknown>;
       } catch {
         opts.onText?.(line, tMs);
+        continue;
+      }
+      // Parsing and handling are caught separately. Sharing one catch made a
+      // throw inside onObject -- an event whose shape the adapter did not
+      // expect -- indistinguishable from a line that was never JSON, so the log
+      // claimed the agent had written prose when it had written an object the
+      // harness could not read. And a throw that escapes this 'data' listener
+      // is uncaught: it takes the process down mid-run.
+      try {
+        opts.onObject(obj, tMs);
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        rawLog.write(`\np2p: could not read stream event: ${why}\n`);
+        opts.onText?.(`unreadable event: ${why}`, tMs);
       }
     }
   });

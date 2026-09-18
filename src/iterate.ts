@@ -159,6 +159,23 @@ export async function runIteration(
     }
   }
 
+  // An edit the predicate confirmed *is* a visible change, whatever the pixel
+  // heuristic made of it.
+  //
+  // The two detectors have different sensitivities, and the predicate is the
+  // stricter one: recolouring an h1 on a mostly-white page moves the check from
+  // false to true while shifting the worst colour cell by less than the eight
+  // levels a "visible change" needs. The report then read `first change  --
+  // correct 3.1s` -- "the page never moved, and here is when it moved" -- on a
+  // static-page run where the heading visibly went blue. Reported time never
+  // outruns the evidence either: whichever detector saw it first is the answer.
+  if (timeToCorrectChangeMs !== null) {
+    timeToFirstChangeMs =
+      timeToFirstChangeMs === null
+        ? timeToCorrectChangeMs
+        : Math.min(timeToFirstChangeMs, timeToCorrectChangeMs);
+  }
+
   // Charge the last observed state through to whatever ended the loop, so an
   // app left broken at the end is not silently forgiven.
   const endedMs =

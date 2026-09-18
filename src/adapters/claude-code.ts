@@ -13,13 +13,40 @@ export interface ClaudeCodeOptions {
   extraArgs?: string[];
 }
 
+interface ContentBlock {
+  type?: string;
+  name?: string;
+  id?: string;
+  text?: string;
+}
+
 interface StreamEvent {
   type?: string;
   subtype?: string;
-  message?: { content?: Array<{ type?: string; name?: string; id?: string; text?: string }> };
+  /**
+   * Messages API shape, where `content` is either a list of blocks or a bare
+   * string standing for a single text block. Both arrive here.
+   */
+  message?: { content?: string | ContentBlock[] };
   duration_api_ms?: number;
   duration_ms?: number;
   is_error?: boolean;
+}
+
+/**
+ * The blocks of a stream message, whichever of the two shapes it arrived in.
+ *
+ * Claude Code uses the string shorthand for the synthetic user turns it injects
+ * mid-session -- a background task reporting completion is one -- so a stream
+ * can run for minutes of tool calls before the first one appears. Reading
+ * `content` as always-array threw inside the stdout handler, which is not a
+ * place a run survives a throw: the whole harness went down and took an
+ * otherwise healthy measurement with it.
+ */
+function blocksOf(message: StreamEvent['message']): ContentBlock[] {
+  const content = message?.content;
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
+  return Array.isArray(content) ? content : [];
 }
 
 /**
@@ -102,7 +129,18 @@ export class ClaudeCodeAdapter implements Adapter {
           emit({ tMs, type: 'raw', text: line.slice(0, 500) });
           continue;
         }
-        this.translate(ev, tMs).forEach(emit);
+        // Nothing this handler does is worth losing a run over. It is a stream
+        // 'data' listener, so a throw here is an uncaught exception that takes
+        // the process down mid-measurement -- minutes of agent work, the
+        // frames, the phases, all of it gone over one event whose shape we did
+        // not predict. Record the surprise as an event and keep reading.
+        try {
+          translateClaudeCodeEvent(ev, tMs).forEach(emit);
+        } catch (err) {
+          const why = err instanceof Error ? err.message : String(err);
+          rawLog.write(`\np2p: could not read stream event: ${why}\n`);
+          emit({ tMs, type: 'raw', text: `unreadable event: ${why}`, raw: ev });
+        }
         if (ev.type === 'result') {
           reportedApiMs = ev.duration_api_ms ?? reportedApiMs;
           completeTurn();
@@ -180,27 +218,31 @@ export class ClaudeCodeAdapter implements Adapter {
     };
   }
 
-  /**
-   * Map one Claude Code stream event onto the harness vocabulary.
-   *
-   * Tool boundaries are inferred from the tool_use blocks inside an assistant
-   * message, since the stream does not mark them independently.
-   */
-  private translate(ev: StreamEvent, tMs: number): AgentEvent[] {
-    if (ev.type === 'assistant') {
-      const out: AgentEvent[] = [{ tMs, type: 'assistant', raw: ev }];
-      for (const c of ev.message?.content ?? []) {
-        if (c.type === 'tool_use') out.push({ tMs, type: 'tool_use', toolName: c.name, toolId: c.id });
-      }
-      return out;
+}
+
+/**
+ * Map one Claude Code stream event onto the harness vocabulary.
+ *
+ * Tool boundaries are inferred from the tool_use blocks inside an assistant
+ * message, since the stream does not mark them independently.
+ *
+ * A free function, and exported, so the event shapes this has to survive can be
+ * pinned as tests without a live binary -- which is how the string-content case
+ * above went unnoticed until a run died on it.
+ */
+export function translateClaudeCodeEvent(ev: StreamEvent, tMs: number): AgentEvent[] {
+  if (ev.type === 'assistant') {
+    const out: AgentEvent[] = [{ tMs, type: 'assistant', raw: ev }];
+    for (const c of blocksOf(ev.message)) {
+      if (c.type === 'tool_use') out.push({ tMs, type: 'tool_use', toolName: c.name, toolId: c.id });
     }
-    if (ev.type === 'user') {
-      const blocks = ev.message?.content ?? [];
-      const isResult = blocks.some((c) => c.type === 'tool_result');
-      return [{ tMs, type: isResult ? 'tool_result' : 'user', raw: ev }];
-    }
-    if (ev.type === 'result') return [{ tMs, type: 'result', subtype: ev.subtype, raw: ev }];
-    if (ev.type === 'system') return [{ tMs, type: 'system', subtype: ev.subtype, raw: ev }];
-    return [{ tMs, type: 'raw', raw: ev }];
+    return out;
   }
+  if (ev.type === 'user') {
+    const isResult = blocksOf(ev.message).some((c) => c.type === 'tool_result');
+    return [{ tMs, type: isResult ? 'tool_result' : 'user', raw: ev }];
+  }
+  if (ev.type === 'result') return [{ tMs, type: 'result', subtype: ev.subtype, raw: ev }];
+  if (ev.type === 'system') return [{ tMs, type: 'system', subtype: ev.subtype, raw: ev }];
+  return [{ tMs, type: 'raw', raw: ev }];
 }

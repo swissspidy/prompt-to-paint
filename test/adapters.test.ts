@@ -1,9 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { translateClaudeCodeEvent } from '../src/adapters/claude-code.ts';
 import { translatePiEvent, PiAdapter } from '../src/adapters/pi.ts';
 import { detectToolSignal, AntigravityAdapter } from '../src/adapters/antigravity.ts';
 import { attributeAgentStream, total } from '../src/decompose/attribute.ts';
 import type { AgentEvent } from '../src/types.ts';
+
+// ---------------------------------------------------------------------------
+// Claude Code. Event shapes captured from a live `claude -p --output-format
+// stream-json` session driven by this harness.
+// ---------------------------------------------------------------------------
+
+test('claude-code events map onto the harness vocabulary', () => {
+  const at = (o: object) => translateClaudeCodeEvent(o as never, 100);
+
+  const asst = at({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'writing it' }, { type: 'tool_use', name: 'Write', id: 'tu1' }] },
+  });
+  assert.equal(asst[0]?.type, 'assistant');
+  assert.equal(asst[1]?.type, 'tool_use');
+  assert.equal(asst[1]?.toolName, 'Write');
+  assert.equal(asst[1]?.toolId, 'tu1');
+
+  const result = at({ type: 'user', message: { content: [{ type: 'tool_result', id: 'tu1' }] } });
+  assert.equal(result[0]?.type, 'tool_result', 'a tool_result block is a tool boundary, not a user turn');
+
+  assert.equal(at({ type: 'result', subtype: 'success' })[0]?.type, 'result');
+  assert.equal(at({ type: 'system', subtype: 'init' })[0]?.type, 'system');
+  assert.equal(at({ type: 'rate_limit_event' })[0]?.type, 'raw');
+});
+
+test('claude-code reads a user message whose content is a bare string', () => {
+  // The Messages API allows a string in place of a one-element block list, and
+  // Claude Code uses it for the synthetic user turns it injects mid-session --
+  // a background task reporting completion is one. Reading `content` as
+  // always-array threw inside the stdout 'data' listener, which is uncaught:
+  // the process died and a run that was minutes deep went with it.
+  const ev = translateClaudeCodeEvent(
+    { type: 'user', message: { content: '<task-notification>done</task-notification>' } } as never,
+    100,
+  );
+  assert.equal(ev[0]?.type, 'user', 'a string carries no tool_result block');
+});
+
+test('claude-code tolerates a message with no content at all', () => {
+  // system events carry no message, and an empty assistant turn carries an
+  // empty one. Neither is a tool boundary, and neither may throw.
+  assert.equal(translateClaudeCodeEvent({ type: 'user', message: {} } as never, 1)[0]?.type, 'user');
+  assert.deepEqual(
+    translateClaudeCodeEvent({ type: 'assistant' } as never, 1).map((e) => e.type),
+    ['assistant'],
+  );
+});
+
+test('a realistic claude-code session attributes thinking and tool time', () => {
+  // Tool spans are inferred: a tool_use block opens one, the tool_result user
+  // message closes it. The string-content notification in the middle is the
+  // shape that used to kill the run.
+  const wire: Array<[number, object]> = [
+    [0, { type: 'system', subtype: 'init' }],
+    [4_000, { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', id: 't1' }] } }],
+    [4_300, { type: 'user', message: { content: [{ type: 'tool_result', id: 't1' }] } }],
+    [4_400, { type: 'user', message: { content: '<task-notification>done</task-notification>' } }],
+    [4_500, { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', id: 't2' }] } }],
+    [22_500, { type: 'user', message: { content: [{ type: 'tool_result', id: 't2' }] } }],
+    [23_000, { type: 'result', subtype: 'success' }],
+  ];
+  const events: AgentEvent[] = wire.flatMap(([t, o]) => translateClaudeCodeEvent(o as never, t));
+  const { tool } = attributeAgentStream(events, 40_000);
+  assert.equal(total(tool), 300 + 18_000);
+});
 
 // ---------------------------------------------------------------------------
 // Pi. Event shapes taken from the published --mode json / rpc reference.
