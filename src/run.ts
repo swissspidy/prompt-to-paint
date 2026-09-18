@@ -14,7 +14,7 @@ import {
 } from './decompose/attribute.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { judgeRun, mechanicalScores } from './judge/judge.ts';
-import { JUDGE_TEMPERATURE } from './judge/backends.ts';
+import { appliedTemperature } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
@@ -583,6 +583,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
         agentFailure = { exitCode, atMs: Date.now() - t0Epoch, logPath: agentLogPath };
       }
     });
+    // Narrowed once here so the callbacks below can read it: `handle` is a let
+    // that the teardown path clears.
+    const agent = handle;
 
     // The cold-start window closes on whichever of these comes first: the
     // agent's first turn completing, the agent creating the done sentinel,
@@ -595,7 +598,13 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // is not a hypothetical: the CLI printed its report and then sat idle for
     // the rest of it.
     const races: Array<Promise<RunEndReason>> = [
-      handle.waitForTurn(0).then((): RunEndReason => 'turn'),
+      // An adapter releases this wait when the agent process goes away, turn or
+      // no turn -- otherwise a crashed agent would hold the run to its horizon.
+      // So the count decides which happened. A binary that exits in under a
+      // second because it refuses the flags it was given has not "completed its
+      // first turn", and recording that it did puts a false claim in
+      // result.json, where the banner about the failed run is not.
+      agent.waitForTurn(0).then((): RunEndReason => (agent.turns() > 0 ? 'turn' : 'exit')),
       sleep(horizonMs, raceCtl.signal).then((): RunEndReason => 'horizon'),
     ];
 
@@ -650,6 +659,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
           : ended === 'rendered' ? 'app rendered'
           : ended === 'signal' ? `agent signalled done (${DONE_SENTINEL})`
           : ended === 'quiet' ? `nothing changed for ${(quietForMs / 1000).toFixed(0)}s`
+          : ended === 'exit' ? 'the agent process ended without completing a turn'
           : 'agent finished its first turn'
       }`,
     );
@@ -1028,7 +1038,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       framesJudged: 0,
       degraded: true,
       pending: true,
-      temperature: JUDGE_TEMPERATURE,
+      temperature: appliedTemperature(opts.judgeBackend),
     },
     [
       'judge: scores in this file are provisional -- the scoring pass had not finished when it ' +
@@ -1065,7 +1075,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       model: opts.judgeBackend.model,
       framesJudged: judged.framesJudged,
       degraded: judged.degraded,
-      temperature: JUDGE_TEMPERATURE,
+      temperature: appliedTemperature(opts.judgeBackend),
     },
     judged.warnings,
   );

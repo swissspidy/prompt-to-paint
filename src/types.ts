@@ -415,6 +415,7 @@ export interface IterationWork {
  */
 export type RunEndReason =
   | 'turn'      // the adapter saw the agent complete its first turn
+  | 'exit'      // the agent process ended without ever completing one
   | 'signal'    // the agent created the done sentinel in its workdir
   | 'quiet'     // page, agent stream and toolchain all idle long enough
   | 'rendered'  // stop-after-render was set and the app rendered
@@ -443,8 +444,17 @@ export interface RunResult {
     model: string | null;
     framesJudged: number;
     degraded: boolean;
-    /** Sampling temperature used. Recorded so a run can say how it was scored. */
-    temperature?: number;
+    /**
+     * Sampling temperature the provider applied. Recorded so a run can say how
+     * it was scored.
+     *
+     * Null when the provider was asked for one and said it ignored the setting,
+     * which is a different fact from "not recorded" (the `undefined` of a run
+     * written before this field existed) and from any number. `p2p compare` and
+     * the repeat aggregation both refuse to pool runs whose temperatures
+     * differ, so this has to be what happened rather than what was requested.
+     */
+    temperature?: number | null;
     /**
      * Written before judging, so an interrupted or failed scoring pass still
      * leaves a replayable run on disk. `p2p rescore` clears it.

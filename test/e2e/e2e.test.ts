@@ -165,6 +165,10 @@ test('a crashed agent is reported as a failure, not as a zero score', { skip: ne
     assert.equal(result.agentFailure?.exitCode, 3);
     assert.match(result.warnings[0] ?? '', /AGENT FAILED/);
     assert.equal(result.curve.auc, 0, 'still zero -- but now explained');
+    // exec's contract is that the command exiting *is* the turn ending, so a
+    // command that ran and failed did complete one. Contrast the streaming
+    // adapter below, where nothing of the sort happened.
+    assert.equal(result.endReason, 'turn');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -185,6 +189,11 @@ test('an agent binary that does not exist fails the run instead of the harness',
     assert.ok(result.agentFailure, 'the failed spawn is recorded as a failed run');
     const log = await readFile(join(dir, 'agent.log'), 'utf8');
     assert.match(log, /not found on PATH/);
+    // A streaming adapter releases the turn wait when its process goes away, so
+    // that a crash does not hold the run to its horizon. Recording that release
+    // as a completed turn would put "the agent completed its first turn" in
+    // result.json for a binary that never existed.
+    assert.equal(result.endReason, 'exit');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

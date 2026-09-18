@@ -14,6 +14,34 @@ export interface JudgeRequest {
 }
 
 /**
+ * What a run scored by this backend should record as its judge temperature.
+ *
+ * One place, because three call sites write that field and they must not be
+ * able to disagree about it.
+ */
+export const appliedTemperature = (backend: JudgeBackend): number | null =>
+  backend.temperature ? backend.temperature() : JUDGE_TEMPERATURE;
+
+/**
+ * Did the provider say it ignored the temperature we asked for?
+ *
+ * Both spellings are matched deliberately. The provider protocol calls this
+ * `{type: 'unsupported-setting', setting}`; what the `ai` package hands back for
+ * the same event is `{type: 'unsupported', feature}`. Keying on one of them is
+ * how this went unnoticed in the first place -- a check that silently stops
+ * matching leaves exactly the wrong claim in result.json, so match the name
+ * wherever the shape puts it.
+ */
+export function dropsTemperature(warnings: readonly unknown[] | undefined): boolean {
+  if (!warnings) return false;
+  return warnings.some((raw) => {
+    const w = raw as { type?: unknown; setting?: unknown; feature?: unknown };
+    if (typeof w?.type !== 'string' || !w.type.startsWith('unsupported')) return false;
+    return w.setting === 'temperature' || w.feature === 'temperature';
+  });
+}
+
+/**
  * Sampling temperature for every judge call.
  *
  * Zero, and stated once, because the judge decides the headline number. At a
@@ -36,6 +64,22 @@ export interface JudgeBackend {
   ask(req: JudgeRequest): Promise<string>;
   /** Safe parallelism for this backend. */
   concurrency: number;
+  /**
+   * The sampling temperature the provider confirms it applied, or null if it
+   * told us it ignored the setting.
+   *
+   * Asking for zero and recording zero are not the same claim, and only the
+   * provider knows which happened. `result.json` records this number, and
+   * `p2p compare` and the repeat aggregation both refuse to pool runs whose
+   * temperatures differ -- so a hardcoded 0 that the provider quietly dropped
+   * does not merely misreport, it certifies as noise-free a set of runs that
+   * carries exactly the sampling noise the check exists to catch.
+   *
+   * Optional: a backend that never hears otherwise from a provider got what it
+   * asked for, which is what `appliedTemperature` falls back to. A backend that
+   * does talk to one should implement this.
+   */
+  temperature?(): number | null;
   /**
    * One cheap call proving this judge can actually be reached, or a throw
    * carrying the provider's own refusal.
@@ -116,11 +160,36 @@ export class AiSdkBackend implements JudgeBackend {
   private provider: string;
   private modelId: string;
   private loaded: Promise<LanguageModel> | null = null;
+  /**
+   * Set once a provider tells us it ignored `temperature`.
+   *
+   * Observed against the default judge: `anthropic:claude-sonnet-5` does not
+   * take the setting, and the SDK drops it with a warning on stderr that
+   * nothing here was reading. Every run then recorded `temperature: 0` while
+   * sampling at whatever the provider does by default.
+   */
+  private temperatureDropped = false;
 
   constructor(provider: string, modelId: string) {
     this.provider = provider;
     this.modelId = modelId;
     this.model = `${provider}:${modelId}`;
+  }
+
+  /** Null once the provider has said it ignored the setting. */
+  temperature(): number | null {
+    return this.temperatureDropped ? null : JUDGE_TEMPERATURE;
+  }
+
+  /**
+   * Believe the provider over the request when they disagree.
+   *
+   * Called for preflight and for every frame, so a judge that only mentions it
+   * on the first real call is still caught, and one that never mentions it
+   * leaves the recorded temperature as asked.
+   */
+  private noteWarnings(warnings: readonly unknown[] | undefined): void {
+    if (dropsTemperature(warnings)) this.temperatureDropped = true;
   }
 
   /**
@@ -152,7 +221,7 @@ export class AiSdkBackend implements JudgeBackend {
    */
   async preflight(): Promise<void> {
     const model = await this.load();
-    await generateText({
+    const { warnings } = await generateText({
       model,
       maxRetries: 0,
       temperature: JUDGE_TEMPERATURE,
@@ -167,12 +236,15 @@ export class AiSdkBackend implements JudgeBackend {
         },
       ],
     });
+    // One real call is also the cheapest place to find out what the provider
+    // will do with the settings, and it happens before the agent starts.
+    this.noteWarnings(warnings);
   }
 
   /** Score one frame. */
   async ask(req: JudgeRequest): Promise<string> {
     const model = await this.load();
-    const { text } = await generateText({
+    const { text, warnings } = await generateText({
       model,
       maxRetries: 4,
       temperature: JUDGE_TEMPERATURE,
@@ -189,6 +261,7 @@ export class AiSdkBackend implements JudgeBackend {
         },
       ],
     });
+    this.noteWarnings(warnings);
     return text;
   }
 }
@@ -198,6 +271,16 @@ export class NullBackend implements JudgeBackend {
   readonly name = 'none';
   readonly model = null;
   readonly concurrency = 1;
+  /**
+   * Nothing is sampled, so nothing was dropped.
+   *
+   * Reported as the temperature that was asked for rather than null, because
+   * null is the specific claim "a provider ignored this" and no provider was
+   * involved. These runs are flagged degraded in every report that shows them.
+   */
+  temperature(): number {
+    return JUDGE_TEMPERATURE;
+  }
   /** Always throws: callers must fall back to mechanical scoring. */
   async ask(): Promise<string> {
     throw new Error('no judge backend configured');

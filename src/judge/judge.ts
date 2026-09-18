@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { Brief, Frame, ScoredFrame } from '../types.ts';
 import { hamming, colorDelta, downscalePngColor } from '../probe/pixels.ts';
-import type { JudgeBackend } from './backends.ts';
+import { JUDGE_TEMPERATURE, type JudgeBackend } from './backends.ts';
 
 export interface JudgeOptions {
   backend: JudgeBackend;
@@ -347,6 +347,20 @@ export async function judgeRun(
   await Promise.all(Array.from({ length: opts.backend.concurrency }, worker));
   persist(true);
   await saving;
+
+  // Asked after the pass, because that is when every provider warning has
+  // arrived. The default judge is one of the models this applies to, so without
+  // saying it here a run's headline number carries sampling variance and every
+  // report about it claims otherwise.
+  if (opts.backend.temperature?.() === null) {
+    warnings.push(
+      `judge: ${opts.backend.model ?? opts.backend.name} does not accept a sampling temperature, so ` +
+        `these frames were scored at the provider's default rather than at ${JUDGE_TEMPERATURE}. The ` +
+        'same screenshot can score differently on a rescore, and that variance is inside the AUC. ' +
+        'result.json records the temperature as null rather than as the value that was asked for, so ' +
+        'p2p compare will not pool this run with one that was scored at a fixed temperature.',
+    );
+  }
 
   // Walk forward, holding the last judged score across visually identical frames.
   let lastScore = 0;

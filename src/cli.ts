@@ -9,7 +9,7 @@ import { writeJsonAtomic } from './atomic.ts';
 import { runBenchmark } from './run.ts';
 import { ClaudeCodeAdapter, ExecAdapter, ScriptedAdapter, PiAdapter, AntigravityAdapter } from './adapters/index.ts';
 import {
-  pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, JUDGE_TEMPERATURE,
+  pickBackend, preflightJudge, NullBackend, DEFAULT_JUDGE, AI_SDK_PROVIDER_NAMES, appliedTemperature,
 } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
@@ -516,7 +516,7 @@ async function main(): Promise<void> {
         model: backend.model,
         framesJudged: judged.framesJudged,
         degraded: judged.degraded,
-        temperature: JUDGE_TEMPERATURE,
+        temperature: appliedTemperature(backend),
       },
       curve: computeMetrics(judged.frames, {
         horizonMs: brief.horizonSec * 1000,
@@ -549,7 +549,14 @@ async function main(): Promise<void> {
       // The CLI refuses to bypass permissions when running as root, and the
       // resulting failure is opaque: the agent exits instantly and the run
       // looks like an agent that simply built nothing.
-      if (values.unsafe && process.getuid?.() === 0) {
+      //
+      // `--permission-mode bypassPermissions` is the same request by another
+      // name and is refused by the same check, so it has to be caught by the
+      // same guard. Verified as root: the binary prints the
+      // --dangerously-skip-permissions refusal and exits 1 in under a second,
+      // having built nothing, whichever of the two spellings asked for it.
+      const bypassing = values.unsafe || values['permission-mode'] === 'bypassPermissions';
+      if (bypassing && process.getuid?.() === 0) {
         fail(
           'the Claude Code CLI refuses --dangerously-skip-permissions as root.\n' +
             '  Run the harness as a non-root user in your sandbox, or pass\n' +
