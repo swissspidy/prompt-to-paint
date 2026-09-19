@@ -170,6 +170,13 @@ const esc = (s: string): string =>
 export function ratingSheet(items: readonly RateItem[], briefPrompt: string, seed = 1): string {
   const order = shuffled(items, seed);
   const payload = order.map((i) => ({ runId: i.runId, index: i.index, src: i.dataUri }));
+  // `<` escaped after serialisation, because JSON.stringify does not: a runId
+  // containing `</script>` closes the inline block and everything after it is
+  // markup. These ids come out of a result.json the sender did not necessarily
+  // produce, and the whole point of this file is that it gets sent to other
+  // people and opened in their browsers -- so it must be safe to open even when
+  // the run it describes is not trusted.
+  const itemsJson = JSON.stringify(payload).replace(/</g, '\\u003c');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -212,7 +219,7 @@ export function ratingSheet(items: readonly RateItem[], briefPrompt: string, see
 </div>
 
 <script>
-const ITEMS = ${JSON.stringify(payload)};
+const ITEMS = ${itemsJson};
 const out = [];
 let i = 0;
 const shot = document.getElementById('shot');

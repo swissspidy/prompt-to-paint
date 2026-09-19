@@ -109,3 +109,18 @@ test('the rating sheet shows the rater no score, label or timestamp', () => {
   assert.ok(!sheet.includes('42000'), 'the timestamp does not');
   assert.ok(!/"score"|scoreSource|reviewableThreshold/.test(sheet), 'and neither does any score');
 });
+
+test('a runId cannot close the sheet\'s script block', () => {
+  // JSON.stringify does not escape `<`, so a runId containing `</script>` ends
+  // the inline block and everything after it is parsed as markup. These ids
+  // come out of a result.json the sender did not necessarily produce, and the
+  // entire point of this file is that it gets opened in someone else's browser.
+  const hostile = 'x</script><script>alert(1)</script>';
+  const sheet = ratingSheet([{ runId: hostile, index: 0, tMs: 0, dataUri: 'data:image/png;base64,AA' }], 'brief');
+  const line = sheet.slice(sheet.indexOf('const ITEMS'), sheet.indexOf('\n', sheet.indexOf('const ITEMS')));
+  assert.doesNotMatch(line, /<\/script>/i, 'the payload does not terminate the script element');
+  assert.match(line, /\\u003c/, 'the angle bracket travels escaped');
+  // And it is still the same data: the rating has to join back to the frame.
+  const parsed = JSON.parse(line.replace(/^const ITEMS = /, '').replace(/;$/, '')) as Array<{ runId: string }>;
+  assert.equal(parsed[0]!.runId, hostile, 'escaping is lossless');
+});

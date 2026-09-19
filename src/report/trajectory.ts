@@ -29,7 +29,14 @@ export interface RunTrajectory {
   /** finalScore x (1 - ttfr/horizon): the area under the step this would be. */
   aucFromEndpoints: number | null;
   residual: number | null;
-  /** Distinct scores the cold-start frames were given. A step visits two. */
+  /**
+   * Distinct scores the cold-start frames were given.
+   *
+   * Descriptive only. Two is typical of a step, but a run that renders a
+   * placeholder worth 0.000 and then improves also visits two -- it shares the
+   * zero with the blank frames before it. `progressive` is the answer to
+   * "did this curve have a shape", because it is the one that reads the clock.
+   */
   levels: number;
   /**
    * Was this run ever scored at something other than zero and its own final
@@ -58,8 +65,18 @@ export function trajectory(runs: readonly RunResult[]): TrajectoryReport {
     const rendered = c.ttfnbrMs !== null;
     const cold = coldFrames(r);
     const scores = new Set(cold.map((f) => f.score));
-    // "Partial" means a score that is neither nothing nor the final answer.
-    const progressive = [...scores].some((s) => s > 0 && Math.abs(s - c.finalScore) > EPSILON);
+    // A state the run passed through on the way to its answer: any frame from
+    // first render onward that was not scored what the run finished at.
+    //
+    // By difference from the final score rather than "greater than zero",
+    // because `ttfnbrMs` is the first frame the *classifier* calls a render
+    // whatever the judge then scores it. An agent that paints a placeholder the
+    // judge scores 0.000 and fills it in afterwards -- the render-early-then-
+    // refine behaviour this entire metric exists to reward -- was counted as a
+    // step while its residual said the opposite, and fell out of both totals.
+    const progressive = rendered && cold.some(
+      (f) => f.tMs >= c.ttfnbrMs! && Math.abs(f.score - c.finalScore) > EPSILON,
+    );
     const predicted = rendered ? c.finalScore * (1 - c.ttfnbrMs! / c.horizonMs) : null;
     return {
       label: r.label,

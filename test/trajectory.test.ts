@@ -1,11 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { trajectory, renderTrajectory } from '../src/report/trajectory.ts';
+import { trajectory, renderTrajectory, EPSILON } from '../src/report/trajectory.ts';
 import type { RunResult, ScoredFrame } from '../src/types.ts';
 
-const frame = (index: number, score: number): ScoredFrame => ({
-  index, tMs: index * 1000, class: score > 0 ? 'render' : 'blank', reason: '',
-  screenshotPath: `/f${index}.png`, dhash: null, colorSig: null, inkRatio: score,
+/**
+ * A frame at an explicit time and class.
+ *
+ * The timestamps matter: `progressive` asks which states a run passed through
+ * *after* it first rendered, so a fixture whose frames all sit at 0-3s while
+ * its curve claims a 6.8s first render is not describing a possible run.
+ */
+const frame = (tMs: number, score: number, cls: ScoredFrame['class'] = 'render'): ScoredFrame => ({
+  index: tMs, tMs, class: cls, reason: '',
+  screenshotPath: `/f${tMs}.png`, dhash: null, colorSig: null, inkRatio: score,
   text: '', offscreenTextChars: 0, title: '', favicon: null, tabSignal: false,
   httpStatus: 200, consoleErrors: [], entityCoverage: score, entitiesFound: [],
   domSignature: '', captureMs: 1, score, scoreSource: 'judge', phase: 'cold',
@@ -32,7 +39,7 @@ const run = (over: { frames: ScoredFrame[]; auc: number; ttfr: number | null; fi
 
 /** Blank until 15s, then the finished page: the shape almost every run has. */
 const step = (): RunResult => run({
-  frames: [frame(0, 0), frame(1, 0), frame(2, 1), frame(3, 1)],
+  frames: [frame(0, 0, 'blank'), frame(5_000, 0, 'blank'), frame(15_000, 1), frame(20_000, 1)],
   ttfr: 15_000, final: 1, auc: 1 * (1 - 15_000 / 300_000),
 });
 
@@ -49,7 +56,7 @@ test('a run scored part-done is the one the curve is for', () => {
   // at 27.4s. The endpoints predict a larger area than the run actually earned,
   // because it spent twenty seconds below its final score.
   const rep = trajectory([run({
-    frames: [frame(0, 0), frame(1, 0.833), frame(2, 0.833), frame(3, 1)],
+    frames: [frame(0, 0, 'blank'), frame(6_800, 0.833), frame(8_000, 0.833), frame(27_400, 1)],
     ttfr: 6_800, final: 1, auc: 0.9658, model: 'claude-opus-5',
   })]);
   assert.equal(rep.progressive, 1);
@@ -63,7 +70,7 @@ test('a run that scored below 1 throughout is still a step, not a trajectory', (
   // it, which is exactly why the prediction is a product and not 1 - ttfr/H:
   // reading this as "the curve has a shape" would be wrong.
   const rep = trajectory([run({
-    frames: [frame(0, 0), frame(1, 0.833), frame(2, 0.833)],
+    frames: [frame(0, 0, 'blank'), frame(12_300, 0.833), frame(20_000, 0.833)],
     ttfr: 12_300, final: 0.833, auc: 0.833 * (1 - 12_300 / 300_000),
   })]);
   assert.equal(rep.progressive, 0);
@@ -71,7 +78,7 @@ test('a run that scored below 1 throughout is still a step, not a trajectory', (
 });
 
 test('a run that never rendered is counted, not divided by', () => {
-  const rep = trajectory([run({ frames: [frame(0, 0)], ttfr: null, final: 0, auc: 0 })]);
+  const rep = trajectory([run({ frames: [frame(0, 0, 'blank')], ttfr: null, final: 0, auc: 0 })]);
   assert.equal(rep.neverRendered, 1);
   assert.equal(rep.runs[0]!.aucFromEndpoints, null);
   assert.equal(rep.runs[0]!.residual, null);
@@ -82,4 +89,27 @@ test('the verdict says plainly when nothing in the set has a shape', () => {
   const text = renderTrajectory(trajectory([step(), step(), step()]));
   assert.match(text, /No run here ever rendered a partial page/);
   assert.match(text, /ranking on AUC ranks on those/);
+});
+
+test('a placeholder the judge scores zero still counts as a trajectory', () => {
+  // ttfnbrMs is the first frame the *classifier* calls a render, whatever the
+  // judge then scores it. An agent that paints a placeholder worth 0.000 and
+  // fills it in afterwards is doing exactly what the protocol asks for, and a
+  // "score above zero" test counted it as a step while its residual said the
+  // opposite -- so it fell out of both totals.
+  const frames = [frame(0, 0, 'blank'), frame(10_000, 0), frame(20_000, 0), frame(30_000, 0.8)];
+  const rep = trajectory([run({ frames, ttfr: 10_000, final: 0.8, auc: 0.72 })]);
+  assert.equal(rep.runs[0]!.progressive, true, 'the run passed through a state that was not its answer');
+  assert.equal(rep.progressive, 1);
+  assert.ok(Math.abs(rep.runs[0]!.residual!) > EPSILON, 'and the residual agrees');
+  assert.equal(rep.stepwise, 0, 'so it is not counted as a step as well');
+});
+
+test('a run that renders once at its final score is still a step', () => {
+  // The guard against over-correcting: frames before first render are not
+  // states the run passed through on the way anywhere.
+  const frames = [frame(0, 0, 'blank'), frame(10_000, 1), frame(11_000, 1)];
+  const rep = trajectory([run({ frames, ttfr: 10_000, final: 1, auc: 1 * (1 - 10_000 / 300_000) })]);
+  assert.equal(rep.runs[0]!.progressive, false);
+  assert.equal(rep.stepwise, 1);
 });

@@ -367,8 +367,10 @@ async function main(): Promise<void> {
     if (!Number.isFinite(perRun) || perRun < 2) fail('--per-run must be at least 2');
     const items: RateItem[] = [];
     let briefPrompt = '';
+    const briefs = new Set<string>();
     for (const d of dirs) {
       const r = JSON.parse(await readFile(join(d, 'result.json'), 'utf8')) as RunResult;
+      briefs.add(r.brief);
       if (!briefPrompt && r.briefPath) {
         // Best effort: a run whose brief has since moved still rates fine, the
         // sheet just cannot show the rater what was asked for.
@@ -384,6 +386,18 @@ async function main(): Promise<void> {
           dataUri: `data:image/png;base64,${(await readFile(f.screenshotPath!)).toString('base64')}`,
         });
       }
+    }
+    // One sheet shows one brief at the top and asks whether each frame meets
+    // it. Frames from a second brief would be judged against requirements they
+    // were never given, and the answers would look exactly like real ones --
+    // the same failure `p2p compare` refuses for rankings. `runs/*/` is the
+    // natural way to type this, so it has to be caught rather than documented.
+    if (briefs.size > 1) {
+      fail(
+        `cannot build one rating sheet from runs of different briefs (${[...briefs].join(', ')}): the sheet ` +
+          'shows a rater one brief and asks whether each frame meets it, so frames from another brief would ' +
+          'be rated against requirements nobody showed them. Build one sheet per brief.',
+      );
     }
     if (!items.length) fail('no frames with screenshots in those runs');
     const out = resolve(flags.out ?? join('runs', 'ratings.html'));
@@ -402,15 +416,28 @@ async function main(): Promise<void> {
     if (!ratingsPath || !dirs.length) fail('calibrate needs <ratings.json> and at least one run directory');
     const ratings = JSON.parse(await readFile(ratingsPath, 'utf8')) as Rating[];
     const frames = new Map<string, ScoredFrame>();
+    const briefs = new Set<string>();
     let threshold: number | null = null;
     for (const d of dirs) {
       const r = JSON.parse(await readFile(join(d, 'result.json'), 'utf8')) as RunResult;
+      briefs.add(r.brief);
       for (const f of r.frames) frames.set(`${r.runId}:${f.index}`, f);
       if (threshold === null && r.briefPath) {
         try {
           threshold = (await loadBrief(r.briefPath)).reviewableThreshold;
         } catch { /* reported as unknown below */ }
       }
+    }
+    // `reviewableThreshold` belongs to a brief. Fitting one number across
+    // several fits it to none of them, and the agreement rate would average
+    // scores that were never on one scale -- the brief's own rubric decides
+    // what a 0.6 means.
+    if (briefs.size > 1) {
+      fail(
+        `cannot calibrate across runs of different briefs (${[...briefs].join(', ')}): reviewableThreshold is ` +
+          'a property of one brief and its rubric, so a threshold fitted across several describes none of ' +
+          'them. Calibrate one brief at a time.',
+      );
     }
     if (threshold === null) fail('could not load the brief from any of those runs, so there is no threshold to check');
     const c = calibrate(ratings, frames, threshold);
