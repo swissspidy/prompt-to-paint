@@ -26,6 +26,7 @@ import {
 } from './report/video.ts';
 import { aggregate, renderAggregate } from './report/aggregate.ts';
 import { Progress } from './progress.ts';
+import { sampleForRating, ratingSheet, calibrate, type RateItem, type Rating } from './rate.ts';
 import { salvageRun } from './salvage.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
 import type { Adapter, RunResult, ScoredFrame } from './types.ts';
@@ -55,6 +56,10 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
+  p2p rate     <runDir...> [--out <file>]   blinded sheet asking a person which
+                                            frames they could give feedback on
+  p2p calibrate <ratings.json> <runDir...>  check reviewableThreshold against
+                                            those answers, and fit a better one
   p2p salvage  <runDir>                     rebuild result.json for a run whose
                                             process died before it wrote one
   p2p briefs                                list bundled briefs
@@ -107,6 +112,11 @@ Options for floor:
 Options for rescore:
   --brief      score against this brief   (default: the one the run recorded)
   --judge, --max-judged, --judge-width    as for run
+
+Options for rate:
+  --per-run    frames sampled per run, spread across the score range (default 8)
+  --out        sheet to write   (default runs/ratings.html)
+  --seed       shuffle seed, so a sheet can be rebuilt identically (default 1)
 
 Options for salvage:
   (none) -- reads run.json and frames.ndjson from the run directory. The
@@ -327,6 +337,83 @@ async function main(): Promise<void> {
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs }));
     console.log(`  leaderboard: ${out}\n`);
+    return;
+  }
+
+  if (cmd === 'rate') {
+    // Builds the instrument that checks `reviewableThreshold` against people.
+    // The sheet is blinded: no scores, no labels, no timestamps reach it.
+    const { values: flags, positionals: dirs } = parse({
+      args: argv,
+      allowPositionals: true,
+      options: { out: { type: 'string' }, 'per-run': { type: 'string' }, seed: { type: 'string' } },
+    });
+    if (!dirs.length) fail('rate needs at least one run directory');
+    const perRun = Number(flags['per-run'] ?? 8);
+    if (!Number.isFinite(perRun) || perRun < 2) fail('--per-run must be at least 2');
+    const items: RateItem[] = [];
+    let briefPrompt = '';
+    for (const d of dirs) {
+      const r = JSON.parse(await readFile(join(d, 'result.json'), 'utf8')) as RunResult;
+      if (!briefPrompt && r.briefPath) {
+        // Best effort: a run whose brief has since moved still rates fine, the
+        // sheet just cannot show the rater what was asked for.
+        try {
+          briefPrompt = (await loadBrief(r.briefPath)).prompt;
+        } catch { /* fall through to the note below */ }
+      }
+      for (const f of sampleForRating(r, perRun)) {
+        items.push({
+          runId: r.runId,
+          index: f.index,
+          tMs: f.tMs,
+          dataUri: `data:image/png;base64,${(await readFile(f.screenshotPath!)).toString('base64')}`,
+        });
+      }
+    }
+    if (!items.length) fail('no frames with screenshots in those runs');
+    const out = resolve(flags.out ?? join('runs', 'ratings.html'));
+    await mkdir(dirname(out), { recursive: true });
+    await writeFile(out, ratingSheet(items, briefPrompt || '(the brief could not be loaded from this run)', Number(flags.seed ?? 1)));
+    console.log(`\n  rating sheet: ${out}`);
+    console.log(`  ${items.length} frames from ${dirs.length} run(s), blinded and shuffled.`);
+    console.log('  Send it to a person, get ratings.json back, then:\n');
+    console.log(`    npm run p2p -- calibrate ratings.json ${dirs.join(' ')}\n`);
+    return;
+  }
+
+  if (cmd === 'calibrate') {
+    const { positionals } = parse({ args: argv, allowPositionals: true, options: {} });
+    const [ratingsPath, ...dirs] = positionals;
+    if (!ratingsPath || !dirs.length) fail('calibrate needs <ratings.json> and at least one run directory');
+    const ratings = JSON.parse(await readFile(ratingsPath, 'utf8')) as Rating[];
+    const frames = new Map<string, ScoredFrame>();
+    let threshold: number | null = null;
+    for (const d of dirs) {
+      const r = JSON.parse(await readFile(join(d, 'result.json'), 'utf8')) as RunResult;
+      for (const f of r.frames) frames.set(`${r.runId}:${f.index}`, f);
+      if (threshold === null && r.briefPath) {
+        try {
+          threshold = (await loadBrief(r.briefPath)).reviewableThreshold;
+        } catch { /* reported as unknown below */ }
+      }
+    }
+    if (threshold === null) fail('could not load the brief from any of those runs, so there is no threshold to check');
+    const c = calibrate(ratings, frames, threshold);
+    if (!c.n) fail('none of those ratings matched a frame in those runs');
+    const pct = (x: number): string => `${(x * 100).toFixed(0)}%`;
+    console.log(`\n  Human validation of "reviewable"  (${c.n} rated frames)`);
+    console.log('  ----------------------------------------------------------------');
+    console.log(`    called reviewable by a person     ${pct(c.humanRate)}`);
+    console.log(`    threshold in the brief            ${c.currentThreshold.toFixed(2)}  ->  agrees ${pct(c.currentAgreement)}`);
+    console.log(`    best threshold for this data      ${c.bestThreshold.toFixed(2)}  ->  agrees ${pct(c.bestAgreement)}`);
+    if (c.unmatched) console.log(`    ! ${c.unmatched} rating(s) matched no frame and were dropped`);
+    if (c.n < 30) {
+      console.log('\n    ! Too few ratings to fit a threshold on. This is the shape of the');
+      console.log('      answer, not the answer: a best threshold read off a handful of');
+      console.log('      frames is fitted to those frames.');
+    }
+    console.log('');
     return;
   }
 
@@ -671,6 +758,9 @@ async function main(): Promise<void> {
       result = await runBenchmark({
         brief,
         briefPath: cmd === 'run' ? values.brief : undefined,
+        // Recorded on the result so a run stays attributable after `--label`
+        // has renamed it to whatever the caller found convenient that day.
+        model: values.model ?? null,
         // A fresh instance per repeat: adapters accumulate per-run state (the
         // Antigravity one records what it learned about the stream), and reusing
         // one would let an earlier repeat decide a later repeat's fidelity.

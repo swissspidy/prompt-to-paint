@@ -26,6 +26,13 @@ export interface RunOptions {
   brief: Brief;
   /** Where the brief came from; recorded so `rescore` can find it again. */
   briefPath?: string;
+  /**
+   * The model the adapter was pointed at, recorded verbatim on the result.
+   *
+   * The adapter itself cannot be asked: the model lives in whichever options
+   * that adapter happens to take, and every one of them spells it differently.
+   */
+  model?: string | null;
   adapter: Adapter;
   runDir: string;
   label: string;
@@ -559,7 +566,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // early the run dies.
     await writeJsonAtomic(headerPath, {
       schema: 1, runId, brief: brief.id, briefPath: opts.briefPath ?? '',
-      adapter: adapter.name, label: opts.label, url, t0Epoch,
+      adapter: adapter.name, model: opts.model ?? null, label: opts.label, url, t0Epoch,
       startedAt: new Date(t0Epoch).toISOString(), horizonMs,
       framesDir, framesLogPath,
     });
@@ -977,6 +984,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     brief: brief.id,
     briefPath: opts.briefPath ?? '',
     adapter: adapter.name,
+    model: opts.model ?? null,
     label: opts.label,
     startedAt: new Date(t0Epoch).toISOString(),
     t0Epoch,

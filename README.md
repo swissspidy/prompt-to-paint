@@ -67,6 +67,43 @@ how much of the page it means to score.
   screenshot. A title Chromium derived from the address — what a document with
   no `<title>` gets — does not count, or every blank page would trip it.
 
+## Where this metric comes from
+
+Area under a quality-over-time curve is not a new idea, and the version here is
+deliberately the old one pointed at a new subject.
+
+- **[Speed Index](https://docs.webpagetest.org/metrics/speedindex/)** (WebPageTest,
+  2012) is the direct ancestor: the area above a *visual completeness* curve,
+  built by filming a page load and scoring each frame. The shape of the metric —
+  film it, score every frame, integrate — is the same one used here.
+
+  The difference is what completeness means. Speed Index scores each frame
+  against **the page's own final state**, so it measures only how quickly a page
+  converged on whatever it was going to be. It cannot tell a fast-rendering
+  correct page from a fast-rendering wrong one, because it has no notion of
+  right. Frames here are scored against **the brief** — an external target fixed
+  before the run — so an agent that paints something instantly and gets it wrong
+  scores badly, where Speed Index would reward it.
+
+- **Anytime algorithms** (Dean & Boddy, 1988; Zilberstein, 1996) are the formal
+  version of the same intuition: a procedure that always has an answer available
+  and improves it given more time is described by its *performance profile*,
+  quality as a function of computation. An agent told to render early and refine
+  is being asked to behave like an anytime algorithm, and this measures its
+  profile.
+
+- **Nielsen's response-time limits** (0.1s, 1s, 10s) are why any of it matters.
+  Past ten seconds attention breaks and the user goes elsewhere. **Every run this
+  harness has recorded crosses that limit before the first pixel**, which is the
+  case for measuring the approach to it rather than the end of it.
+
+- **Time to first token**, in LLM serving, is the same instinct one layer down —
+  and its widespread adoption is the argument that this layer deserves one too.
+
+The contribution here is not the integral. It is scoring frames against an
+external rubric rather than against the run's own endpoint, and reporting the
+decomposition of the latency beside the curve.
+
 ## Where the time actually goes
 
 Wall clock is decomposed into model thinking, tool round trips, dependency
@@ -533,6 +570,43 @@ to need the same treatment on first contact with a real binary.
 **An IDE-only agent with no headless mode cannot be driven by this harness at
 all.** That is a hard limit: the design assumes something startable from a
 command line and handed a prompt.
+
+## Validating "reviewable"
+
+**Time to first reviewable render is the metric this project leans on hardest,
+and it rests on a number somebody chose.** A frame counts as reviewable when its
+score crosses `reviewableThreshold` — `0.5` in every bundled brief. Nothing has
+ever checked that against a person, and "enough of the brief is on screen that a
+human could react to it" is a claim about humans.
+
+`p2p rate` builds the instrument that checks it:
+
+```bash
+# a blinded sheet, from any runs you already have
+npm run p2p -- rate runs/static-page-*/ --per-run 8
+
+# ...a person answers, sends ratings.json back...
+npm run p2p -- calibrate ratings.json runs/static-page-*/
+```
+
+The sheet is one self-contained HTML file — no server, no login, no build —
+because an instrument that needs hosting does not get filled in by the three
+people whose judgement the metric rests on. It shows one frame at a time and
+asks a single question: *could you give the agent useful feedback on what you
+see here?*
+
+**It is blinded, and that is the point.** The rater never sees the frame's
+score, its timestamp, which run or model it came from, or where it sat in the
+sequence — frames are shuffled across every run in the sheet. A rater who can
+see that the harness called a frame `0.85` is agreeing with a number rather than
+judging a picture, and the agreement rate that came back would be evidence of
+nothing. The shuffle seed is recorded so a sheet can be rebuilt exactly.
+
+`p2p calibrate` joins the answers back to the scores and reports three numbers:
+how often people called a frame reviewable, how often the brief's threshold made
+the same call, and **the threshold that would have agreed most**. That last one
+is what `reviewableThreshold` should be — fitted, rather than picked. Under
+thirty ratings it says so rather than pretending the fit means anything.
 
 ## Running the actual experiment
 

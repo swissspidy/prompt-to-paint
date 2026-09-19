@@ -444,6 +444,20 @@ export interface RunResult {
   /** Path the brief was loaded from, so a run can be re-scored later. */
   briefPath: string;
   adapter: string;
+  /**
+   * The model the agent was asked to run, exactly as it was passed.
+   *
+   * A leaderboard's numbers move when the model under test changes, so a run
+   * that cannot name its model cannot be reproduced or attributed. `label` does
+   * not stand in for it: it is free text that defaults to `adapter[+model]` but
+   * that `--label` overwrites wholesale, which is how a run measured against
+   * `claude-sonnet-5` came to record only the word "verify-fixes".
+   *
+   * Null when no model was named and the adapter used its own default -- which
+   * is itself a fact worth recording, since that default moves too. Absent on
+   * runs written before this field existed.
+   */
+  model?: string | null;
   label: string;
   startedAt: string;
   t0Epoch: number;

@@ -231,7 +231,12 @@ export async function judgeRun(
   // P2P_CACHE_DIR because the default is relative to the working directory, so
   // running the same brief from a different shell silently started cold and
   // paid for every verdict again.
-  const cacheDir = opts.cacheDir ?? process.env.P2P_CACHE_DIR ?? join(process.cwd(), '.p2p-cache');
+  // An empty P2P_CACHE_DIR falls back rather than being honoured: `??` treats
+  // '' as a value, so `P2P_CACHE_DIR= p2p run ...` -- an unset variable in a
+  // wrapper script, which is the normal way for this to be empty -- resolved
+  // the cache to the working directory and scattered verdict files across
+  // whatever repository was checked out there.
+  const cacheDir = opts.cacheDir || process.env.P2P_CACHE_DIR || join(process.cwd(), '.p2p-cache');
   await mkdir(cacheDir, { recursive: true });
   // The judge is part of the cache identity, not just the rubric.
   //
