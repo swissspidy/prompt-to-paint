@@ -67,6 +67,61 @@ how much of the page it means to score.
   screenshot. A title Chromium derived from the address — what a document with
   no `<title>` gets — does not count, or every blank page would trip it.
 
+## Does the curve earn its keep?
+
+The headline number is the area under a curve, which is only worth integrating
+if the curve has a shape. An agent that shows a blank page and then the finished
+app draws a **step**, and the area under a step is fixed by two numbers already
+printed beside it:
+
+```
+AUC = finalScore x (1 - timeToFirstRender / horizon)
+```
+
+When that identity holds, ranking on AUC is ranking on those two numbers in a
+trenchcoat. `p2p trajectory` is the self-check:
+
+```bash
+npm run p2p -- trajectory runs/*/result.json
+```
+
+**On the first nine measured runs it held exactly on eight of them.** Three
+Claude models (haiku-4.5, sonnet-5, opus-5), three repeats each, on
+`briefs/static-page.json`, every one told to render early:
+
+```
+    AUC == finalScore x (1 - ttfr/horizon)     8 / 9 runs
+    ever scored at a partial state            1 / 9 runs
+    largest residual                          0.01144
+```
+
+The exception is the interesting one, and it is exactly what the protocol asks
+for: **opus-5 rendered a complete but unstyled page at 6.8s (0.833), then
+styled it in place at 27.4s (1.000).** That run is the only one whose curve has
+a shape, and the metric priced it correctly — it beat a run that first painted
+at 17.8s despite both finishing at 1.00.
+
+So the metric works. Agents just rarely give it anything to work on. **Eight
+times out of nine they went from nothing to finished in one step, having been
+explicitly told not to.**
+
+Two things follow, and they matter more than any ranking this harness has
+produced so far:
+
+- **Report `p2p trajectory` next to any AUC you publish.** A leaderboard whose
+  runs are all steps is a leaderboard of first-render times with extra arithmetic,
+  and should say so rather than let a reader assume otherwise.
+- **The headline finding available here is a negative one.** Not "agent X renders
+  sooner" but "agents do not render progressively, even when told to, and here is
+  the instrument that measures how often." That is a more interesting claim than
+  a ranking, and it is the one the data currently supports.
+
+**What nine runs cannot tell you:** this is one deliberately easy brief where
+eight of nine runs finished at a perfect score, so the ceiling is doing some of
+the work. A harder brief, a shorter horizon, or a stack with a real build step
+could all produce genuine trajectories. The check is cheap — run it on your own
+runs before trusting an AUC ranking.
+
 ## Where this metric comes from
 
 Area under a quality-over-time curve is not a new idea, and the version here is

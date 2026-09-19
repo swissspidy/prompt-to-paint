@@ -21,6 +21,7 @@ import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
 import { renderCompareText, renderCompareHtml, IncomparableRunsError } from './report/compare.ts';
 import { renderLeaderboard, renderLeaderboardText } from './report/leaderboard.ts';
+import { trajectory, renderTrajectory } from './report/trajectory.ts';
 import {
   buildSegments, inferIntervalMs, renderConcat, ffmpegArgs, resolveShot, writeBlankFrame, timelineSpanMs,
 } from './report/video.ts';
@@ -56,6 +57,8 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
+  p2p trajectory <result.json...>           does the curve carry anything that
+                                            finalScore and first render do not?
   p2p rate     <runDir...> [--out <file>]   blinded sheet asking a person which
                                             frames they could give feedback on
   p2p calibrate <ratings.json> <runDir...>  check reviewableThreshold against
@@ -337,6 +340,17 @@ async function main(): Promise<void> {
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs }));
     console.log(`  leaderboard: ${out}\n`);
+    return;
+  }
+
+  if (cmd === 'trajectory') {
+    // The metric's self-check: a curve is only worth integrating if it has a
+    // shape the endpoints do not already give you.
+    const files = argv.filter((a) => !a.startsWith('-'));
+    if (!files.length) fail('trajectory needs at least one result.json');
+    const runs: RunResult[] = [];
+    for (const file of files) runs.push(JSON.parse(await readFile(file, 'utf8')) as RunResult);
+    console.log(renderTrajectory(trajectory(runs)));
     return;
   }
 
