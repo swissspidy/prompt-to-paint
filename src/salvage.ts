@@ -12,6 +12,8 @@ export interface RunHeader {
   brief: string;
   briefPath: string;
   adapter: string;
+  /** Absent on run.json headers written before the model was recorded. */
+  model?: string | null;
   label: string;
   url: string;
   t0Epoch: number;
@@ -144,6 +146,7 @@ export async function salvageRun(runDir: string): Promise<SalvageOutcome> {
     brief: header.brief,
     briefPath: header.briefPath,
     adapter: header.adapter,
+    model: header.model ?? null,
     label: header.label,
     startedAt: header.startedAt,
     t0Epoch: header.t0Epoch,

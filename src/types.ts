@@ -236,6 +236,16 @@ export interface AgentEvent {
   toolName?: string;
   toolId?: string;
   text?: string;
+  /**
+   * The agent's own stream called this turn a failure.
+   *
+   * Separate from a non-zero exit, because the common case does not exit
+   * non-zero. Claude Code reports an exhausted API retry as a result event with
+   * `is_error` set and -- confusingly -- `subtype: "success"`, then exits 0. A
+   * run that never started is otherwise indistinguishable from an agent that
+   * built nothing, and scores a clean 0.000.
+   */
+  isError?: boolean;
   raw?: unknown;
 }
 
@@ -444,6 +454,20 @@ export interface RunResult {
   /** Path the brief was loaded from, so a run can be re-scored later. */
   briefPath: string;
   adapter: string;
+  /**
+   * The model the agent was asked to run, exactly as it was passed.
+   *
+   * A leaderboard's numbers move when the model under test changes, so a run
+   * that cannot name its model cannot be reproduced or attributed. `label` does
+   * not stand in for it: it is free text that defaults to `adapter[+model]` but
+   * that `--label` overwrites wholesale, which is how a run measured against
+   * `claude-sonnet-5` came to record only the word "verify-fixes".
+   *
+   * Null when no model was named and the adapter used its own default -- which
+   * is itself a fact worth recording, since that default moves too. Absent on
+   * runs written before this field existed.
+   */
+  model?: string | null;
   label: string;
   startedAt: string;
   t0Epoch: number;
@@ -491,7 +515,14 @@ export interface RunResult {
    * Set when the agent process died before the harness stopped it. A run that
    * failed to launch must never be mistaken for an agent that built nothing.
    */
-  agentFailure: { exitCode: number | null; atMs: number; logPath: string } | null;
+  agentFailure: {
+    /** Null when the process exited cleanly but its stream reported an error. */
+    exitCode: number | null;
+    atMs: number;
+    logPath: string;
+    /** What the agent said went wrong, when it said anything. */
+    message?: string;
+  } | null;
   /** Why the cold-start window closed. Absent on results written before v0.2. */
   endReason?: RunEndReason;
   /**

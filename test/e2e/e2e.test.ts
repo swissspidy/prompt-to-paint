@@ -1035,3 +1035,54 @@ test('compare refuses runs that are not on the same scale', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// One rating sheet asks about one brief. Frames from a second brief would be
+// rated against requirements nobody showed the rater, and the answers would
+// look exactly like real ones -- the failure `p2p compare` already refuses for
+// rankings. `runs/*/` is the natural way to type this, so it has to be caught.
+test('rate and calibrate refuse to mix briefs', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-mixed-'));
+  try {
+    const mk = async (name: string, briefId: string): Promise<string> => {
+      const d = join(dir, name);
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, 'result.json'), JSON.stringify({
+        schema: 1, runId: name, brief: briefId, briefPath: '', adapter: 'exec', label: name,
+        startedAt: '', t0Epoch: 0, wallMs: 1, url: '',
+        curve: {
+          horizonMs: 1000, auc: 0, ttfnbrMs: null, ttfrrMs: null, finalScore: 0,
+          peakScore: 0, timeToPeakMs: null, regression: 0, heldToHorizon: true, runEndMs: 1,
+        },
+        decomposition: {
+          wallMs: 1,
+          buckets: { model: 0, tool_overhead: 0, install: 0, build: 0, devserver_boot: 0, first_paint: 0, residual: 1 },
+          coverage: 0, crossCheck: { reportedApiMs: null, attributedModelMs: 0, deltaMs: null }, notes: [],
+        },
+        iterations: [], frames: [], phases: [], agentEvents: [],
+        judge: { backend: 'none', model: null, framesJudged: 0, degraded: true },
+        viewport: { width: 1280, height: 800 }, agentFailure: null, endReason: 'turn',
+        protocol: { renderEarly: true }, warnings: [],
+      }));
+      return d;
+    };
+    const a = await mk('a', 'static-page');
+    const b = await mk('b', 'ops-dashboard');
+    await writeFile(join(dir, 'ratings.json'), '[]');
+
+    for (const args of [
+      ['src/cli.ts', 'rate', a, b],
+      ['src/cli.ts', 'calibrate', join(dir, 'ratings.json'), a, b],
+    ]) {
+      await assert.rejects(
+        () => run(process.execPath, args),
+        (e: { stderr?: string }) => {
+          assert.match(e.stderr ?? '', /different briefs \(static-page, ops-dashboard\)/, args.join(' '));
+          assert.doesNotMatch(e.stderr ?? '', /at async main/, 'a usage error, not a stack trace');
+          return true;
+        },
+      );
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -67,6 +67,150 @@ how much of the page it means to score.
   screenshot. A title Chromium derived from the address — what a document with
   no `<title>` gets — does not count, or every blank page would trip it.
 
+## Does the curve earn its keep?
+
+The headline number is the area under a curve, which is only worth integrating
+if the curve has a shape. An agent that shows a blank page and then the finished
+app draws a **step**, and the area under a step is fixed by two numbers already
+printed beside it:
+
+```
+AUC = finalScore x (1 - timeToFirstRender / horizon)
+```
+
+When that identity holds, ranking on AUC is ranking on those two numbers in a
+trenchcoat. `p2p trajectory` is the self-check:
+
+```bash
+npm run p2p -- trajectory runs/*/result.json
+```
+
+**On the first nine measured runs it held exactly on eight of them.** Three
+Claude models (haiku-4.5, sonnet-5, opus-5), three repeats each, on
+`briefs/static-page.json`, every one told to render early:
+
+```
+    AUC == finalScore x (1 - ttfr/horizon)     8 / 9 runs
+    ever scored at a partial state            1 / 9 runs
+    largest residual                          0.01144
+```
+
+The exception is the interesting one, and it is exactly what the protocol asks
+for: **opus-5 rendered a complete but unstyled page at 6.8s (0.833), then
+styled it in place at 27.4s (1.000).** That run is the only one whose curve has
+a shape, and the metric priced it correctly — it beat a run that first painted
+at 17.8s despite both finishing at 1.00.
+
+So the metric works. Agents just rarely give it anything to work on. **Eight
+times out of nine they went from nothing to finished in one step, having been
+explicitly told not to.**
+
+Two things follow, and they matter more than any ranking this harness has
+produced so far:
+
+- **Report `p2p trajectory` next to any AUC you publish.** A leaderboard whose
+  runs are all steps is a leaderboard of first-render times with extra arithmetic,
+  and should say so rather than let a reader assume otherwise.
+- **The headline finding available here is a negative one.** Not "agent X renders
+  sooner" but "agents do not render progressively, even when told to, and here is
+  the instrument that measures how often." That is a more interesting claim than
+  a ranking, and it is the one the data currently supports.
+
+**What nine runs cannot tell you:** this is one deliberately easy brief where
+eight of nine runs finished at a perfect score, so the ceiling is doing some of
+the work. A harder brief, a shorter horizon, or a stack with a real build step
+could all produce genuine trajectories. The check is cheap — run it on your own
+runs before trusting an AUC ranking.
+
+### Dropping the instruction changes nothing
+
+The same nine runs again with `--no-render-early`, paired by model:
+
+```
+  What the instruction was worth  (same agent, same brief, told vs not told)
+  run                       AUC told  not told    delta  first render
+  ----------------------------------------------------------------------------
+  claude-code:claude-haik      0.963     0.955   +0.008  same
+  claude-code:claude-sonn      0.955     0.952   +0.004  1.1s sooner
+  claude-code:claude-opus      0.941     0.944   −0.003  same
+```
+
+Deltas of ±0.008 against a within-model noise range of up to 0.167. **The
+instruction is worth nothing measurable** — which is the result this comparison
+exists to be able to report, because it means the headline number is measuring
+the agent rather than its instruction-following.
+
+With one caveat that the averages hide: **not told, zero of nine runs rendered
+progressively; told, one did.** The instruction almost never changes behaviour,
+and when it does, it changes it completely.
+
+### Whether the curve has a shape depends on the judge
+
+Re-scoring that one progressive run under a second judge:
+
+| judge | AUC | score levels | its verdict on the 6.8s frame |
+|---|---|---|---|
+| `claude-sonnet-5` | 0.966 | 0, **0.833**, 1.0 | "content complete but page looks like unstyled raw HTML" |
+| `claude-haiku-4-5` | 0.977 | 0, 1.0 | "all criteria met" |
+
+Haiku did not dock the unstyled page for the rubric's `styled` criterion, and
+scoring it 1.00 collapsed the only trajectory in eighteen runs back into a step.
+**Judge strictness decides whether the metric has anything to measure at all** —
+which is the strongest possible argument for the rule that runs scored by
+different judges may not share a table.
+
+Judge *self*-agreement, by contrast, was perfect. Pointing `P2P_CACHE_DIR` at a
+fresh directory defeats the verdict cache and forces real calls, so the same
+judge can be asked the same question twice:
+
+```bash
+P2P_CACHE_DIR=$(mktemp -d) npm run p2p -- rescore runs/some-run --judge anthropic:claude-sonnet-5
+```
+
+Three runs, asked twice each: **identical AUC to four decimal places every
+time**, with only cosmetic rewording between the two verdicts. `claude-sonnet-5`
+refuses a sampling temperature and the harness correctly warns that variance is
+therefore inside the AUC — but on this evidence that variance is theoretical
+rather than observed. The caveat is right to be there and should not be read as
+a measured effect.
+
+## Where this metric comes from
+
+Area under a quality-over-time curve is not a new idea, and the version here is
+deliberately the old one pointed at a new subject.
+
+- **[Speed Index](https://docs.webpagetest.org/metrics/speedindex/)** (WebPageTest,
+  2012) is the direct ancestor: the area above a *visual completeness* curve,
+  built by filming a page load and scoring each frame. The shape of the metric —
+  film it, score every frame, integrate — is the same one used here.
+
+  The difference is what completeness means. Speed Index scores each frame
+  against **the page's own final state**, so it measures only how quickly a page
+  converged on whatever it was going to be. It cannot tell a fast-rendering
+  correct page from a fast-rendering wrong one, because it has no notion of
+  right. Frames here are scored against **the brief** — an external target fixed
+  before the run — so an agent that paints something instantly and gets it wrong
+  scores badly, where Speed Index would reward it.
+
+- **Anytime algorithms** (Dean & Boddy, 1988; Zilberstein, 1996) are the formal
+  version of the same intuition: a procedure that always has an answer available
+  and improves it given more time is described by its *performance profile*,
+  quality as a function of computation. An agent told to render early and refine
+  is being asked to behave like an anytime algorithm, and this measures its
+  profile.
+
+- **Nielsen's response-time limits** (0.1s, 1s, 10s) are why any of it matters.
+  Past ten seconds attention breaks and the user goes elsewhere. **Every run this
+  harness has recorded crosses that limit before the first pixel**, which is the
+  case for measuring the approach to it rather than the end of it.
+
+- **Time to first token**, in LLM serving, is the same instinct one layer down —
+  and its widespread adoption is the argument that this layer deserves one too.
+
+The contribution here is not the integral. It is scoring frames against an
+external rubric rather than against the run's own endpoint, and reporting the
+decomposition of the latency beside the curve.
+
 ## Where the time actually goes
 
 Wall clock is decomposed into model thinking, tool round trips, dependency
@@ -164,7 +308,9 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe -
 ```
 
 Each run writes a directory containing `result.json` (every frame, phase and
-event), `report.html` (curve, decomposition, filmstrip), `frames/` (one
+event), `report.html` (curve, decomposition, filmstrip — screenshots are inlined
+rather than linked, so the page can be attached or archived on its own and still
+render), `frames/` (one
 screenshot per distinct visual state), `prompt.txt` (the exact text the agent
 was given), `run.json` and `frames.ndjson` (the timeline as it happens — see
 [Recovering an interrupted run](#recovering-an-interrupted-run)), `phases.jsonl`
@@ -294,6 +440,19 @@ The window closes on whichever comes first: the agent's turn completing
 horizon (`horizon`). The reason is recorded with the result and printed by
 `p2p leaderboard`, because a run the agent finished and a run that was cut off
 are not the same measurement.
+
+**A run whose agent never started is not a measurement.** Two of nine runs in
+one sitting ended with the agent's API returning repeated 529s. Claude Code
+reports that as a result event carrying `is_error` and — confusingly —
+`subtype: "success"`, then exits 0. Matching on the subtype or on the exit code
+saw a healthy run that had built nothing, and recorded it as a clean `0.000`.
+Two of three repeats failing that way would have put a model's median AUC on
+the floor and ranked it by its provider's capacity that afternoon.
+
+Such a run is now recorded as a failure with no exit code, which is the truth —
+the process ended cleanly and did no work. `p2p compare` and `p2p leaderboard`
+refuse to rank it, and `--repeat` leaves it out of the median and says how many
+it left out.
 
 Quiescence is the backstop for an agent that ignores the sentinel: no visible
 change, no agent output, and no shimmed command running, all at once, for
@@ -532,6 +691,43 @@ to need the same treatment on first contact with a real binary.
 all.** That is a hard limit: the design assumes something startable from a
 command line and handed a prompt.
 
+## Validating "reviewable"
+
+**Time to first reviewable render is the metric this project leans on hardest,
+and it rests on a number somebody chose.** A frame counts as reviewable when its
+score crosses `reviewableThreshold` — `0.5` in every bundled brief. Nothing has
+ever checked that against a person, and "enough of the brief is on screen that a
+human could react to it" is a claim about humans.
+
+`p2p rate` builds the instrument that checks it:
+
+```bash
+# a blinded sheet, from any runs you already have
+npm run p2p -- rate runs/static-page-*/ --per-run 8
+
+# ...a person answers, sends ratings.json back...
+npm run p2p -- calibrate ratings.json runs/static-page-*/
+```
+
+The sheet is one self-contained HTML file — no server, no login, no build —
+because an instrument that needs hosting does not get filled in by the three
+people whose judgement the metric rests on. It shows one frame at a time and
+asks a single question: *could you give the agent useful feedback on what you
+see here?*
+
+**It is blinded, and that is the point.** The rater never sees the frame's
+score, its timestamp, which run or model it came from, or where it sat in the
+sequence — frames are shuffled across every run in the sheet. A rater who can
+see that the harness called a frame `0.85` is agreeing with a number rather than
+judging a picture, and the agreement rate that came back would be evidence of
+nothing. The shuffle seed is recorded so a sheet can be rebuilt exactly.
+
+`p2p calibrate` joins the answers back to the scores and reports three numbers:
+how often people called a frame reviewable, how often the brief's threshold made
+the same call, and **the threshold that would have agreed most**. That last one
+is what `reviewableThreshold` should be — fitted, rather than picked. Under
+thirty ratings it says so rather than pretending the fit means anything.
+
 ## Running the actual experiment
 
 The interesting hypothesis is that on greenfield tasks the toolchain dominates
@@ -579,6 +775,42 @@ optimising is not the bottleneck" is only credible with the floor to compare
 against, which is why the control ships with the harness rather than as an
 afterthought.
 
+### What three repeats already showed
+
+Nine runs — three Claude models, three repeats each, `briefs/static-page.json`,
+all told to render early:
+
+| model | AUC median | AUC range | first render median | first render range |
+|---|---|---|---|---|
+| `claude-haiku-4-5` | 0.963 | **0.167** | 11.1s | 2.3s |
+| `claude-sonnet-5` | 0.955 | 0.007 | 13.4s | 2.0s |
+| `claude-opus-5` | 0.941 | 0.025 | 17.8s | **11.1s** |
+
+Read the medians as a ranking and haiku beats opus by 0.022. **Haiku's own
+spread across three identical runs is 0.167 — seven times that gap.** There is
+no ranking here, only noise, and the aggregate said so itself without being
+asked:
+
+```
+  ! AUC ranges over 0.167 across 3 runs. Treat any ranking against
+    another agent as unresolved unless the gap exceeds that.
+```
+
+Opus is the other warning: its first render ranged from 6.8s to 17.9s across
+three runs of the same prompt. A single run of either model would have
+supported a confident and wrong conclusion.
+
+Two practical consequences:
+
+- **Three repeats is a smoke test, not a measurement.** It was enough to show
+  the ranking is unresolved; it is nowhere near enough to resolve it. Budget
+  repeats until the within-model range is smaller than the between-model gap,
+  and report both numbers when you publish either.
+- **Final score could not rank these at all** — eight of nine runs finished at
+  1.00. `static-page` is saturated for current frontier models. A brief every
+  agent aces measures nothing except how fast they ace it, which is a good
+  reason to write harder ones before running a leaderboard on it.
+
 ## Writing a brief
 
 ```jsonc
@@ -606,6 +838,58 @@ afterthought.
 Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
+
+### Write briefs that are not saturated
+
+`briefs/static-page.json` put **eight of nine frontier-model runs at a final
+score of 1.00**, and eight of nine curves were steps. A brief every agent aces
+in one shot measures how fast they ace it and nothing else: final score cannot
+rank, and the AUC collapses to `finalScore x (1 - ttfr/horizon)` — see [does the
+curve earn its keep?](#does-the-curve-earn-its-keep). That is a property of the
+brief, not of the metric.
+
+Four levers, in rough order of how much they helped:
+
+- **Enough weighted criteria that partial work lands between 0 and 1.** Five
+  criteria give coarse steps; a run is nearly all-or-nothing. `ops-dashboard`
+  carries nine criteria totalling weight 14, so a page missing its chart and its
+  alignment scores distinctly from one missing only the chart.
+- **Include a criterion models actually fail.** Across eighteen runs, `styled`
+  was the *only* criterion that ever docked anyone. Content-presence criteria
+  ("is the footer there") are free marks for current models. Judgements about
+  visual design, numeric alignment and proportionality are not.
+- **Enough content that one write is real work.** Forty-odd figures to
+  transcribe means an agent either spends a long time before its first paint or
+  renders in stages — and which one it picks is exactly what this measures.
+- **A viewport tall enough to contain what you are scoring.** Entity coverage
+  and the judge both see only the viewport, so a table scored below the fold is
+  a criterion nobody can meet. `ops-dashboard` sets `1280x1800` for that reason.
+
+`briefs/ops-dashboard.json` is the worked example of all four, and is still a
+`serveStatic` brief — no toolchain, so it isolates the agent.
+
+**It only half worked, which is worth recording.** Nine runs of the same three
+models on `ops-dashboard`:
+
+| | `static-page` | `ops-dashboard` |
+|---|---|---|
+| first render | 10.1s – 17.9s | **20.2s – 64.4s** |
+| wall clock | 15s – 18s | **52s – 322s** |
+| final score | 1.00 on 8 of 9 | **1.00 on every run that rendered** |
+| curves with a shape | 1 of 9 | **0 of 9** |
+
+Density bought a much wider spread in the thing the metric is actually about —
+first render went from a 7.8s spread to a 44s one, which is real discrimination
+between models. It did **not** break the score ceiling and it did **not**
+produce trajectories. Every run that rendered still scored a perfect 1.00, and
+every curve was still a step.
+
+That leaves an open question this harness can now answer but has not: is the
+ceiling the models, or the judge? A rubric asking whether numeric columns are
+aligned and whether bar lengths are proportional to their figures, which never
+docks anyone across nine dense dashboards, is either describing things that are
+genuinely easy or being marked leniently. `p2p rate` and `p2p calibrate` exist
+to settle exactly that — put those frames in front of a person and find out.
 
 **An iteration check reads text the way the browser renders it.**
 `document.body.innerText` is the *rendered* text, so CSS decides its case: a

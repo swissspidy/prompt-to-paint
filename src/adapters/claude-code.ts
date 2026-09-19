@@ -57,6 +57,8 @@ interface StreamEvent {
   duration_api_ms?: number;
   duration_ms?: number;
   is_error?: boolean;
+  /** The CLI's own summary of the turn, which on failure is the error text. */
+  result?: string;
 }
 
 /**
@@ -268,7 +270,17 @@ export function translateClaudeCodeEvent(ev: StreamEvent, tMs: number): AgentEve
     const isResult = blocksOf(ev.message).some((c) => c.type === 'tool_result');
     return [{ tMs, type: isResult ? 'tool_result' : 'user', raw: ev }];
   }
-  if (ev.type === 'result') return [{ tMs, type: 'result', subtype: ev.subtype, raw: ev }];
+  if (ev.type === 'result') {
+    // `is_error` rather than `subtype`: an exhausted API retry arrives as
+    // is_error with subtype 'success', so keying on the subtype misses exactly
+    // the failure that matters most.
+    const failed = ev.is_error === true;
+    return [{
+      tMs, type: 'result', subtype: ev.subtype, raw: ev,
+      ...(failed ? { isError: true } : {}),
+      ...(failed && typeof ev.result === 'string' ? { text: ev.result.slice(0, 500) } : {}),
+    }];
+  }
   if (ev.type === 'system') return [{ tMs, type: 'system', subtype: ev.subtype, raw: ev }];
   return [{ tMs, type: 'raw', raw: ev }];
 }

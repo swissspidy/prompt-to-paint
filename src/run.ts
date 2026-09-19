@@ -26,6 +26,13 @@ export interface RunOptions {
   brief: Brief;
   /** Where the brief came from; recorded so `rescore` can find it again. */
   briefPath?: string;
+  /**
+   * The model the adapter was pointed at, recorded verbatim on the result.
+   *
+   * The adapter itself cannot be asked: the model lives in whichever options
+   * that adapter happens to take, and every one of them spells it differently.
+   */
+  model?: string | null;
   adapter: Adapter;
   runDir: string;
   label: string;
@@ -52,6 +59,14 @@ export interface RunOptions {
    * the AUC by nothing and saves the rest of the horizon.
    */
   quietForMs?: number;
+  /**
+   * Whether this run could involve a package manager or bundler at all.
+   *
+   * Defaults to whatever the brief implies: a `target.serveStatic` brief rules
+   * a toolchain out. The floor sets it explicitly, because its `static`
+   * template is a no-toolchain control that no brief field describes.
+   */
+  expectsToolchain?: boolean;
   /** Drop the "render something early" clause from the protocol suffix. */
   noRenderEarly?: boolean;
   /** Cap on model calls in the scoring pass. */
@@ -551,7 +566,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     // early the run dies.
     await writeJsonAtomic(headerPath, {
       schema: 1, runId, brief: brief.id, briefPath: opts.briefPath ?? '',
-      adapter: adapter.name, label: opts.label, url, t0Epoch,
+      adapter: adapter.name, model: opts.model ?? null, label: opts.label, url, t0Epoch,
       startedAt: new Date(t0Epoch).toISOString(), horizonMs,
       framesDir, framesLogPath,
     });
@@ -801,6 +816,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     serverReadyMs,
     firstPaintMs,
     reportedApiMs,
+    toolchain: opts.expectsToolchain ?? brief.target?.serveStatic !== true,
   });
 
   // Iteration attribution, filled in here rather than in runIteration: the shim
@@ -827,19 +843,34 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       'Iteration timings come from re-running the agent, not from continuing a live session, so they include process startup and however long the agent takes to re-read the project. They are not comparable to live-session iteration numbers from another adapter.',
     );
   }
-  const erroredTurns = agentEvents.filter((e) => e.type === 'assistant' && e.subtype === 'error');
-  if (erroredTurns.length) {
-    warnings.unshift(
-      `AGENT REPORTED ERRORS: ${erroredTurns.length} turn(s) ended in an error (first: ${
-        erroredTurns[0]?.text ?? 'unknown'
-      }). These numbers describe a failed run, not agent performance.`,
-    );
+  // `isError` rather than a subtype: Claude Code reports an exhausted API retry
+  // as a *result* event carrying is_error and, confusingly, subtype 'success',
+  // then exits 0. Matching on `type === 'assistant' && subtype === 'error'`
+  // missed every one of them, and a run whose agent never got a turn was
+  // recorded as a legitimate 0.000 -- the exact shape of failure this harness
+  // exists to refuse to average into a ranking.
+  const erroredTurns = agentEvents.filter((e) => e.isError || (e.type === 'assistant' && e.subtype === 'error'));
+  // A turn the stream itself called an error is a failed run, whatever the exit
+  // code says. Recorded as a failure with no exit code, which is the truth: the
+  // process ended cleanly and did no work.
+  if (!agentFailure && erroredTurns.length) {
+    const first = erroredTurns[0]!;
+    agentFailure = {
+      exitCode: null,
+      atMs: first.tMs,
+      logPath: agentLogPath,
+      ...(first.text ? { message: first.text } : {}),
+    };
   }
   if (agentFailure) {
     const f = agentFailure as NonNullable<RunResult['agentFailure']>;
     warnings.unshift(
-      `AGENT FAILED: the agent process exited with code ${f.exitCode} after ${(f.atMs / 1000).toFixed(1)}s, before the harness stopped it. ` +
-        `These numbers measure a failed run, not agent performance. See ${f.logPath}.`,
+      f.exitCode === null
+        ? `AGENT FAILED: the agent reported an error ${(f.atMs / 1000).toFixed(1)}s in and did no work` +
+          `${f.message ? ` -- "${f.message}"` : ''}. The process still exited cleanly, so nothing else here ` +
+          `would have told you: these numbers measure a failure to start, not agent performance. See ${f.logPath}.`
+        : `AGENT FAILED: the agent process exited with code ${f.exitCode} after ${(f.atMs / 1000).toFixed(1)}s, before the harness stopped it. ` +
+          `These numbers measure a failed run, not agent performance. See ${f.logPath}.`,
     );
   } else if (adapter.name !== 'exec' && !agentEvents.some((e) => e.type === 'assistant')) {
     warnings.unshift(
@@ -968,6 +999,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     brief: brief.id,
     briefPath: opts.briefPath ?? '',
     adapter: adapter.name,
+    model: opts.model ?? null,
     label: opts.label,
     startedAt: new Date(t0Epoch).toISOString(),
     t0Epoch,

@@ -1,0 +1,98 @@
+{
+  "id": "ops-dashboard",
+  "title": "Dense operations dashboard, no toolchain",
+  "prompt": "Create a single self-contained index.html file (inline CSS, no build step, no dependencies, no JavaScript libraries) for an internal operations dashboard.\n\nHeading: \"Northwind Logistics\" with the subtitle \"Q3 2026 Operations Review\".\n\nA row of four KPI tiles, each showing the figure and its change against last quarter:\n  On-time delivery  94.2%  (+1.8 pts)\n  Average transit   3.4 days  (-0.2 days)\n  Cost per shipment $18.40  (+$0.60)\n  Damage rate       0.7%  (-0.1 pts)\n\nA depot table with one row per depot and four columns -- Depot, Shipments, On-time, Cost/shipment:\n  Rotterdam   48,210   96.1%   $16.20\n  Hamburg     41,930   95.4%   $17.05\n  Antwerp     37,480   93.8%   $17.80\n  Gdansk      22,150   92.2%   $19.40\n  Lyon        19,870   94.7%   $18.10\n  Milan       18,640   91.5%   $20.30\n  Valencia    16,220   90.8%   $21.15\n  Bristol     14,090   95.9%   $17.60\n  Gothenburg  11,360   97.3%   $16.85\n  Tallinn      8,740   89.4%   $22.40\n\nBelow the table, a \"Top five by volume\" section listing Rotterdam, Hamburg, Antwerp, Gdansk and Lyon with a horizontal bar beside each, drawn in CSS, whose length is proportional to that depot's shipment count.\n\nA footer reading \"Prepared by the Operations Desk\".\n\nMake it look like a dashboard someone would actually put on a wall: aligned numeric columns, a clear type hierarchy, deliberate spacing.",
+  "horizonSec": 420,
+  "reviewableThreshold": 0.5,
+  "target": {
+    "port": 5173,
+    "serveStatic": true,
+    "viewport": {
+      "width": 1280,
+      "height": 1800
+    }
+  },
+  "entities": [
+    { "id": "brand", "aliases": ["Northwind Logistics", "Northwind"], "weight": 2 },
+    { "id": "subtitle", "aliases": ["Q3 2026"] },
+    { "id": "kpi-ontime", "aliases": ["94.2"] },
+    { "id": "kpi-transit", "aliases": ["3.4"] },
+    { "id": "kpi-cost", "aliases": ["18.40"] },
+    { "id": "kpi-damage", "aliases": ["0.7"] },
+    { "id": "depot-1", "aliases": ["Rotterdam"] },
+    { "id": "depot-2", "aliases": ["Hamburg"] },
+    { "id": "depot-3", "aliases": ["Antwerp"] },
+    { "id": "depot-4", "aliases": ["Gdansk", "Gdańsk"] },
+    { "id": "depot-5", "aliases": ["Lyon"] },
+    { "id": "depot-6", "aliases": ["Milan"] },
+    { "id": "depot-7", "aliases": ["Valencia"] },
+    { "id": "depot-8", "aliases": ["Bristol"] },
+    { "id": "depot-9", "aliases": ["Gothenburg"] },
+    { "id": "depot-10", "aliases": ["Tallinn"] },
+    { "id": "figure-top", "aliases": ["48,210", "48210"] },
+    { "id": "figure-tail", "aliases": ["8,740", "8740"] },
+    { "id": "top-five", "aliases": ["Top five", "Top 5"] },
+    { "id": "footer", "aliases": ["Prepared by the Operations Desk", "Operations Desk"] }
+  ],
+  "rubric": [
+    {
+      "id": "renders",
+      "description": "The page shows a real interface, not a blank page, a loading spinner, or an error overlay.",
+      "weight": 1
+    },
+    {
+      "id": "heading",
+      "description": "A heading reading \"Northwind Logistics\" is visible, with \"Q3 2026 Operations Review\" as a subtitle near it.",
+      "weight": 1
+    },
+    {
+      "id": "kpis",
+      "description": "Four KPI tiles are laid out in a row, each showing a figure and its change against last quarter (for example 94.2% with +1.8 pts).",
+      "weight": 2
+    },
+    {
+      "id": "table-complete",
+      "description": "A depot table is visible with at least ten data rows and four columns: depot name, shipments, on-time percentage, and cost per shipment.",
+      "weight": 2
+    },
+    {
+      "id": "table-accurate",
+      "description": "The table's figures are correct where they can be read: the Rotterdam row shows 48,210 and 96.1% and $16.20, and the Tallinn row shows 8,740 and 89.4% and $22.40.",
+      "weight": 2
+    },
+    {
+      "id": "bars",
+      "description": "A \"Top five by volume\" section is visible, and each of the five depots has a horizontal bar beside it whose length is clearly proportional to its shipment count -- Rotterdam's bar is the longest and Lyon's the shortest.",
+      "weight": 2
+    },
+    {
+      "id": "footer",
+      "description": "A footer reading \"Prepared by the Operations Desk\" is visible.",
+      "weight": 1
+    },
+    {
+      "id": "numeric-alignment",
+      "description": "The table's numeric columns are aligned as a column of numbers rather than ragged left-aligned text, so the figures can be scanned down the page.",
+      "weight": 1
+    },
+    {
+      "id": "designed",
+      "description": "It reads as a deliberately designed dashboard -- consistent type scale, considered spacing, visual separation between the KPI row, the table and the chart -- rather than stacked unstyled HTML.",
+      "weight": 2
+    }
+  ],
+  "iterations": [
+    {
+      "id": "header-blue",
+      "prompt": "Make the page heading blue.",
+      "description": "The canonical small visual edit, with no bundler in the loop.",
+      "check": "(() => { const h = document.querySelector('h1') || document.querySelector('h2'); if (!h) return false; const m = getComputedStyle(h).color.match(/\\d+/g); if (!m) return false; const [r,g,b] = m.map(Number); return b > 90 && b > r + 25 && b > g + 15; })()"
+    },
+    {
+      "id": "eleventh-depot",
+      "prompt": "Add an eleventh depot row for Porto: 6,480 shipments, 93.1% on-time, $19.95 cost per shipment.",
+      "description": "A structural edit into the middle of a dense table, rather than a style token. Matched case-insensitively because innerText is the text as rendered.",
+      "check": "/\\bPorto\\b/i.test(document.body.innerText) && /6[,.]?480/.test(document.body.innerText)"
+    }
+  ]
+}

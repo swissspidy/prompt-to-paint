@@ -545,3 +545,30 @@ test('the verdict cache survives being written over and over', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('an empty P2P_CACHE_DIR falls back instead of caching into the working directory', async () => {
+  // `??` treats '' as a value. A wrapper script that forwards an unset variable
+  // -- the normal way for this to be empty -- resolved the cache to cwd and
+  // scattered verdict files across whatever repository was checked out there.
+  const backend: JudgeBackend = {
+    name: 'ai',
+    model: 'anthropic:claude-sonnet-5',
+    concurrency: 1,
+    ask: async (): Promise<string> => JSON.stringify({ criteria: { renders: { met: true } } }),
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'p2p-judge-cwd-'));
+  const cwd = process.cwd();
+  const previous = process.env.P2P_CACHE_DIR;
+  process.env.P2P_CACHE_DIR = '';
+  process.chdir(dir);
+  try {
+    await judgeRun([frame(0, '0'.repeat(16))], brief, { backend });
+    const entries = await readdir(dir);
+    assert.deepEqual(entries, ['.p2p-cache'], 'the default was used, not the empty string');
+  } finally {
+    process.chdir(cwd);
+    if (previous === undefined) delete process.env.P2P_CACHE_DIR;
+    else process.env.P2P_CACHE_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -240,3 +240,40 @@ test('a single-condition set is not cluttered with headings it does not need', (
   assert.doesNotMatch(out, /Told the clock is running/);
   assert.doesNotMatch(out, /What the instruction was worth/);
 });
+
+test('the same model pairs across conditions even when the labels differ', () => {
+  // The natural way to run this experiment is to name runs after the condition
+  // -- told-opus, nottold-opus -- which used to put every run in a cell of its
+  // own, pair nothing, and make the section vanish with no explanation.
+  const [e] = promptEffects([
+    withCurve(told({ label: 'A-told-opus', model: 'claude-opus-5' }), 0.9, 2000),
+    withCurve(untold({ label: 'B-nottold-opus', model: 'claude-opus-5' }), 0.6, 12_000),
+  ]);
+  assert.ok(e, 'adapter and model identify the agent, not the label');
+  assert.equal(Number(e.aucDelta.toFixed(3)), 0.3);
+});
+
+test('one label over two models is two agents, not a pair', () => {
+  assert.deepEqual(
+    promptEffects([
+      told({ label: 'agent', model: 'claude-opus-5' }),
+      untold({ label: 'agent', model: 'claude-haiku-4-5-20251001' }),
+    ]),
+    [],
+  );
+});
+
+test('runs with no model recorded still pair on an exact label match', () => {
+  // Results written before the model was recorded have only the label to go on.
+  const [e] = promptEffects([told({ label: 'agent' }), untold({ label: 'agent' })]);
+  assert.ok(e, 'the old pairing still works');
+});
+
+test('both conditions present but nothing paired says so instead of going quiet', () => {
+  const text = renderLeaderboardText([
+    told({ label: 'a', model: 'claude-opus-5' }),
+    untold({ label: 'b', model: 'claude-haiku-4-5-20251001' }),
+  ]);
+  assert.match(text, /none of them paired up/);
+  assert.doesNotMatch(text, /What the instruction was worth/);
+});

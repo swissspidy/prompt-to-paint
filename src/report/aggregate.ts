@@ -55,7 +55,16 @@ export interface Aggregate {
 /**
  * Summarise repeated runs of one agent on one brief.
  */
-export function aggregate(runs: RunResult[]): Aggregate {
+export function aggregate(all: RunResult[]): Aggregate {
+  // A run whose agent never started is not a repeat of anything. An exhausted
+  // API retry exits cleanly and leaves a clean 0.000, so three repeats of which
+  // two failed would report a median of 0.000 as though the agent had been
+  // measured three times -- ranking a model by its provider's capacity that
+  // afternoon. Excluded from every statistic below and reported separately.
+  const failedRuns = all.filter((r) => r.agentFailure);
+  // If every run failed there is nothing to take a median of. Keep them so the
+  // caller still gets a shaped result and let the warning carry the meaning.
+  const runs = failedRuns.length < all.length ? all.filter((r) => !r.agentFailure) : all;
   const bucketMedians: Record<string, number> = {};
   for (const b of BUCKET_ORDER) {
     bucketMedians[b] = spread(runs.map((r) => r.decomposition.buckets[b])).median ?? 0;
@@ -69,6 +78,15 @@ export function aggregate(runs: RunResult[]): Aggregate {
   const models = [...new Set(runs.map(named))];
   const identities = [...new Set(runs.map((r) => `${named(r)}@${r.judge.temperature ?? 'unrecorded'}`))];
   const warnings: string[] = [];
+  if (failedRuns.length)
+    warnings.push(
+      failedRuns.length === all.length
+        ? `All ${all.length} run(s) failed before the agent did any work, so the numbers below describe ` +
+          'failures rather than the agent. Re-run them.'
+        : `${failedRuns.length} of ${all.length} run(s) failed before the agent did any work and were left ` +
+          `out of these numbers, which are the median of the ${runs.length} that ran. A failed run scores a ` +
+          'clean 0.000, so averaging it in would have reported the provider being busy as agent latency.',
+    );
   if (models.length > 1)
     warnings.push(
       `These runs were scored by different judges (${models.join(', ')}), so the spread below mixes ` +

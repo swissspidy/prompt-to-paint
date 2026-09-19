@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { relative, dirname } from 'node:path';
 import type { Bucket, RunResult } from '../types.ts';
 import { buildCurve } from '../metrics/curve.ts';
@@ -188,13 +189,34 @@ function iterationTable(r: RunResult): string {
 
 /**
  * The judged frames in order, so a surprising curve can be eyeballed.
+ *
+ * Each distinct screenshot is encoded once and reused, because forward-fill
+ * means several judged frames can share one file and a report should not carry
+ * the same megabyte twice.
  */
 function filmstrip(r: RunResult, outDir: string): string {
   const judged = coldFrames(r).filter((f) => f.scoreSource === 'judge' && f.screenshotPath);
   if (!judged.length) return '<p class="muted">No frames were judged.</p>';
+  const encoded = new Map<string, string>();
+  const source = (path: string): string => {
+    let src = encoded.get(path);
+    if (src === undefined) {
+      try {
+        src = `data:image/png;base64,${readFileSync(path).toString('base64')}`;
+      } catch {
+        // A frame that is no longer on disk -- a salvaged run, a directory
+        // copied without its frames -- is not worth losing the whole report
+        // over. Point at where it should have been and let the page render
+        // around the gap.
+        src = relative(outDir, path);
+      }
+      encoded.set(path, src);
+    }
+    return src;
+  };
   return `<div class="strip">${judged
     .map((f) => {
-      const src = relative(outDir, f.screenshotPath!);
+      const src = source(f.screenshotPath!);
       return `<figure><img src="${esc(src)}" alt="Frame at ${secs(f.tMs)}" loading="lazy"/>
         <figcaption><b>${secs(f.tMs)}</b> · score ${f.score.toFixed(2)}${f.judgeNote ? `<br><span class="muted">${esc(f.judgeNote)}</span>` : ''}</figcaption></figure>`;
     })
@@ -204,8 +226,11 @@ function filmstrip(r: RunResult, outDir: string): string {
 /**
  * Render the full run report as a single self-contained page.
  *
- * Screenshots are referenced relatively rather than inlined, so the report
- * stays small and lives beside the frames it points at.
+ * Screenshots are inlined as data URIs rather than referenced, because a report
+ * that only renders from inside its own run directory is not one you can send
+ * to the person who asked what happened -- attach it, archive it, or copy it
+ * anywhere else and every frame in it breaks. The page is correspondingly
+ * larger than the frames it shows, which is what being one file costs.
  */
 export function renderHtml(r: RunResult, outDir: string): string {
   const vars = (list: string[]): string => list.map((c, i) => `--series-${i + 1}: ${c};`).join('\n    ');
