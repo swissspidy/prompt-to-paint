@@ -305,6 +305,9 @@ npm run p2p -- leaderboard runs/*/result.json
 
 # one run is not a measurement -- report a median and its range
 npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe --repeat 5
+
+# the same median and range over runs made in separate sittings
+npm run p2p -- aggregate runs/todo-app-claude-code_claude-opus-5-*/result.json
 ```
 
 Each run writes a directory containing `result.json` (every frame, phase and
@@ -769,6 +772,16 @@ done
 - **The range across repeats.** If the spread within one model overlaps the gap
   between two models, there is no ranking yet, only noise. The aggregate output
   says so explicitly when the AUC range exceeds 0.15.
+
+The repeats need not come from one sitting. `p2p aggregate` takes any set of
+`result.json` files, pools them by brief and label, and prints the same median
+and range `--repeat` does, with the same refusals to hide a mixed judge or a
+mixed viewport. Runs made on different days go into one number the same way;
+a run that failed to start is left out and counted. A `--repeat` batch in which
+one repeat throws before producing a result — the port was taken, the browser
+would not launch — carries on with the rest, aggregates the runs that finished,
+and says which repeats it is missing rather than exiting with the earlier results
+stranded on disk.
 
 A null result here is worth as much as a positive one: "the thing everyone is
 optimising is not the bottleneck" is only credible with the floor to compare

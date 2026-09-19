@@ -1086,3 +1086,110 @@ test('rate and calibrate refuse to mix briefs', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// `--repeat` pools runs from one invocation; a measurement worth publishing is
+// more repeats than one sitting produces. `p2p aggregate` has to give the same
+// numbers over result files from anywhere, and must not pool two agents into
+// one median just because they were named on the same command line.
+test('aggregate pools results by brief and label, never across them', async () => {
+  const dir = await tmp('p2p-agg-');
+  try {
+    const mk = async (name: string, label: string, auc: number): Promise<string> => {
+      const d = join(dir, name);
+      await mkdir(d, { recursive: true });
+      await writeFile(join(d, 'result.json'), JSON.stringify({
+        schema: 1, runId: name, brief: 'static-page', briefPath: '', adapter: 'claude-code',
+        model: label, label, startedAt: '', t0Epoch: 0, wallMs: 1000, url: '',
+        curve: {
+          horizonMs: 300_000, auc, ttfnbrMs: 10_000, ttfrrMs: 10_000, finalScore: 1,
+          peakScore: 1, timeToPeakMs: 10_000, regression: 0, heldToHorizon: true, runEndMs: 1000,
+        },
+        decomposition: {
+          wallMs: 1000,
+          buckets: { model: 1000, tool_overhead: 0, install: 0, build: 0, devserver_boot: 0, first_paint: 0, residual: 0 },
+          coverage: 1, crossCheck: { reportedApiMs: null, attributedModelMs: 0, deltaMs: null }, notes: [],
+        },
+        iterations: [], frames: [], phases: [], agentEvents: [],
+        judge: { backend: 'ai', model: 'anthropic:claude-sonnet-5', framesJudged: 1, degraded: false, temperature: 0 },
+        viewport: { width: 1280, height: 800 }, agentFailure: null, endReason: 'signal',
+        protocol: { renderEarly: true }, warnings: [],
+      }));
+      return join(d, 'result.json');
+    };
+    const files = [
+      await mk('a1', 'agent-a', 0.9), await mk('a2', 'agent-a', 0.8), await mk('a3', 'agent-a', 0.7),
+      await mk('b1', 'agent-b', 0.5),
+    ];
+    const out = join(dir, 'out');
+    const { stdout } = await run(process.execPath, ['src/cli.ts', 'aggregate', ...files, '--out', out]);
+
+    assert.match(stdout, /static-page \/ agent-a\s+--\s+3 runs/, 'agent-a is one group of three');
+    assert.match(stdout, /AUC\s+0\.800\s+\[0\.700 \.\. 0\.900\]/, 'median and range over exactly those three');
+    assert.match(stdout, /static-page \/ agent-b\s+--\s+1 runs/, 'agent-b is its own group');
+    assert.match(stdout, /2 groups/, 'and the output says the two were never pooled');
+
+    const a = JSON.parse(await readFile(join(out, 'aggregate-static-page-agent-a.json'), 'utf8'));
+    assert.equal(a.runs, 3);
+    assert.equal(Number(a.auc.median.toFixed(3)), 0.8);
+    assert.deepEqual(a.runIds, ['a1', 'a2', 'a3']);
+    const b = JSON.parse(await readFile(join(out, 'aggregate-static-page-agent-b.json'), 'utf8'));
+    assert.equal(b.runs, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A repeat that throws before it produces a result -- here, a port that is
+// already serving something -- used to take the rest of the batch with it: the
+// earlier results sat on disk without their aggregate and the later repeats
+// never ran. One lost data point must cost one data point.
+test('a repeat that fails to start does not end the batch', { skip: needsBrowser, timeout: 180_000 }, async () => {
+  const PORT = 5285;
+  const dir = await tmp('p2p-repeat-');
+  // Something already serving on the port when the first repeat looks, and gone
+  // by the time the second one does. `Connection: close` so the harness's
+  // client cannot keep the socket and see a server that has already shut.
+  const squatter = createServer((_req, res) => {
+    res.setHeader('Connection', 'close');
+    res.end('<h1>squatter</h1>');
+    squatter.close();
+    squatter.closeAllConnections();
+  });
+  await new Promise<void>((resolve, reject) => {
+    squatter.once('error', reject);
+    squatter.listen(PORT, '127.0.0.1', resolve);
+  });
+  try {
+    const base = JSON.parse(await readFile('test/fixtures/calibration-brief.json', 'utf8'));
+    const briefPath = join(dir, 'brief.json');
+    await writeFile(briefPath, JSON.stringify({
+      ...base, horizonSec: 20, iterations: [], target: { port: PORT, serveStatic: true },
+    }));
+    const agent =
+      `printf '%s' '<!doctype html><meta charset=utf-8><body style="padding:40px"><h1>DevConf 2026</h1></body>' > index.html; sleep 3; touch .p2p-done`;
+    const out = join(dir, 'runs');
+
+    const { stdout, stderr } = await run(process.execPath, [
+      'src/cli.ts', 'run',
+      '--brief', briefPath,
+      '--adapter', 'exec', '--command', agent,
+      '--judge', 'none', '--out', out, '--no-progress', '--no-iterate',
+      '--repeat', '2', '--settle', '2000', '--quiet-for', '0',
+    ], { cwd: process.cwd() });
+
+    assert.match(stderr, /run 1 of 2 failed before it produced a result/, stderr);
+    assert.match(stderr, /already serving at http:\/\/127\.0\.0\.1:5285\//, 'the reason is the port, and it is named');
+    assert.match(stdout, /=== run 2 of 2 ===/, 'the second repeat still ran');
+    assert.match(stdout, /First render\s+\d/, 'and measured something');
+    assert.match(stderr, /1 of 2 repeats failed before producing a result and are not in the numbers above/, stderr);
+
+    const results = (await readdir(out, { withFileTypes: true }))
+      .filter((e) => e.isDirectory() && existsSync(join(out, e.name, 'result.json')))
+      .map((e) => e.name);
+    assert.equal(results.length, 1, `exactly one repeat produced a result: ${results.join(', ')}`);
+    assert.ok(results[0]!.endsWith('-r2'), 'and it was the second one');
+  } finally {
+    squatter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

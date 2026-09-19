@@ -1,5 +1,13 @@
 import { generateText, type LanguageModel } from 'ai';
 
+// The SDK prints every provider warning to stderr as a Node process warning,
+// once per call. The one it has to say -- that the model ignored the requested
+// temperature -- is read off the response by `noteWarnings` below and recorded
+// where it matters, in result.json and the run's caveats. Left on, the same
+// sentence arrives sixty more times per run, one per judged frame, and the
+// report the run prints at the end scrolls off behind it.
+(globalThis as { AI_SDK_LOG_WARNINGS?: boolean | undefined }).AI_SDK_LOG_WARNINGS = false;
+
 /**
  * Used whenever `--judge` is not given.
  *
