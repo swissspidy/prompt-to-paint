@@ -92,6 +92,21 @@ export interface PromptEffect {
 }
 
 /**
+ * What counts as "the same agent" across the two conditions.
+ *
+ * Adapter and model, when the model is recorded, because that is the objective
+ * identity of the thing measured. `label` cannot carry it: the natural way to
+ * run this experiment is to name the runs after their condition -- `told-opus`
+ * and `nottold-opus` -- and keying on that put every run in a cell of its own,
+ * paired nothing, and made the section disappear with no explanation. Labels
+ * remain the fallback for runs written before the model was recorded, where
+ * matching labels were the only way to express the pairing at all.
+ */
+function pairingKey(r: RunResult): string {
+  return r.model ? `${r.adapter}:${r.model}` : r.label || r.adapter;
+}
+
+/**
  * What the instruction was worth, for agents measured both ways.
  *
  * This is the only honest comparison across the two conditions, because it is
@@ -107,10 +122,9 @@ export interface PromptEffect {
 export function promptEffects(runs: RunResult[]): PromptEffect[] {
   const cells = new Map<string, Record<Condition, RunResult[]>>();
   for (const r of runs) {
-    const label = r.label || r.adapter;
-    const cell = cells.get(label) ?? { prompted: [], unprompted: [] };
+    const cell = cells.get(pairingKey(r)) ?? { prompted: [], unprompted: [] };
     cell[conditionOf(r)].push(r);
-    cells.set(label, cell);
+    cells.set(pairingKey(r), cell);
   }
 
   const effects: PromptEffect[] = [];
@@ -678,6 +692,15 @@ export function renderLeaderboardText(runs: RunResult[]): string {
       );
     }
     L.push('  Positive means the instruction helped.');
+  } else if (mixed) {
+    // Both conditions are here and nothing paired. Saying nothing would let a
+    // reader conclude the instruction was worth nothing, when in fact the
+    // comparison was never made.
+    L.push('');
+    L.push('  ! Runs from both conditions are listed above, but none of them paired up,');
+    L.push('    so "what the instruction was worth" could not be computed. Runs pair on');
+    L.push('    adapter and model, or on an exact label match for runs that recorded no');
+    L.push('    model. Measure the same agent both ways to get that row.');
   }
 
   L.push('');

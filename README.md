@@ -122,6 +122,58 @@ the work. A harder brief, a shorter horizon, or a stack with a real build step
 could all produce genuine trajectories. The check is cheap — run it on your own
 runs before trusting an AUC ranking.
 
+### Dropping the instruction changes nothing
+
+The same nine runs again with `--no-render-early`, paired by model:
+
+```
+  What the instruction was worth  (same agent, same brief, told vs not told)
+  run                       AUC told  not told    delta  first render
+  ----------------------------------------------------------------------------
+  claude-code:claude-haik      0.963     0.955   +0.008  same
+  claude-code:claude-sonn      0.955     0.952   +0.004  1.1s sooner
+  claude-code:claude-opus      0.941     0.944   −0.003  same
+```
+
+Deltas of ±0.008 against a within-model noise range of up to 0.167. **The
+instruction is worth nothing measurable** — which is the result this comparison
+exists to be able to report, because it means the headline number is measuring
+the agent rather than its instruction-following.
+
+With one caveat that the averages hide: **not told, zero of nine runs rendered
+progressively; told, one did.** The instruction almost never changes behaviour,
+and when it does, it changes it completely.
+
+### Whether the curve has a shape depends on the judge
+
+Re-scoring that one progressive run under a second judge:
+
+| judge | AUC | score levels | its verdict on the 6.8s frame |
+|---|---|---|---|
+| `claude-sonnet-5` | 0.966 | 0, **0.833**, 1.0 | "content complete but page looks like unstyled raw HTML" |
+| `claude-haiku-4-5` | 0.977 | 0, 1.0 | "all criteria met" |
+
+Haiku did not dock the unstyled page for the rubric's `styled` criterion, and
+scoring it 1.00 collapsed the only trajectory in eighteen runs back into a step.
+**Judge strictness decides whether the metric has anything to measure at all** —
+which is the strongest possible argument for the rule that runs scored by
+different judges may not share a table.
+
+Judge *self*-agreement, by contrast, was perfect. Pointing `P2P_CACHE_DIR` at a
+fresh directory defeats the verdict cache and forces real calls, so the same
+judge can be asked the same question twice:
+
+```bash
+P2P_CACHE_DIR=$(mktemp -d) npm run p2p -- rescore runs/some-run --judge anthropic:claude-sonnet-5
+```
+
+Three runs, asked twice each: **identical AUC to four decimal places every
+time**, with only cosmetic rewording between the two verdicts. `claude-sonnet-5`
+refuses a sampling temperature and the harness correctly warns that variance is
+therefore inside the AUC — but on this evidence that variance is theoretical
+rather than observed. The caveat is right to be there and should not be read as
+a measured effect.
+
 ## Where this metric comes from
 
 Area under a quality-over-time curve is not a new idea, and the version here is
@@ -709,6 +761,42 @@ A null result here is worth as much as a positive one: "the thing everyone is
 optimising is not the bottleneck" is only credible with the floor to compare
 against, which is why the control ships with the harness rather than as an
 afterthought.
+
+### What three repeats already showed
+
+Nine runs — three Claude models, three repeats each, `briefs/static-page.json`,
+all told to render early:
+
+| model | AUC median | AUC range | first render median | first render range |
+|---|---|---|---|---|
+| `claude-haiku-4-5` | 0.963 | **0.167** | 11.1s | 2.3s |
+| `claude-sonnet-5` | 0.955 | 0.007 | 13.4s | 2.0s |
+| `claude-opus-5` | 0.941 | 0.025 | 17.8s | **11.1s** |
+
+Read the medians as a ranking and haiku beats opus by 0.022. **Haiku's own
+spread across three identical runs is 0.167 — seven times that gap.** There is
+no ranking here, only noise, and the aggregate said so itself without being
+asked:
+
+```
+  ! AUC ranges over 0.167 across 3 runs. Treat any ranking against
+    another agent as unresolved unless the gap exceeds that.
+```
+
+Opus is the other warning: its first render ranged from 6.8s to 17.9s across
+three runs of the same prompt. A single run of either model would have
+supported a confident and wrong conclusion.
+
+Two practical consequences:
+
+- **Three repeats is a smoke test, not a measurement.** It was enough to show
+  the ranking is unresolved; it is nowhere near enough to resolve it. Budget
+  repeats until the within-model range is smaller than the between-model gap,
+  and report both numbers when you publish either.
+- **Final score could not rank these at all** — eight of nine runs finished at
+  1.00. `static-page` is saturated for current frontier models. A brief every
+  agent aces measures nothing except how fast they ace it, which is a good
+  reason to write harder ones before running a leaderboard on it.
 
 ## Writing a brief
 
