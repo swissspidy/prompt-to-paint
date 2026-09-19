@@ -37,7 +37,7 @@ import type { Adapter, RunResult, ScoredFrame } from './types.ts';
  * was run from, so `p2p briefs` works outside the repository too.
  */
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page'];
+const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page', 'ops-dashboard'];
 const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.json`);
 
 /**

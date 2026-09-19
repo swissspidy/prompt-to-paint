@@ -826,6 +826,35 @@ Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
 
+### Write briefs that are not saturated
+
+`briefs/static-page.json` put **eight of nine frontier-model runs at a final
+score of 1.00**, and eight of nine curves were steps. A brief every agent aces
+in one shot measures how fast they ace it and nothing else: final score cannot
+rank, and the AUC collapses to `finalScore x (1 - ttfr/horizon)` — see [does the
+curve earn its keep?](#does-the-curve-earn-its-keep). That is a property of the
+brief, not of the metric.
+
+Four levers, in rough order of how much they helped:
+
+- **Enough weighted criteria that partial work lands between 0 and 1.** Five
+  criteria give coarse steps; a run is nearly all-or-nothing. `ops-dashboard`
+  carries nine criteria totalling weight 14, so a page missing its chart and its
+  alignment scores distinctly from one missing only the chart.
+- **Include a criterion models actually fail.** Across eighteen runs, `styled`
+  was the *only* criterion that ever docked anyone. Content-presence criteria
+  ("is the footer there") are free marks for current models. Judgements about
+  visual design, numeric alignment and proportionality are not.
+- **Enough content that one write is real work.** Forty-odd figures to
+  transcribe means an agent either spends a long time before its first paint or
+  renders in stages — and which one it picks is exactly what this measures.
+- **A viewport tall enough to contain what you are scoring.** Entity coverage
+  and the judge both see only the viewport, so a table scored below the fold is
+  a criterion nobody can meet. `ops-dashboard` sets `1280x1800` for that reason.
+
+`briefs/ops-dashboard.json` is the worked example of all four, and is still a
+`serveStatic` brief — no toolchain, so it isolates the agent.
+
 **An iteration check reads text the way the browser renders it.**
 `document.body.innerText` is the *rendered* text, so CSS decides its case: a
 column header styled `text-transform: uppercase` reads `BLOCKED`, and
