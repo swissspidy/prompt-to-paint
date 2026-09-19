@@ -441,6 +441,19 @@ horizon (`horizon`). The reason is recorded with the result and printed by
 `p2p leaderboard`, because a run the agent finished and a run that was cut off
 are not the same measurement.
 
+**A run whose agent never started is not a measurement.** Two of nine runs in
+one sitting ended with the agent's API returning repeated 529s. Claude Code
+reports that as a result event carrying `is_error` and — confusingly —
+`subtype: "success"`, then exits 0. Matching on the subtype or on the exit code
+saw a healthy run that had built nothing, and recorded it as a clean `0.000`.
+Two of three repeats failing that way would have put a model's median AUC on
+the floor and ranked it by its provider's capacity that afternoon.
+
+Such a run is now recorded as a failure with no exit code, which is the truth —
+the process ended cleanly and did no work. `p2p compare` and `p2p leaderboard`
+refuse to rank it, and `--repeat` leaves it out of the median and says how many
+it left out.
+
 Quiescence is the backstop for an agent that ignores the sentinel: no visible
 change, no agent output, and no shimmed command running, all at once, for
 `--quiet-for` seconds (default 120, `0` to disable), with something already on
@@ -854,6 +867,29 @@ Four levers, in rough order of how much they helped:
 
 `briefs/ops-dashboard.json` is the worked example of all four, and is still a
 `serveStatic` brief — no toolchain, so it isolates the agent.
+
+**It only half worked, which is worth recording.** Nine runs of the same three
+models on `ops-dashboard`:
+
+| | `static-page` | `ops-dashboard` |
+|---|---|---|
+| first render | 10.1s – 17.9s | **20.2s – 64.4s** |
+| wall clock | 15s – 18s | **52s – 322s** |
+| final score | 1.00 on 8 of 9 | **1.00 on every run that rendered** |
+| curves with a shape | 1 of 9 | **0 of 9** |
+
+Density bought a much wider spread in the thing the metric is actually about —
+first render went from a 7.8s spread to a 44s one, which is real discrimination
+between models. It did **not** break the score ceiling and it did **not**
+produce trajectories. Every run that rendered still scored a perfect 1.00, and
+every curve was still a step.
+
+That leaves an open question this harness can now answer but has not: is the
+ceiling the models, or the judge? A rubric asking whether numeric columns are
+aligned and whether bar lengths are proportional to their figures, which never
+docks anyone across nine dense dashboards, is either describing things that are
+genuinely easy or being marked leniently. `p2p rate` and `p2p calibrate` exist
+to settle exactly that — put those frames in front of a person and find out.
 
 **An iteration check reads text the way the browser renders it.**
 `document.body.innerText` is the *rendered* text, so CSS decides its case: a

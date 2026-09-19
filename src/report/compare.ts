@@ -140,6 +140,18 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
     );
   }
 
+  // A run whose agent never did the work is not a measurement of that agent.
+  // An exhausted API retry exits cleanly and leaves a clean 0.000, which in a
+  // set of repeats drags the median to the floor and ranks a model by its
+  // provider's capacity that afternoon. Two of nine runs in one sitting.
+  const failed = runs.filter((r) => r.agentFailure);
+  if (failed.length) {
+    throw new IncomparableRunsError(
+      `cannot rank runs whose agent failed (${failed.map((r) => r.label || r.adapter).join(', ')}): ` +
+        'their scores measure a failure to start, not agent performance. Re-run them, or leave them out of the set.',
+    );
+  }
+
   // A degraded run's score is entity coverage -- a text match against the
   // brief's nouns -- and a judged run's is rubric correctness. They are
   // different quantities that happen to share a 0..1 range.

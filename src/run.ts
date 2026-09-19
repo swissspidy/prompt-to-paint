@@ -843,19 +843,34 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       'Iteration timings come from re-running the agent, not from continuing a live session, so they include process startup and however long the agent takes to re-read the project. They are not comparable to live-session iteration numbers from another adapter.',
     );
   }
-  const erroredTurns = agentEvents.filter((e) => e.type === 'assistant' && e.subtype === 'error');
-  if (erroredTurns.length) {
-    warnings.unshift(
-      `AGENT REPORTED ERRORS: ${erroredTurns.length} turn(s) ended in an error (first: ${
-        erroredTurns[0]?.text ?? 'unknown'
-      }). These numbers describe a failed run, not agent performance.`,
-    );
+  // `isError` rather than a subtype: Claude Code reports an exhausted API retry
+  // as a *result* event carrying is_error and, confusingly, subtype 'success',
+  // then exits 0. Matching on `type === 'assistant' && subtype === 'error'`
+  // missed every one of them, and a run whose agent never got a turn was
+  // recorded as a legitimate 0.000 -- the exact shape of failure this harness
+  // exists to refuse to average into a ranking.
+  const erroredTurns = agentEvents.filter((e) => e.isError || (e.type === 'assistant' && e.subtype === 'error'));
+  // A turn the stream itself called an error is a failed run, whatever the exit
+  // code says. Recorded as a failure with no exit code, which is the truth: the
+  // process ended cleanly and did no work.
+  if (!agentFailure && erroredTurns.length) {
+    const first = erroredTurns[0]!;
+    agentFailure = {
+      exitCode: null,
+      atMs: first.tMs,
+      logPath: agentLogPath,
+      ...(first.text ? { message: first.text } : {}),
+    };
   }
   if (agentFailure) {
     const f = agentFailure as NonNullable<RunResult['agentFailure']>;
     warnings.unshift(
-      `AGENT FAILED: the agent process exited with code ${f.exitCode} after ${(f.atMs / 1000).toFixed(1)}s, before the harness stopped it. ` +
-        `These numbers measure a failed run, not agent performance. See ${f.logPath}.`,
+      f.exitCode === null
+        ? `AGENT FAILED: the agent reported an error ${(f.atMs / 1000).toFixed(1)}s in and did no work` +
+          `${f.message ? ` -- "${f.message}"` : ''}. The process still exited cleanly, so nothing else here ` +
+          `would have told you: these numbers measure a failure to start, not agent performance. See ${f.logPath}.`
+        : `AGENT FAILED: the agent process exited with code ${f.exitCode} after ${(f.atMs / 1000).toFixed(1)}s, before the harness stopped it. ` +
+          `These numbers measure a failed run, not agent performance. See ${f.logPath}.`,
     );
   } else if (adapter.name !== 'exec' && !agentEvents.some((e) => e.type === 'assistant')) {
     warnings.unshift(

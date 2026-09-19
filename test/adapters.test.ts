@@ -306,3 +306,30 @@ test('antigravity tolerates an init event that says nothing about cwd', () => {
   // Null, not the workdir: "it did not say" must never be read as "it agreed".
   assert.equal(ag.reportedWorkdir, null);
 });
+
+test('an exhausted API retry is flagged as an error despite subtype "success"', () => {
+  // Verbatim shape of a result event from a run that hit repeated 529s: the
+  // CLI sets is_error and leaves subtype 'success', then exits 0. Matching on
+  // the subtype -- or on the exit code -- saw a healthy run that had built
+  // nothing, and recorded it as a clean 0.000.
+  const [ev] = translateClaudeCodeEvent(
+    {
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      num_turns: 1,
+      duration_ms: 10_979,
+      result: 'API Error: Repeated 529 Overloaded errors. The API is at capacity.',
+    } as never,
+    4200,
+  );
+  assert.ok(ev);
+  assert.equal(ev.type, 'result');
+  assert.equal(ev.isError, true, 'is_error decides, not subtype');
+  assert.match(ev.text ?? '', /529 Overloaded/, 'the reason travels with the event');
+});
+
+test('a result event that succeeded carries no error flag', () => {
+  const [ev] = translateClaudeCodeEvent({ type: 'result', subtype: 'success', duration_ms: 10 } as never, 1);
+  assert.equal(ev!.isError, undefined);
+});

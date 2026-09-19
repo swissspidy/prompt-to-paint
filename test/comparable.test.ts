@@ -137,3 +137,17 @@ test('a refusal to rank is typed, so the CLI can print it without a stack trace'
     IncomparableRunsError,
   );
 });
+
+test('a run whose agent never started cannot be ranked', () => {
+  // An exhausted API retry exits cleanly and leaves a clean 0.000. Averaged
+  // into a set of repeats it drags the median to the floor and ranks a model
+  // by its provider's capacity that afternoon -- which is what happened to two
+  // of nine runs in one sitting.
+  assert.throws(
+    () => assertComparable([
+      run(),
+      run({ label: 'b', agentFailure: { exitCode: null, atMs: 4200, logPath: '/a/agent.log', message: 'API Error: 529' } }),
+    ]),
+    /agent failed/,
+  );
+});
