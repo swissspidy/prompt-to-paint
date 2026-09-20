@@ -1134,6 +1134,14 @@ test('aggregate pools results by brief and label, never across them', async () =
     assert.deepEqual(a.runIds, ['a1', 'a2', 'a3']);
     const b = JSON.parse(await readFile(join(out, 'aggregate-static-page-agent-b.json'), 'utf8'));
     assert.equal(b.runs, 1);
+
+    // Two labels a filename cannot tell apart are refused rather than letting
+    // the second group overwrite the first.
+    const clash = [await mk('c1', 'agent c', 0.5), await mk('c2', 'agent_c', 0.6)];
+    await assert.rejects(
+      run(process.execPath, ['src/cli.ts', 'aggregate', ...clash, '--out', out]),
+      (e: { stderr?: string }) => /"agent c" and "agent_c" would both be written to/.test(e.stderr ?? ''),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1188,6 +1196,10 @@ test('a repeat that fails to start does not end the batch', { skip: needsBrowser
       .map((e) => e.name);
     assert.equal(results.length, 1, `exactly one repeat produced a result: ${results.join(', ')}`);
     assert.ok(results[0]!.endsWith('-r2'), 'and it was the second one');
+    // The batch was asked for an aggregate and still owes one over what ran.
+    const agg = JSON.parse(await readFile(join(out, 'aggregate-calibration-exec.json'), 'utf8'));
+    assert.equal(agg.runs, 1, 'the aggregate covers the one repeat that ran');
+    assert.match(stdout, /calibration \/ exec\s+--\s+1 runs/, 'and was printed before the list of failures');
   } finally {
     squatter.close();
     await rm(dir, { recursive: true, force: true });

@@ -48,6 +48,16 @@ const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.jso
  */
 const slug = (label: string): string => label.replace(/[^\w.-]/g, '_');
 
+/**
+ * The file a batch's aggregate is written to, beside its runs.
+ *
+ * Both parts are slugged: a brief id is only ever checked to be a non-empty
+ * string, and `p2p aggregate` reads it back out of result.json unchecked, so
+ * neither may be allowed to carry a path separator into a filename.
+ */
+const aggregateFileName = (brief: string, label: string): string =>
+  `aggregate-${slug(brief)}-${slug(label)}.json`;
+
 const USAGE = `
 prompt-to-paint -- how long until an agent renders something you can react to
 
@@ -345,12 +355,29 @@ async function main(): Promise<void> {
     }
     const outRoot = resolve(flags.out ?? 'runs');
     await mkdir(outRoot, { recursive: true });
-    for (const runs of groups.values()) {
+    // Named before anything is written. The brief id and the label both come
+    // out of result.json unchecked, so each is reduced to a filename-safe slug
+    // -- a brief called `x/../y` must not name a path -- and a slug is lossy:
+    // two labels that differ only in characters it strips would take the same
+    // file, and the second group would silently overwrite the first.
+    const named = [...groups.values()].map((runs) => {
       const agg = aggregate(runs);
-      const aggPath = join(outRoot, `aggregate-${agg.brief}-${slug(agg.label)}.json`);
-      await writeJsonAtomic(aggPath, agg);
+      return { agg, path: join(outRoot, aggregateFileName(agg.brief, agg.label)) };
+    });
+    const byPath = new Map<string, string[]>();
+    for (const { agg, path } of named) byPath.set(path, [...(byPath.get(path) ?? []), agg.label]);
+    for (const [path, labels] of byPath) {
+      if (labels.length > 1)
+        fail(
+          `labels ${labels.map((l) => `"${l}"`).join(' and ')} would both be written to ${path}: they differ ` +
+            'only in characters a filename cannot carry. Re-label one of them (p2p rescore keeps the label; ' +
+            'edit "label" in its result.json).',
+        );
+    }
+    for (const { agg, path } of named) {
+      await writeJsonAtomic(path, agg);
       console.log(renderAggregate(agg));
-      console.log(`  aggregate: ${aggPath}\n`);
+      console.log(`  aggregate: ${path}\n`);
     }
     if (groups.size > 1)
       console.log(
@@ -918,10 +945,13 @@ async function main(): Promise<void> {
     results.push(result);
   }
 
-  if (results.length > 1) {
+  // Whenever a batch was asked for, whatever came back: a batch of three in
+  // which two failed still owes the one it measured its aggregate, since that
+  // is where the failed repeats are counted beside it.
+  if (repeats > 1 && results.length > 0) {
     const agg = aggregate(results);
     await mkdir(resolve(outRoot), { recursive: true });
-    const aggPath = resolve(outRoot, `aggregate-${brief.id}-${slug(label)}.json`);
+    const aggPath = resolve(outRoot, aggregateFileName(brief.id, label));
     await writeJsonAtomic(aggPath, agg);
     console.log(renderAggregate(agg));
     console.log(`  aggregate: ${aggPath}\n`);
@@ -931,7 +961,7 @@ async function main(): Promise<void> {
     // median over seven runs that was asked for over ten is a different claim.
     console.error(
       `  ! ${failedRepeats.length} of ${repeats} repeats failed before producing a result and are not in ` +
-        `the numbers above${results.length > 1 ? `, which summarise the ${results.length} that ran` : ''}:`,
+        `the numbers above${results.length > 0 ? `, which summarise the ${results.length} that ran` : ''}:`,
     );
     for (const f of failedRepeats) console.error(`    run ${f.run}: ${f.error.split('\n')[0]}`);
     console.error('');
