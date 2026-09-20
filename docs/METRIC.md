@@ -534,6 +534,18 @@ range, plus how many runs never rendered at all. When the range across repeats
 is wider than the gap between two agents, there is no ranking yet, only noise,
 and the output says so when the AUC range exceeds 0.15.
 
+A repeat that throws before it produces a result -- a port already serving
+something, a browser that will not launch -- is reported and skipped, and the
+batch continues. The aggregate at the end covers the repeats that ran, and lists
+the ones that did not, so a median asked for over ten runs and computed over
+seven is never presented as the former.
+
+`p2p aggregate <result.json...>` produces the same summary from any set of
+results, grouped by brief and label. Runs from different invocations, days or
+machines pool the same way, subject to the same warnings: a mixed judge, a mixed
+temperature, a mixed viewport, a mixed horizon, or a mix of judged and unjudged
+runs is called out rather than averaged through.
+
 ## Known limits
 
 - **Poll interval is the resolution floor.** Every latency number carries ±1

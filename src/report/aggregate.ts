@@ -98,6 +98,15 @@ export function aggregate(all: RunResult[]): Aggregate {
         'same model samples differently at each, so part of the spread below is the sampler rather than ' +
         'the agent.',
     );
+  // One `--repeat` cannot produce this: the brief is loaded once. Runs pooled
+  // from separate invocations can, if the brief was edited in between, and AUC
+  // has the horizon in its denominator.
+  const horizons = [...new Set(runs.map((r) => r.curve.horizonMs))];
+  if (horizons.length > 1)
+    warnings.push(
+      `These runs have different horizons (${horizons.map((h) => `${h / 1000}s`).join(', ')}). AUC is ` +
+        'normalised by horizon, so the AUC spread below mixes numbers on different scales.',
+    );
   const viewports = [...new Set(runs.map((r) => {
     const v = r.viewport ?? { width: 1280, height: 800 };
     return `${v.width}x${v.height}`;

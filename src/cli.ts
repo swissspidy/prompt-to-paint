@@ -30,6 +30,7 @@ import { Progress } from './progress.ts';
 import { sampleForRating, ratingSheet, calibrate, type RateItem, type Rating } from './rate.ts';
 import { salvageRun } from './salvage.ts';
 import { FLOOR_TEMPLATES, floorBrief } from './floor.ts';
+import { PortInUseError } from './port.ts';
 import type { Adapter, RunResult, ScoredFrame } from './types.ts';
 
 /**
@@ -47,12 +48,25 @@ const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.jso
  */
 const slug = (label: string): string => label.replace(/[^\w.-]/g, '_');
 
+/**
+ * The file a batch's aggregate is written to, beside its runs.
+ *
+ * Both parts are slugged: a brief id is only ever checked to be a non-empty
+ * string, and `p2p aggregate` reads it back out of result.json unchecked, so
+ * neither may be allowed to carry a path separator into a filename.
+ */
+const aggregateFileName = (brief: string, label: string): string =>
+  `aggregate-${slug(brief)}-${slug(label)}.json`;
+
 const USAGE = `
 prompt-to-paint -- how long until an agent renders something you can react to
 
   p2p run      --brief <file> [options]     measure one agent on one brief
   p2p floor    --template <id> [options]    measure the toolchain with no agent
   p2p compare  <result.json...>             rank runs by trajectory and by final score
+  p2p aggregate <result.json...>            median and range of repeated runs, grouped
+                                            by brief and label -- what --repeat prints,
+                                            for runs made in separate invocations
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
@@ -135,6 +149,9 @@ Options for video:
 Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
   --title      heading for the page
+
+Options for aggregate:
+  --out        directory the aggregate-<brief>-<label>.json files go in (default runs/)
 `;
 
 /**
@@ -313,6 +330,60 @@ async function main(): Promise<void> {
     await mkdir(resolve('runs'), { recursive: true });
     await writeFile(out, renderCompareHtml(runs));
     console.log(`  comparison page: ${out}\n`);
+    return;
+  }
+
+  if (cmd === 'aggregate') {
+    // The same summary `--repeat` prints, for runs that did not come from one
+    // invocation. A measurement worth publishing is more repeats than one
+    // sitting produces, spread over days and machines, and until now the only
+    // way to get a median and range over them was to have run them all at once.
+    const { values: flags, positionals: files } = parse({
+      args: argv,
+      allowPositionals: true,
+      options: { out: { type: 'string' } },
+    });
+    if (!files.length) fail('aggregate needs at least one result.json');
+    // Grouped by brief and label, which is what one `--repeat` holds constant.
+    // Two labels are two agents, and a median across them is a number about
+    // nothing; `p2p compare` is the command that puts them side by side.
+    const groups = new Map<string, RunResult[]>();
+    for (const f of files) {
+      const r = JSON.parse(await readFile(f, 'utf8')) as RunResult;
+      const key = `${r.brief}\u0000${r.label}`;
+      groups.set(key, [...(groups.get(key) ?? []), r]);
+    }
+    const outRoot = resolve(flags.out ?? 'runs');
+    await mkdir(outRoot, { recursive: true });
+    // Named before anything is written. The brief id and the label both come
+    // out of result.json unchecked, so each is reduced to a filename-safe slug
+    // -- a brief called `x/../y` must not name a path -- and a slug is lossy:
+    // two labels that differ only in characters it strips would take the same
+    // file, and the second group would silently overwrite the first.
+    const named = [...groups.values()].map((runs) => {
+      const agg = aggregate(runs);
+      return { agg, path: join(outRoot, aggregateFileName(agg.brief, agg.label)) };
+    });
+    const byPath = new Map<string, string[]>();
+    for (const { agg, path } of named) byPath.set(path, [...(byPath.get(path) ?? []), agg.label]);
+    for (const [path, labels] of byPath) {
+      if (labels.length > 1)
+        fail(
+          `labels ${labels.map((l) => `"${l}"`).join(' and ')} would both be written to ${path}: they differ ` +
+            'only in characters a filename cannot carry. Re-label one of them (p2p rescore keeps the label; ' +
+            'edit "label" in its result.json).',
+        );
+    }
+    for (const { agg, path } of named) {
+      await writeJsonAtomic(path, agg);
+      console.log(renderAggregate(agg));
+      console.log(`  aggregate: ${path}\n`);
+    }
+    if (groups.size > 1)
+      console.log(
+        `  ${groups.size} groups: runs were pooled by brief and label, never across them.\n` +
+          '  To rank the groups against each other, use p2p compare.\n',
+      );
     return;
   }
 
@@ -776,8 +847,16 @@ async function main(): Promise<void> {
   if (judgeBackend.model) console.log(`  judge:   ${judgeBackend.model} (answered a test request)`);
 
   const outRoot = values.out ?? 'runs';
-  const repeats = Math.max(1, Number(values.repeat ?? 1));
+  const repeats = Math.max(1, num('repeat', values.repeat) ?? 1);
   const results: RunResult[] = [];
+  // Repeats that threw before they produced a result, with why.
+  //
+  // A run can fail to *start* -- the port is taken, the browser will not
+  // launch, the run directory cannot be written -- and that used to end the
+  // whole batch: repeat 3 of 10 threw, the process exited, and the two results
+  // already on disk never got their aggregate while the seven still to run
+  // never happened. One bad repeat is one lost data point, not seven.
+  const failedRepeats: Array<{ run: number; error: string }> = [];
 
   for (let i = 0; i < repeats; i++) {
     const runDir = resolve(
@@ -839,6 +918,19 @@ async function main(): Promise<void> {
         onFrame: (f) => progress?.onFrame(f),
         onAgentEvent: (e) => progress?.onAgentEvent(e),
       });
+    } catch (e) {
+      // A single run keeps its exception: the message, or the stack for
+      // anything unexpected, is the whole output. Inside a batch it is one
+      // entry in a list that is printed once the rest have run.
+      if (repeats === 1) throw e;
+      // A port clash says what to do about itself; anything else keeps its
+      // trace, since a batch that swallowed one would leave nothing to debug.
+      const error =
+        e instanceof PortInUseError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+      failedRepeats.push({ run: i + 1, error });
+      progress?.stop();
+      console.error(`\n  ! run ${i + 1} of ${repeats} failed before it produced a result:\n    ${error.split('\n').join('\n    ')}\n`);
+      continue;
     } finally {
       // The status line owns the last terminal row; the report must not be
       // printed over the top of it.
@@ -853,22 +945,37 @@ async function main(): Promise<void> {
     results.push(result);
   }
 
-  if (results.length > 1) {
+  // Whenever a batch was asked for, whatever came back: a batch of three in
+  // which two failed still owes the one it measured its aggregate, since that
+  // is where the failed repeats are counted beside it.
+  if (repeats > 1 && results.length > 0) {
     const agg = aggregate(results);
     await mkdir(resolve(outRoot), { recursive: true });
-    const aggPath = resolve(outRoot, `aggregate-${brief.id}-${slug(label)}.json`);
+    const aggPath = resolve(outRoot, aggregateFileName(brief.id, label));
     await writeJsonAtomic(aggPath, agg);
     console.log(renderAggregate(agg));
     console.log(`  aggregate: ${aggPath}\n`);
+  }
+  if (failedRepeats.length) {
+    // Said last, after the aggregate, so it is the thing left on screen: a
+    // median over seven runs that was asked for over ten is a different claim.
+    console.error(
+      `  ! ${failedRepeats.length} of ${repeats} repeats failed before producing a result and are not in ` +
+        `the numbers above${results.length > 0 ? `, which summarise the ${results.length} that ran` : ''}:`,
+    );
+    for (const f of failedRepeats) console.error(`    run ${f.run}: ${f.error.split('\n')[0]}`);
+    console.error('');
+    if (!results.length) process.exit(1);
   }
 }
 
 main().catch((e) => {
   // A set of runs that cannot be ranked together is something the caller chose
-  // by naming those runs, not a bug they can act on a stack trace for. Anything
-  // else is unexpected and keeps its trace, which is the only thing that makes
-  // it debuggable.
-  if (e instanceof IncomparableRunsError) fail(e.message);
+  // by naming those runs, not a bug they can act on a stack trace for, and a
+  // port that is already serving something is the same kind of thing: the
+  // message names the fix. Anything else is unexpected and keeps its trace,
+  // which is the only thing that makes it debuggable.
+  if (e instanceof IncomparableRunsError || e instanceof PortInUseError) fail(e.message);
   console.error(e);
   process.exit(1);
 });

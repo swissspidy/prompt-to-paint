@@ -66,6 +66,16 @@ test('repeats exclude runs whose agent never started, and say how many', () => {
   assert.ok(agg.warnings.some((w) => /1 of 3 run\(s\) failed/.test(w)), agg.warnings.join(' | '));
 });
 
+test('runs pooled from separate invocations are checked for a shared horizon', () => {
+  // One --repeat loads the brief once, so this cannot happen inside it. Results
+  // pooled by `p2p aggregate` can carry a brief edited between sittings, and
+  // AUC has the horizon in its denominator.
+  const short = runFor({ curve: { ...runFor().curve, horizonMs: 120_000 } });
+  const agg = aggregate([withAuc(0.9), short]);
+  assert.ok(agg.warnings.some((w) => /different horizons \(300s, 120s\)/.test(w)), agg.warnings.join(' | '));
+  assert.ok(!aggregate([withAuc(0.9), withAuc(0.8)]).warnings.some((w) => /horizon/.test(w)));
+});
+
 test('when every repeat failed the numbers are kept but called what they are', () => {
   const failed = withAuc(0, { agentFailure: { exitCode: null, atMs: 1, logPath: '/a/agent.log' } });
   const agg = aggregate([failed, failed]);
