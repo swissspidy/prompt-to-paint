@@ -570,6 +570,29 @@ horizons, briefs, judges, judge temperatures, viewports, judged-vs-unjudged,
 prompted-vs-unprompted, or a run whose judging never finished. See
 [what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
 
+### Did each change help?
+
+The rubric asks yes/no questions of one screenshot at a time, so once a page
+meets every criterion it scores 1.00 whatever happens to it next. A page that
+gets rebuilt three times after that draws a flat line, however much better or
+worse each version was.
+
+`p2p pairwise` asks the question the rubric cannot. It takes each visible
+change after the first render and asks the judge which of the two states better
+satisfies the brief:
+
+```bash
+npm run p2p -- pairwise runs/ops-dashboard-*/
+```
+
+Each pair is asked **twice, in both orders**. A model shown two pictures leans
+towards one position, so a preference only counts when it survives the swap. One
+that flips with the order is recorded as "same" and flagged. The verdicts go into
+`result.json` as `pairwise`, and the leaderboard shows them as markers under
+each replay (▲ better, ● same, ▼ worse), the judge's note as the replay passes
+each one, and a **Later changes** column. They are reported beside the scores
+and never change them: no AUC moves because of this.
+
 ## Recovering an interrupted run
 
 `result.json` is assembled once, after the browser and the agent are torn down.
@@ -939,6 +962,30 @@ the whole dashboard.
 Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
+
+### A toolchain the agent does not have to set up
+
+`"target": { "scaffold": "vite-react" }` has the harness prepare a Vite + React
+project, with pinned dependencies installed, and start its dev server before the
+clock starts. The agent is told the project and server exist, and that nothing
+can be installed. Every file it saves is on screen at the next screenshot through
+hot reload. `briefs/todo-app-scaffolded.json` is `todo-app` with exactly this
+change.
+
+That makes two questions separable:
+
+- **Without a scaffold**, an app brief measures whether the agent sets up a
+  toolchain and how long that takes. That needs an agent with a shell.
+- **With one**, it measures how the agent builds on a toolchain that is already
+  running. It needs only file edits. An agent that builds the app across several
+  saves renders in stages, so the curve can show a shape a single-file static
+  brief never could.
+
+The starting page is deliberately empty: no title, no favicon, an `App` that
+renders nothing. Anything the template showed by itself would be a first render
+at 0s for every agent. The project is installed once per machine into
+`.p2p-cache/scaffold/` and copied into each run before t0, so the agent is never
+charged for the install or the server boot.
 
 ### Write briefs that are not saturated
 

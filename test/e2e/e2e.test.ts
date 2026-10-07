@@ -1041,6 +1041,71 @@ test('a leaderboard panel says its run ended once the clock passes the end, fram
   }
 });
 
+test('a scaffolded brief starts blank on a running dev server, and every save hot-reloads', { skip: needsBrowser, timeout: 300_000 }, async () => {
+  // The harness prepares the Vite + React project and starts its dev server
+  // before t0, so the agent only edits files. Two things have to hold for that
+  // to measure anything: the page the agent starts from is genuinely empty (or
+  // every run would "render" at 0s), and a save reaches the screen through hot
+  // reload without anyone restarting anything -- which is what lets an app built
+  // across several saves render in stages.
+  const dir = await tmp('p2p-scaffold-');
+  try {
+    const base = await loadBrief('briefs/todo-app-scaffolded.json');
+    const brief: Brief = { ...base, horizonSec: 60, iterations: [], target: { ...base.target, port: 5299 } };
+    const app = (body: string): string => `export default function App() {\n  return (${body})\n}\n`;
+    const result = await runBenchmark({
+      brief,
+      adapter: new ScriptedAdapter({
+        steps: [
+          // Enough on screen to count as a render: one word on a white page is
+          // classified blank, by design.
+          {
+            atMs: 4000,
+            write: {
+              path: 'src/App.jsx',
+              content: app('<main><h1>Orbit</h1><p>Sprint 14</p><h2>Todo</h2><h2>In Progress</h2><h2>Done</h2></main>'),
+            },
+          },
+          {
+            atMs: 9000,
+            write: {
+              path: 'src/App.jsx',
+              content: app(
+                '<main><h1>Orbit</h1><p>Sprint 14</p><h2>Todo</h2><ul><li>Write the brief</li><li>Pick a judge</li></ul>' +
+                  '<h2>In Progress</h2><ul><li>Scaffold the app</li></ul><h2>Done</h2><ul><li>Measure the floor</li></ul></main>',
+              ),
+            },
+          },
+          { atMs: 12_000, write: { path: '.p2p-done', content: '' } },
+        ],
+      }),
+      runDir: dir, label: 'scaffold', judgeBackend: new NullBackend(), settleMs: 2000, killPort: true,
+    });
+
+    const cold = coldFrames(result);
+    const before = cold.filter((f) => f.tMs < 3500);
+    assert.ok(before.length > 0, 'frames were captured before the first save');
+    assert.ok(before.every((f) => f.class !== 'render'), 'the scaffold\'s own page must not count as a render');
+    assert.ok(before.every((f) => !f.tabSignal), 'an empty <title> and no favicon: no tab signal before the agent writes');
+    assert.ok(
+      result.curve.ttfnbrMs !== null && result.curve.ttfnbrMs >= 4 * S && result.curve.ttfnbrMs <= 8 * S,
+      `first render ${result.curve.ttfnbrMs}ms should follow the 4s save`,
+    );
+    const shots = new Set(cold.filter((f) => f.class === 'render').map((f) => f.screenshotPath));
+    assert.ok(shots.size >= 2, 'the second save is a second visible state, not a restart');
+    assert.ok(result.frames.every((f) => f.class !== 'unreachable'), 'the dev server answered from t0');
+
+    const prompt = await readFile(join(dir, 'prompt.txt'), 'utf8');
+    assert.match(prompt, /already a Vite \+ React project/);
+    assert.doesNotMatch(prompt, /npm run dev/, 'an agent with a running server must not be told to start one');
+
+    const res = await fetch(result.url).catch(() => null);
+    assert.equal(res, null, 'the harness stops the dev server it started');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('bundled briefs resolve from the package, not the working directory', async () => {
   // An installed CLI is run from somewhere else entirely.
   const elsewhere = await tmp('p2p-cwd-');

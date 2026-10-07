@@ -18,6 +18,7 @@ import { appliedTemperature } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { runIteration } from './iterate.ts';
 import { serveStatic } from './static-server.ts';
+import { SCAFFOLDS, prepareScaffold, startDevServer, type DevServer } from './scaffold.ts';
 import { ensureFreePort, killPort } from './port.ts';
 import { sleep } from './sleep.ts';
 import { writeJsonAtomic } from './atomic.ts';
@@ -263,6 +264,11 @@ export interface ProtocolOptions {
    * run measured was the agent fighting the harness.
    */
   served?: boolean;
+  /**
+   * What the agent is told about a harness-prepared project (a scaffold's
+   * `protocol` text). Implies `served`: the dev server holds the port.
+   */
+  scaffold?: string;
 }
 
 /**
@@ -278,6 +284,7 @@ export interface ProtocolOptions {
  * instruction.
  */
 export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string {
+  if (opts.scaffold) opts = { ...opts, served: true };
   const L = [
     '',
     '---',
@@ -292,6 +299,7 @@ export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string 
         '  taken, and every attempt will fail.'
       : '  now. Serve the app there, and leave the server running when you are done.',
   );
+  if (opts.scaffold) L.push(opts.scaffold);
   if (opts.renderEarly !== false)
     L.push(
       '- Get something on screen as early as you can and then refine it in place. A',
@@ -371,6 +379,18 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
   await ensureFreePort(url, port, opts.killPort ?? false);
 
   const shims = await setupShims(opts.runDir);
+
+  // A scaffolded brief starts with the project prepared and its dev server
+  // answering. Both happen before t0: the agent did neither and is not charged
+  // for either.
+  const scaffold = brief.target?.scaffold ? SCAFFOLDS[brief.target.scaffold] : undefined;
+  let devServer: DevServer | null = null;
+  if (scaffold) {
+    await prepareScaffold(scaffold, workdir, log);
+    devServer = await startDevServer(scaffold, workdir, port, join(opts.runDir, 'devserver.log'));
+    log(`${scaffold.description} on ${url}`);
+  }
+
   const t0Epoch = Date.now();
 
   const prober = new Prober({
@@ -490,6 +510,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     try {
       staticServer?.close();
     } catch { /* already closed */ }
+    if (!opts.keepServer) await devServer?.stop().catch(() => undefined);
     // Terminating the agent does not reliably take its dev server with it, and
     // a survivor would corrupt the next run against this port.
     if (!opts.keepServer) {
@@ -576,6 +597,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       protocolSuffix(url, {
         renderEarly: !opts.noRenderEarly,
         served: brief.target?.serveStatic === true,
+        scaffold: scaffold?.protocol,
       });
     await writeFile(join(opts.runDir, 'prompt.txt'), prompt);
     handle = await adapter.start(prompt, {
@@ -816,7 +838,9 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     serverReadyMs,
     firstPaintMs,
     reportedApiMs,
-    toolchain: opts.expectsToolchain ?? brief.target?.serveStatic !== true,
+    // A scaffold's install and dev-server boot happened before t0, so there is
+    // no toolchain phase for the shims to see inside the window.
+    toolchain: opts.expectsToolchain ?? (brief.target?.serveStatic !== true && !scaffold),
   });
 
   // Iteration attribution, filled in here rather than in runIteration: the shim

@@ -16,6 +16,7 @@ import {
 } from './judge/backends.ts';
 import type { JudgeBackend } from './judge/backends.ts';
 import { judgeRun } from './judge/judge.ts';
+import { judgePairwise } from './judge/pairwise.ts';
 import { computeMetrics } from './metrics/curve.ts';
 import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
@@ -38,7 +39,7 @@ import type { Adapter, RunResult, ScoredFrame } from './types.ts';
  * was run from, so `p2p briefs` works outside the repository too.
  */
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page', 'ops-dashboard'];
+const BUNDLED_BRIEFS = ['todo-app', 'landing-page', 'static-page', 'ops-dashboard', 'todo-app-scaffolded'];
 const bundledBrief = (id: string): string => join(PKG_ROOT, 'briefs', `${id}.json`);
 
 /**
@@ -71,6 +72,9 @@ prompt-to-paint -- how long until an agent renders something you can react to
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
+  p2p pairwise <runDir...> [--judge <provider:model>]
+                                            judge each visible change against the
+                                            state it replaced: better, same or worse?
   p2p trajectory <result.json...>           does the curve carry anything that
                                             finalScore and first render do not?
   p2p rate     <runDir...> [--out <file>]   blinded sheet asking a person which
@@ -654,6 +658,34 @@ async function main(): Promise<void> {
       title: { type: 'string' },
     },
   });
+
+  if (cmd === 'pairwise') {
+    // Every run directory given, each judged on its own: the comparisons are
+    // within a run, so there is nothing to pool and no reason to refuse a set.
+    if (!positionals.length) fail('pairwise needs at least one run directory');
+    const backend = judgeBackendFor(values.judge);
+    await assertJudgeUsable(backend);
+    for (const dir of positionals) {
+      const prev = JSON.parse(await readResultOrExplain(dir)) as RunResult;
+      const briefPath = values.brief || prev.briefPath || bundledBrief(prev.brief);
+      const brief = await loadBrief(briefPath);
+      const pairwise = await judgePairwise(prev, brief, {
+        backend,
+        maxImageWidth: num('judge-width', values['judge-width'], 256),
+      });
+      await writeJsonAtomic(join(dir, 'result.json'), { ...prev, pairwise });
+      const n = (v: string): number => pairwise.steps.filter((s) => s.verdict === v).length;
+      const flips = pairwise.steps.filter((s) => s.inconsistent).length;
+      console.log(
+        `  ${prev.label || prev.adapter}  ${pairwise.steps.length} change(s) after first render: ` +
+          `${n('better')} better, ${n('same')} same, ${n('worse')} worse` +
+          (flips ? `  (${flips} flipped with the order shown, counted as same)` : '') +
+          `   ${dir}`,
+      );
+      for (const w of pairwise.warnings) console.log(`    ! ${w}`);
+    }
+    return;
+  }
 
   if (cmd === 'rescore') {
     // Positionals, not "the first argument without a dash": that one also
