@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Northwind Logistics – Q3 2026 Operations Review</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0f172a;color:#e2e8f0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.4}
+.wrap{max-width:1100px;margin:0 auto;padding:48px 40px 32px}
+h1{margin:0;font-size:40px;letter-spacing:-.02em;color:#38bdf8}
+.sub{margin:6px 0 0;font-size:18px;color:#94a3b8}
+header{padding-bottom:28px;border-bottom:1px solid #243049}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin:32px 0 44px}
+.tile{background:#1e293b;border-radius:10px;padding:22px 24px;border-top:3px solid #38bdf8}
+.tile .l{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8}
+.tile .v{font-size:38px;font-weight:700;color:#fff;margin:8px 0 4px;font-variant-numeric:tabular-nums}
+.tile .d{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile .d span{font-weight:400;color:#64748b}
+.good{color:#4ade80}.bad{color:#f87171}
+h2{font-size:20px;margin:0 0 16px;color:#fff}
+section{margin-bottom:44px}
+table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:10px;overflow:hidden;font-size:17px}
+th,td{padding:12px 24px;text-align:right;font-variant-numeric:tabular-nums}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;background:#172033;font-weight:600}
+td{border-top:1px solid #2a3750}
+td:first-child{font-weight:600;color:#fff}
+tbody tr:nth-child(even){background:#222f45}
+.bars{background:#1e293b;border-radius:10px;padding:20px 24px}
+.row{display:grid;grid-template-columns:120px 1fr 90px;align-items:center;gap:16px;padding:8px 0}
+.row .n{font-weight:600;color:#fff}
+.row .t{background:#2a3750;border-radius:4px;height:20px}
+.row .b{height:100%;border-radius:4px;background:linear-gradient(90deg,#0ea5e9,#38bdf8)}
+.row .c{text-align:right;font-variant-numeric:tabular-nums;color:#cbd5e1}
+footer{border-top:1px solid #243049;padding-top:20px;color:#64748b;font-size:14px}
+</style></head><body><div class="wrap">
+<header><h1>Northwind Logistics</h1><p class="sub">Q3 2026 Operations Review</p></header>
+<div class="kpis">
+<div class="tile"><div class="l">On-time delivery</div><div class="v">94.2%</div><div class="d good">+1.8 pts <span>vs last quarter</span></div></div>
+<div class="tile"><div class="l">Average transit</div><div class="v">3.4 days</div><div class="d good">-0.2 days <span>vs last quarter</span></div></div>
+<div class="tile"><div class="l">Cost per shipment</div><div class="v">$18.40</div><div class="d bad">+$0.60 <span>vs last quarter</span></div></div>
+<div class="tile"><div class="l">Damage rate</div><div class="v">0.7%</div><div class="d good">-0.1 pts <span>vs last quarter</span></div></div>
+</div>
+<section><h2>Depots</h2>
+<table><thead><tr><th>Depot</th><th>Shipments</th><th>On-time</th><th>Cost/shipment</th></tr></thead><tbody>
+<tr><td>Rotterdam</td><td>48,210</td><td>96.1%</td><td>$16.20</td></tr>
+<tr><td>Hamburg</td><td>41,930</td><td>95.4%</td><td>$17.05</td></tr>
+<tr><td>Antwerp</td><td>37,480</td><td>93.8%</td><td>$17.80</td></tr>
+<tr><td>Gdansk</td><td>22,150</td><td>92.2%</td><td>$19.40</td></tr>
+<tr><td>Lyon</td><td>19,870</td><td>94.7%</td><td>$18.10</td></tr>
+<tr><td>Milan</td><td>18,640</td><td>91.5%</td><td>$20.30</td></tr>
+<tr><td>Valencia</td><td>16,220</td><td>90.8%</td><td>$21.15</td></tr>
+<tr><td>Bristol</td><td>14,090</td><td>95.9%</td><td>$17.60</td></tr>
+<tr><td>Gothenburg</td><td>11,360</td><td>97.3%</td><td>$16.85</td></tr>
+<tr><td>Tallinn</td><td>8,740</td><td>89.4%</td><td>$22.40</td></tr>
+<tr><td>Porto</td><td>6,480</td><td>93.1%</td><td>$19.95</td></tr>
+</tbody></table></section>
+<section><h2>Top five by volume</h2><div class="bars">
+<div class="row"><span class="n">Rotterdam</span><div class="t"><div class="b" style="width:100%"></div></div><span class="c">48,210</span></div>
+<div class="row"><span class="n">Hamburg</span><div class="t"><div class="b" style="width:86.97%"></div></div><span class="c">41,930</span></div>
+<div class="row"><span class="n">Antwerp</span><div class="t"><div class="b" style="width:77.75%"></div></div><span class="c">37,480</span></div>
+<div class="row"><span class="n">Gdansk</span><div class="t"><div class="b" style="width:45.94%"></div></div><span class="c">22,150</span></div>
+<div class="row"><span class="n">Lyon</span><div class="t"><div class="b" style="width:41.22%"></div></div><span class="c">19,870</span></div>
+</div></section>
+<footer>Prepared by the Operations Desk</footer>
+</div></body></html>

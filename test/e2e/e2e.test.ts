@@ -989,6 +989,58 @@ test('a bundled iteration check survives the CSS a real agent writes', { skip: n
   }
 });
 
+test('a leaderboard panel says its run ended once the clock passes the end, frame or no frame', { skip: needsBrowser, timeout: 60_000 }, async () => {
+  // A run's last frame stays the current one for the rest of the horizon. The
+  // player only redrew a panel when its frame changed, so a badge drawn just
+  // before runEndMs never gained "run ended": the replay showed every finished
+  // run as still going. Driven in a real browser, because the bug lives in the
+  // page's own script rather than in anything the generator computes.
+  const { chromium } = await import('playwright');
+  const { renderLeaderboard } = await import('../../src/report/leaderboard.ts');
+  const frame = (tMs: number, score: number) => ({
+    index: tMs / 1000, tMs, class: score > 0 ? 'render' : 'unreachable', reason: '',
+    screenshotPath: null, dhash: null, colorSig: null, inkRatio: 0.1, text: '', title: '',
+    favicon: null, tabSignal: false, offscreenTextChars: 0, httpStatus: 200, consoleErrors: [],
+    entityCoverage: score, entitiesFound: [], domSignature: '', captureMs: 5, score, scoreSource: 'judge',
+  });
+  const result = {
+    schema: 1, runId: 'r', brief: 'todo-app', briefPath: '', adapter: 'exec', label: 'a',
+    startedAt: '', t0Epoch: 0, wallMs: 4000, url: 'http://127.0.0.1:5173/',
+    curve: {
+      horizonMs: 10_000, auc: 0.5, ttfnbrMs: 2000, ttfrrMs: 2000, finalScore: 1,
+      peakScore: 1, timeToPeakMs: 3000, regression: 0, heldToHorizon: true, runEndMs: 4000,
+    },
+    decomposition: {
+      wallMs: 4000,
+      buckets: { model: 0, tool_overhead: 0, install: 0, build: 0, devserver_boot: 0, first_paint: 0, residual: 4000 },
+      coverage: 0, crossCheck: { reportedApiMs: null, attributedModelMs: 0, deltaMs: null }, notes: [],
+    },
+    iterations: [], frames: [frame(0, 0), frame(2000, 0.5), frame(3000, 1)], phases: [], agentEvents: [],
+    judge: { backend: 'none', model: null, framesJudged: 0, degraded: true },
+    agentFailure: null, endReason: 'signal', warnings: [],
+  } as unknown as RunResult;
+  const html = renderLeaderboard([result], '/runs/leaderboard.html');
+
+  const browser = await chromium.launch({ executablePath: findChromium(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html);
+    const badgeAt = async (t: number): Promise<string> => page.evaluate((t) => {
+      const scrub = document.getElementById('scrub') as HTMLInputElement;
+      scrub.value = String(t);
+      scrub.dispatchEvent(new Event('input'));
+      return document.querySelector('.player .badge')?.textContent ?? '';
+    }, t);
+
+    // Same last frame (3s) on both sides of the 4s end of the run.
+    assert.doesNotMatch(await badgeAt(3500), /run ended/);
+    assert.match(await badgeAt(6000), /run ended/, 'the run is over, though its frame has not changed');
+    assert.doesNotMatch(await badgeAt(3500), /run ended/, 'and scrubbing back un-ends it');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('bundled briefs resolve from the package, not the working directory', async () => {
   // An installed CLI is run from somewhere else entirely.
   const elsewhere = await tmp('p2p-cwd-');

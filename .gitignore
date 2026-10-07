@@ -1,5 +1,6 @@
 node_modules/
-runs/
+# Anchored: an unanchored runs/ also ignored site/*/runs/, the published runs.
+/runs/
 .p2p-cache/
 *.log
 .DS_Store
