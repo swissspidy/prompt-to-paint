@@ -483,6 +483,7 @@
     score: el.querySelector('.pscore'),
     play: el.querySelector('.splay'),
     cursor: -1,
+    ended: false,
   }));
 
   // Draw each panel's own curve once, in the sparkline's own coordinate space.
@@ -540,8 +541,12 @@
   function render() {
     for (const p of players) {
       const i = seek(p, clock);
-      if (i === p.cursor) continue;
+      // A run's last frame stays current long after the run stops, so the
+      // badge has to change on crossing runEndMs even when the frame does not.
+      const ended = clock > p.tr.runEndMs;
+      if (i === p.cursor && ended === p.ended) continue;
       p.cursor = i;
+      p.ended = ended;
       if (i < 0) {
         p.img.dataset.empty = '1';
         p.badge.textContent = 'not started';
@@ -550,7 +555,7 @@
         const s = p.tr.shot[i];
         if (s >= 0) { p.img.dataset.empty = '0'; p.img.src = p.tr.srcs[s]; }
         else p.img.dataset.empty = '1';
-        p.badge.textContent = CLASS[p.tr.cls[i]] + (clock > p.tr.runEndMs ? ' · run ended' : '');
+        p.badge.textContent = CLASS[p.tr.cls[i]] + (ended ? ' · run ended' : '');
         p.score.textContent = (p.tr.score[i] / 100).toFixed(2);
       }
     }
