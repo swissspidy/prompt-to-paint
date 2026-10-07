@@ -19,6 +19,12 @@ export const DEFAULT_JUDGE = 'anthropic:claude-sonnet-5';
 export interface JudgeRequest {
   png: Buffer;
   prompt: string;
+  /**
+   * Screenshots sent before `png`, for a judge comparing frames rather than
+   * scoring one. Each is labelled "Screenshot 1", "Screenshot 2", ... with
+   * `png` last, so the prompt can refer to them by number.
+   */
+  before?: Buffer[];
 }
 
 /**
@@ -260,12 +266,20 @@ export class AiSdkBackend implements JudgeBackend {
       messages: [
         {
           role: 'user',
-          content: [
-            // The tagged file part rather than the deprecated `image` part:
-            // same bytes, and it is what the SDK will keep supporting.
-            { type: 'file', mediaType: 'image/png', data: { type: 'data', data: req.png } },
-            { type: 'text', text: req.prompt },
-          ],
+          // The tagged file part rather than the deprecated `image` part:
+          // same bytes, and it is what the SDK will keep supporting.
+          content: req.before?.length
+            ? [
+                ...[...req.before, req.png].flatMap((png, i) => [
+                  { type: 'text' as const, text: `Screenshot ${i + 1}:` },
+                  { type: 'file' as const, mediaType: 'image/png', data: { type: 'data' as const, data: png } },
+                ]),
+                { type: 'text' as const, text: req.prompt },
+              ]
+            : [
+                { type: 'file', mediaType: 'image/png', data: { type: 'data', data: req.png } },
+                { type: 'text', text: req.prompt },
+              ],
         },
       ],
     });

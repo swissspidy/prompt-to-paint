@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { Brief } from './types.ts';
+import { SCAFFOLDS } from './scaffold.ts';
 
 class BriefError extends Error {}
 
@@ -58,6 +59,15 @@ export function parseBrief(raw: unknown, source: string): Brief {
         Number.isInteger(t.viewport.height) && t.viewport.height >= 320,
       `${source}: "target.viewport" needs integer width and height of at least 320`,
     );
+  if (t?.scaffold !== undefined) {
+    need(
+      typeof t.scaffold === 'string' && Object.hasOwn(SCAFFOLDS, t.scaffold),
+      `${source}: unknown "target.scaffold" ${JSON.stringify(t.scaffold)}; known: ${Object.keys(SCAFFOLDS).join(', ')}`,
+    );
+    // Both would try to own the port, and the two say opposite things to the
+    // agent about what the directory is.
+    need(!t.serveStatic, `${source}: "target.scaffold" and "target.serveStatic" cannot both be set`);
+  }
 
   const iterIds = new Set<string>();
   for (const it of b.iterations ?? []) {

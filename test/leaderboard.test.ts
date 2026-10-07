@@ -139,6 +139,27 @@ test('a cropped page says so, and --full-horizon puts the whole horizon back', (
   assert.match(full, /id="scrub" type="range" min="0" max="10000"/);
 });
 
+test('judged changes show as markers and a table column, and their absence says so', () => {
+  const plain = renderLeaderboard([run()], '/runs/leaderboard.html');
+  assert.doesNotMatch(plain, /Later changes/, 'no column when no run has been through p2p pairwise');
+
+  const judged = run({
+    pairwise: {
+      judge: 'anthropic:x',
+      warnings: [],
+      steps: [
+        { tMs: 3000, fromTMs: 2000, verdict: 'worse', inconsistent: false, note: 'Before had the badge' },
+        { tMs: 3500, fromTMs: 3000, verdict: 'same', inconsistent: true, note: 'Nearly identical' },
+      ],
+    },
+  });
+  const html = renderLeaderboard([judged, run({ label: 'b' })], '/runs/leaderboard.html');
+  assert.match(html, /Later changes/);
+  assert.match(html, /▲0<\/span> <span class="m0">●1<\/span> <span class="m-1">▼1/);
+  assert.match(html, /<td class="num">--<\/td>/, 'a run never judged reads --, not "none"');
+  assert.match(html, /flipped with the order shown/);
+});
+
 test('tied scores share a rank instead of manufacturing a disagreement', () => {
   // Two runs that both finish at 1.00 have no ordering by final score. Giving
   // them 1 and 2 would flag a trajectory-versus-final disagreement that is

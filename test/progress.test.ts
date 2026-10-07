@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { statusLine, describeEvent, clock, Progress } from '../src/progress.ts';
 import { protocolSuffix, DONE_SENTINEL } from '../src/run.ts';
+import { SCAFFOLDS } from '../src/scaffold.ts';
 import type { Frame } from '../src/types.ts';
 
 const frame = (over: Partial<Frame> = {}): Frame => ({
@@ -113,4 +114,15 @@ test('a brief the harness serves itself does not ask the agent for a server', ()
   assert.match(s, /as early as you can/, 'the early-render clause is unaffected');
   assert.ok(s.includes(DONE_SENTINEL), 'the clock still stops the same way');
   assert.doesNotMatch(s, /do not stop the server/, 'there is no server of theirs to stop');
+});
+
+test('a scaffolded brief tells the agent the project and server already exist', () => {
+  // The agent has no shell, so an instruction to start a dev server or install
+  // a package is one it can only fail at -- and the harness's server holds the
+  // port either way.
+  const s = protocolSuffix('http://127.0.0.1:5173/', { scaffold: SCAFFOLDS['vite-react']!.protocol });
+  assert.match(s, /already a Vite \+ React project/);
+  assert.match(s, /Do not start a server/);
+  assert.doesNotMatch(s, /npm run dev/);
+  assert.ok(s.includes(DONE_SENTINEL));
 });

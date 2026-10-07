@@ -114,8 +114,8 @@
     {
       "id": "header-blue",
       "prompt": "Make the hero section background blue.",
-      "description": "The canonical small visual edit.",
-      "check": "(() => { const leaf = [...document.querySelectorAll('h1,h2,h3,p,span,div,a')].find(el => el.children.length === 0 && /coffee,?\\s*handled/i.test(el.textContent || '')); if (!leaf) return false; for (let el = leaf; el; el = el.parentElement) { const r = el.getBoundingClientRect(); if (r.width < 300 || r.height < 120) continue; const m = getComputedStyle(el).backgroundColor.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } return false; })()"
+      "description": "The canonical small visual edit. Reads gradient colour stops as well as background-color: a header painted with linear-gradient has a transparent background-color, and a check that read only that reported a visibly blue header as NEVER LANDED.",
+      "check": "(() => { const leaf = [...document.querySelectorAll('h1,h2,h3,p,span,div,a')].find(el => el.children.length === 0 && /coffee,?\\s*handled/i.test(el.textContent || '')); if (!leaf) return false; for (let el = leaf; el; el = el.parentElement) { const r = el.getBoundingClientRect(); if (r.width < 300 || r.height < 120) continue; const cs = getComputedStyle(el); const colours = [cs.backgroundColor, ...(cs.backgroundImage.match(/rgba?\\([^)]*\\)/g) || [])]; for (const c of colours) { const m = c.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } } return false; })()"
     },
     {
       "id": "fourth-tier",

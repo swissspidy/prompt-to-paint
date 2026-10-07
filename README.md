@@ -570,6 +570,29 @@ horizons, briefs, judges, judge temperatures, viewports, judged-vs-unjudged,
 prompted-vs-unprompted, or a run whose judging never finished. See
 [what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
 
+### Did each change help?
+
+The rubric asks yes/no questions of one screenshot at a time, so once a page
+meets every criterion it scores 1.00 whatever happens to it next. A page that
+gets rebuilt three times after that draws a flat line, however much better or
+worse each version was.
+
+`p2p pairwise` asks the question the rubric cannot. It takes each visible
+change after the first render and asks the judge which of the two states better
+satisfies the brief:
+
+```bash
+npm run p2p -- pairwise runs/ops-dashboard-*/
+```
+
+Each pair is asked **twice, in both orders**. A model shown two pictures leans
+towards one position, so a preference only counts when it survives the swap. One
+that flips with the order is recorded as "same" and flagged. The verdicts go into
+`result.json` as `pairwise`, and the leaderboard shows them as markers under
+each replay (▲ better, ● same, ▼ worse), the judge's note as the replay passes
+each one, and a **Later changes** column. They are reported beside the scores
+and never change them: no AUC moves because of this.
+
 ## Recovering an interrupted run
 
 `result.json` is assembled once, after the browser and the agent are torn down.
@@ -906,11 +929,82 @@ seventy seconds of visible change. Part of "every curve is a step" is the
 agents. Part is a rubric that saturates: once each criterion is met, it cannot
 tell a better page from a worse one.
 
-**What these runs do not cover:** a stack with a build step. That needs an
-agent with a shell. The control alone is in: `p2p floor --template vite-react`
-first paints at **18.0s on a cold npm cache and 7.4s on a warm one** on the
-same machine. That is already as long as the fastest agent above took to write
-the whole dashboard.
+[`p2p pairwise`](#did-each-change-help) puts a number on it. Across all fifteen
+runs there were eight visible changes after a first render, six of them
+Gemini's. **None was judged an improvement:** five were judged worse and three
+about the same, two of those because the judge's preference flipped when the
+order was swapped. On this brief, an agent that kept working after its first
+render only ever made the page worse or left it as it was.
+
+**What these runs do not cover:** a stack with a build step. An agent that has
+to set one up needs a shell. The control alone is in: `p2p floor --template
+vite-react` first paints at **18.0s on a cold npm cache and 7.4s on a warm one**
+on the same machine. That is already as long as the fastest agent above took to
+write the whole dashboard. The next section takes the toolchain off the agent
+instead.
+
+### The same agents on a running Vite + React project
+
+**[Replay every run side by side →](https://swissspidy.github.io/prompt-to-paint/2026-10-07-todo-app-scaffolded/)**
+
+A single-file static page can only appear in one step, so the runs above could
+never show an agent building in stages. These fifteen use
+[`todo-app-scaffolded`](#a-toolchain-the-agent-does-not-have-to-set-up): the
+`todo-app` task board, on a Vite + React project the harness had already
+installed and started. The agents still had file edits only, and every save
+hot-reloaded. Same five agent/model pairs, three repeats each.
+
+| agent / model | first render, median [range] | AUC median | edit landed: header blue / add a column |
+|---|---|---|---|
+| Claude Code / `claude-sonnet-5-5` | **13.8s** [12.9 – 26.4] | 0.971 | 3.3s / 1.5s |
+| Pi / `gpt-5.5` | 21.5s [12.5 – 25.4] | 0.955 | 7.5s / 4.5s |
+| Claude Code / `claude-opus-5-5` | 23.6s [21.2 – 26.9] | 0.951 | 5.9s / 5.5s |
+| Pi / `claude-sonnet-5-5` | 28.9s [15.8 – 60.3] | 0.940 | 4.2s / 2.7s |
+| Pi / `gemini-3.8-flash` | 67.4s [58.4 – 68.8] | 0.860 | 20.8s / 21.3s |
+
+What they showed:
+
+- **Hot reload made staged rendering possible, and almost nobody used it.** Both
+  Claude Code models wrote the whole app into `src/App.jsx` in a single write, in
+  all six runs. The Pi agents wrote `App.jsx` and then `index.css`, and the order
+  of those two saves is the only thing that ever produced a partial page. One
+  GPT-5.5 run put the unstyled app on screen at 12.5s (scored 0.56), the styled
+  board at 23.5s (1.00), and moved "Sprint 14" into place at 27.1s. That is the
+  first curve in these runs that is not a step: 2 of 15 runs scored at a partial
+  state here, against 0 of 15 on `ops-dashboard`.
+- **Later changes helped only when the page was being built, not rebuilt.**
+  Pairwise found nine changes after a first render. Three were judged better: two
+  are that GPT-5.5 run completing its page, and one is a Gemini run adding a
+  task counter. Of Gemini's other three, two were judged worse and one the same,
+  and all three of Opus's were judged nearly identical: spacing and icon size,
+  in the judge's words.
+- **The ranking holds across the two briefs.** Sonnet 5.5 in Claude Code was
+  fastest on both; Gemini 3.8 Flash was slowest on both, by a wider margin here.
+  Pi / Sonnet ranged from 15.8s to 60.3s across three identical runs, the widest
+  spread in either table and a reminder that three repeats is a smoke test.
+
+**Four of thirty edits were mis-scored by the brief, not the agent.** All four
+were visibly on screen and the brief's check said NEVER LANDED:
+
+- GPT-5.5 made the header blue with a `linear-gradient`, in all three runs. A
+  gradient leaves `background-color` transparent, and the check read nothing
+  else.
+- One Pi / Sonnet run rendered its column header as
+  `<h2>Blocked<span>0</span></h2>`. Its `innerText` is `BLOCKED0`, and `\b` sees
+  no word boundary between a letter and a digit.
+
+Both checks are fixed in `todo-app`, `todo-app-scaffolded` and the same gradient
+blind spot in `landing-page`. Re-run against every run's final code, the fixed
+checks pass exactly those four and agree with the old ones everywhere else; both
+fail on the blank scaffold. In each of the four, the page changed once after the
+prompt and then held that state to the end of the window. So their results were
+corrected to land at that first change, and each says so in a `rechecked` field
+and in the run's warnings. The replay marks them "re-checked".
+
+**The pairwise notes are a judge's words, so check them before quoting.** One
+note says a Gemini change "lacks subtitle text". The screenshots show "Sprint 14"
+is still there; it went from a badge to plain text, and the line under it was
+removed. The "worse" verdict is defensible. The note's reason is not.
 
 ## Writing a brief
 
@@ -939,6 +1033,30 @@ the whole dashboard.
 Briefs are validated strictly on load. A malformed rubric fails in the worst
 possible way — the run completes and produces a plausible number that means
 nothing — so an empty rubric is an error, not a default.
+
+### A toolchain the agent does not have to set up
+
+`"target": { "scaffold": "vite-react" }` has the harness prepare a Vite + React
+project, with pinned dependencies installed, and start its dev server before the
+clock starts. The agent is told the project and server exist, and that nothing
+can be installed. Every file it saves is on screen at the next screenshot through
+hot reload. `briefs/todo-app-scaffolded.json` is `todo-app` with exactly this
+change.
+
+That makes two questions separable:
+
+- **Without a scaffold**, an app brief measures whether the agent sets up a
+  toolchain and how long that takes. That needs an agent with a shell.
+- **With one**, it measures how the agent builds on a toolchain that is already
+  running. It needs only file edits. An agent that builds the app across several
+  saves renders in stages, so the curve can show a shape a single-file static
+  brief never could.
+
+The starting page is deliberately empty: no title, no favicon, an `App` that
+renders nothing. Anything the template showed by itself would be a first render
+at 0s for every agent. The project is installed once per machine into
+`.p2p-cache/scaffold/` and copied into each run before t0, so the agent is never
+charged for the install or the server boot.
 
 ### Write briefs that are not saturated
 

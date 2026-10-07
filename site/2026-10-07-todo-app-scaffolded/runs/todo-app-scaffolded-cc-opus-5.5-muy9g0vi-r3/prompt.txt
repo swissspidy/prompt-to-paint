@@ -1,0 +1,22 @@
+Build a task board web app called "Orbit". It shows three columns -- Todo, In Progress, Done -- each holding task cards. Seed it with six tasks spread across the columns; each card shows a title, an assignee name, and a priority badge (High, Medium, or Low). There is an "Add task" button at the top right. The header reads "Orbit" with the subtitle "Sprint 14". Use a clean light theme.
+
+
+---
+How this run is observed:
+
+- A browser is already open at http://127.0.0.1:5173/ and screenshots it every second, starting
+  now. That URL already serves this directory, so a file you save here is on
+  screen at the next screenshot. Do not start a server: the port is already
+  taken, and every attempt will fail.
+- This directory is already a Vite + React project with its dependencies
+  installed, and the harness is running its dev server at that URL with hot
+  reload: every file you save under `src/` is on screen at the next
+  screenshot. Start from `src/App.jsx`, which currently renders nothing. Do
+  not start a server or install packages: `react` and `react-dom` are the
+  only dependencies, and nothing else can be added.
+- Get something on screen as early as you can and then refine it in place. A
+  rough page that renders in the first minute counts for more here than a
+  perfect one that only appears at the end.
+- When you consider the app done, create an empty file named `.p2p-done` in the
+  project root. That is what stops the clock. Do not create it before the app is
+  on screen.

@@ -104,3 +104,15 @@ test('a target that cannot be observed is refused up front', () => {
     () => parseBrief({ ...valid, target: { port: 5173, viewport: { width: 1280, height: 2400 } } }, 'b.json'),
   );
 });
+
+test('a scaffold must be one the harness knows, and cannot share the port with serveStatic', () => {
+  const ok = parseBrief({ ...valid, target: { scaffold: 'vite-react' } }, 't');
+  assert.equal(ok.target?.scaffold, 'vite-react');
+  // A typo would otherwise reach the run, which would wait on a dev server
+  // nobody was going to start.
+  assert.throws(() => parseBrief({ ...valid, target: { scaffold: 'vite-reactt' } }, 't'), /unknown "target.scaffold".*vite-react/);
+  assert.throws(
+    () => parseBrief({ ...valid, target: { scaffold: 'vite-react', serveStatic: true } }, 't'),
+    /cannot both be set/,
+  );
+});

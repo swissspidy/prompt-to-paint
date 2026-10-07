@@ -29,6 +29,9 @@ const json = (v: unknown): string => JSON.stringify(v).replace(/</g, '\\u003c');
 
 const CLASS_CODE: Record<FrameClass, number> = { unreachable: 0, error: 1, blank: 2, render: 3 };
 
+const STEP_MARK: Record<-1 | 0 | 1, string> = { 1: '▲', 0: '●', [-1]: '▼' };
+const STEP_WORD: Record<-1 | 0 | 1, string> = { 1: 'better', 0: 'about the same', [-1]: 'worse' };
+
 /** Which experiment a run belongs to. */
 export type Condition = 'prompted' | 'unprompted';
 
@@ -174,6 +177,12 @@ export interface LeaderboardTrack {
   condition: Condition;
   /** Follow-up edits, each on a clock that starts when its prompt was sent. */
   edits: TrackEdit[];
+  /**
+   * Each visible change after the first render, judged against the state it
+   * replaced: v is 1 better, 0 same, -1 worse. Null when `p2p pairwise` has
+   * not been run on this result, which is not the same as "no changes".
+   */
+  steps: Array<{ t: number; v: -1 | 0 | 1; note: string; flip: boolean }> | null;
 }
 
 /**
@@ -202,6 +211,8 @@ export interface TrackEdit {
   outcome: 'landed' | 'never' | 'void';
   /** Null when the adapter's stream cannot show tool calls, which is not zero. */
   toolCalls: number | null;
+  /** Corrected after the run because the brief's check was wrong; says how. */
+  rechecked: string | null;
 }
 
 /**
@@ -267,6 +278,14 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
     videoHref: rel(r.artifacts?.videoPath),
     condition: conditionOf(r),
     edits: buildEdits(r, shotOf),
+    steps: r.pairwise
+      ? r.pairwise.steps.map((st) => ({
+          t: st.tMs,
+          v: st.verdict === 'better' ? 1 : st.verdict === 'worse' ? -1 : 0,
+          note: st.note,
+          flip: st.inconsistent,
+        }))
+      : null,
   };
 }
 
@@ -297,6 +316,7 @@ function buildEdits(r: RunResult, shotOf: (path: string | null) => number): Trac
       endMs: close - sent,
       outcome: it.baselineAlreadyPassing || it.baselineUnstable ? 'void' : it.ok ? 'landed' : 'never',
       toolCalls: it.work?.toolCalls ?? null,
+      rechecked: it.rechecked ?? null,
     };
   });
 }
@@ -347,6 +367,13 @@ export function renderLeaderboard(
   const zoomed = viewMs < horizonMs;
 
   const totalShots = tracks.reduce((n, t) => n + t.srcs.length, 0);
+  const judgedSteps = tracks.some((t) => t.steps !== null);
+  const stepCell = (tr: LeaderboardTrack): string => {
+    if (!tr.steps) return '<td class="num">--</td>';
+    if (!tr.steps.length) return '<td class="num">none</td>';
+    const n = (v: number): number => tr.steps!.filter((st) => st.v === v).length;
+    return `<td class="num"><span class="m1">▲${n(1)}</span> <span class="m0">●${n(0)}</span> <span class="m-1">▼${n(-1)}</span></td>`;
+  };
   const vars = (list: string[]): string => list.map((c, i) => `--series-${i + 1}: ${c};`).join(' ');
   const slot = (i: number): number => (i % 6) + 1;
 
@@ -410,7 +437,19 @@ export function renderLeaderboard(
       <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
         <path class="sline" stroke="var(--series-${slot(i)})"/>
         <line class="splay" y1="0" y2="46"/>
-      </svg>
+      </svg>${
+        tr.steps?.length
+          ? `<div class="psteps">${tr.steps
+              .filter((st) => st.t <= viewMs)
+              .map(
+                (st) =>
+                  `<span class="mark m${st.v}" style="left:${((st.t / viewMs) * 100).toFixed(2)}%" title="${esc(
+                    `${(st.t / 1000).toFixed(1)}s, ${STEP_WORD[st.v]}${st.flip ? ' (the judge flipped with the order shown)' : ''}: ${st.note}`,
+                  )}">${STEP_MARK[st.v]}</span>`,
+              )
+              .join('')}</div><p class="pnote"></p>`
+          : ''
+      }
       <div class="pfoot">
         <span class="pscore">--</span>
         <span class="pmeta">first render ${secs(tr.ttfnbrMs)} · reviewable ${secs(tr.ttfrrMs)}</span>
@@ -548,6 +587,10 @@ same edit at the same moment however long each agent took over the first build.<
   .plinks { margin-left:auto; }
   .plinks a { color:var(--text-secondary); }
   .note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+  .psteps { position:relative; height:14px; margin-top:2px; }
+  .mark { position:absolute; transform:translateX(-50%); font-size:11px; line-height:14px; cursor:help; }
+  .m1 { color:#1f8a4c; } .m0 { color:var(--text-muted); } .m-1 { color:#c0392b; }
+  .pnote { margin:4px 0 0; font-size:12px; color:var(--text-secondary); min-height:1.4em; }
   .etransport { position:static; box-shadow:none; background:var(--surface-0); }
   .eplayer { padding:12px; margin:0; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
@@ -597,14 +640,16 @@ holds its last value from there to the ${horizonMs / 1000}s horizon, and the AUC
 <section class="panel"><h2>Ranking</h2>
 <table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
 <th class="num">First render</th><th class="num">First reviewable</th>
-<th class="num">By AUC</th><th class="num">By final</th><th>Window closed by</th></tr></thead><tbody>
+<th class="num">By AUC</th><th class="num">By final</th>${
+    judgedSteps ? '<th class="num" title="Each visible change after the first render, judged against the state it replaced">Later changes</th>' : ''
+  }<th>Window closed by</th></tr></thead><tbody>
 ${rows
   .map((row, i) => {
     const r = row.ranked;
     const tr = tracks[i]!; // rows, ranked and tracks are built in the same order
     const head =
       mixed && (i === 0 || rows[i - 1]!.condition !== row.condition)
-        ? `<tr class="cgroup"><td colspan="8">${esc(CONDITION_LABEL[row.condition])}</td></tr>`
+        ? `<tr class="cgroup"><td colspan="${judgedSteps ? 9 : 8}">${esc(CONDITION_LABEL[row.condition])}</td></tr>`
         : '';
     return `${head}<tr>
   <td><span class="swatch" style="background:var(--series-${slot(i)})"></span>${esc(r.label)}</td>
@@ -612,7 +657,7 @@ ${rows
   <td class="num">${secs(r.ttfnbrMs)}</td><td class="num">${secs(r.ttfrrMs)}</td>
   <td class="num">${r.rankAuc}</td>
   <td class="num ${r.rankAuc !== r.rankFinal ? 'moved' : ''}">${r.rankFinal}${r.rankAuc !== r.rankFinal ? ' ≠' : ''}</td>
-  <td>${esc(tr.endReason)}</td></tr>`;
+  ${judgedSteps ? stepCell(tr) : ''}<td>${esc(tr.endReason)}</td></tr>`;
   })
   .join('')}
 </tbody></table>
@@ -620,7 +665,11 @@ ${rows
     ranked.filter((r) => r.rankAuc !== r.rankFinal).length === 0
       ? 'AUC and final score agree on the ordering for this set.'
       : 'Highlighted rows rank differently by trajectory than by final score — the disagreement the trajectory metric exists to surface.'
-  } Playback shows the frames the scores were computed from, on one shared clock, so the ranking above and the pictures below cannot disagree.</p>
+  } Playback shows the frames the scores were computed from, on one shared clock, so the ranking above and the pictures below cannot disagree.${
+    judgedSteps
+      ? ` <b>Later changes</b> counts each visible change after the first render, judged against the state it replaced — ▲ better, ● about the same, ▼ worse. It is reported beside the scores and never changes them; a rubric that every version passes cannot say whether a change helped, and this can. Each pair is judged in both orders, and a preference that flips with the order is counted as the same.`
+      : ''
+  }</p>
 </section>
 ${
     effects.length
@@ -668,9 +717,12 @@ above are separate on purpose and must not be read as one table.</p>
     badge: el.querySelector('.badge'),
     score: el.querySelector('.pscore'),
     play: el.querySelector('.splay'),
+    note: el.querySelector('.pnote'),
     cursor: -1,
     ended: false,
+    step: -1,
   }));
+  const STEP_LABEL = { 1: '▲ better than before', 0: '● about the same as before', [-1]: '▼ worse than before' };
 
   // Draw each panel's own curve once, in the sparkline's own coordinate space.
   for (const p of players) {
@@ -730,6 +782,16 @@ above are separate on purpose and must not be read as one table.</p>
       // A run's last frame stays current long after the run stops, so the
       // badge has to change on crossing runEndMs even when the frame does not.
       const ended = clock > p.tr.runEndMs;
+      // The latest judged change at or before now, so its verdict reads as the
+      // replay passes it rather than all at once from the start.
+      let step = -1;
+      if (p.tr.steps) while (step + 1 < p.tr.steps.length && p.tr.steps[step + 1].t <= clock) step++;
+      if (p.note && step !== p.step) {
+        p.step = step;
+        const st = step >= 0 ? p.tr.steps[step] : null;
+        p.note.textContent = st ? STEP_LABEL[st.v] + ': ' + st.note : '';
+        p.note.className = 'pnote' + (st ? ' m' + st.v : '');
+      }
       if (i === p.cursor && ended === p.ended) continue;
       p.cursor = i;
       p.ended = ended;
@@ -848,7 +910,9 @@ above are separate on purpose and must not be read as one table.</p>
         const e = editOf(p);
         p.result.textContent = !e ? '--' : e.outcome === 'void' ? 'void' : e.outcome === 'never' ? 'never landed' : s1(e.correctMs);
         p.work.textContent = !e || e.outcome !== 'landed' ? ''
-          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'));
+          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'))
+            + (e.rechecked ? ' · re-checked' : '');
+        p.work.title = e && e.rechecked ? e.rechecked : '';
       }
       eclock = 0;
       setEPlaying(false);

@@ -77,6 +77,13 @@ export interface Brief {
      * getting it running is part of the task.
      */
     serveStatic?: boolean;
+    /**
+     * A project the harness prepares and serves before the clock starts, by id
+     * (see SCAFFOLDS). The agent only edits files; the dev server hot-reloads
+     * them. Measures how an agent builds an app on a running toolchain, not
+     * whether it can set one up -- that is what a brief without this measures.
+     */
+    scaffold?: string;
   };
 }
 
@@ -403,6 +410,13 @@ export interface IterationResult {
    */
   refreshedAtMs?: number | null;
   /**
+   * Set when this result was corrected after the run because the brief's check
+   * was wrong, saying how. Only ever for a check that missed an edit visibly on
+   * screen, and only when the page changed once and then held that state to the
+   * end of the window, so the landing time is the first visible change.
+   */
+  rechecked?: string;
+  /**
    * What the agent actually did for this edit.
    *
    * Time to correct change is wall clock, and wall clock says nothing about
@@ -479,6 +493,13 @@ export interface RunResult {
   frames: ScoredFrame[];
   phases: PhaseEvent[];
   agentEvents: AgentEvent[];
+  /**
+   * Each visible change after the first render, judged against the state it
+   * replaced. Absent until `p2p pairwise` has run on the result. Kept apart
+   * from the scores on purpose: it answers "did this change help?", which a
+   * rubric that every version passes cannot.
+   */
+  pairwise?: PairwiseResult;
   judge: {
     backend: string;
     model: string | null;
@@ -572,5 +593,32 @@ export interface RunResult {
       reportedByAgent?: string | null;
     };
   };
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Pairwise: was each change an improvement?
+// ---------------------------------------------------------------------------
+
+export type StepVerdict = 'better' | 'same' | 'worse';
+
+export interface PairwiseStep {
+  /** When the new state first appeared, ms since t0. */
+  tMs: number;
+  /** When the state it replaced first appeared. */
+  fromTMs: number;
+  verdict: StepVerdict;
+  /**
+   * The two orderings disagreed about which screenshot was better. The step is
+   * then recorded as `same`, because a preference that flips with the order
+   * the pictures were shown in is the judge's position bias, not the page.
+   */
+  inconsistent: boolean;
+  note: string;
+}
+
+export interface PairwiseResult {
+  judge: string;
+  steps: PairwiseStep[];
   warnings: string[];
 }
