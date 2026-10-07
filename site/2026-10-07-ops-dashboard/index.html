@@ -1,0 +1,602 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Dense ops dashboard: five agent/model pairs, three vendors</title>
+<style>
+  :root { color-scheme: light; --surface-0:#f6f5f2; --surface-1:#fcfcfb; --surface-2:#eeede9;
+    --border:#e2e1dc; --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77756f;
+    --grid:#e8e7e2; --muted-fill:#c9c8c2; --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+    --surface-0:#111110; --surface-1:#1a1a19; --surface-2:#232321; --border:#302f2d;
+    --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e86; --grid:#2a2a28;
+    --muted-fill:#4a4946; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; } }
+  :root[data-theme="dark"] { color-scheme: dark; --surface-0:#111110; --surface-1:#1a1a19;
+    --surface-2:#232321; --border:#302f2d; --text-primary:#fff; --text-secondary:#c3c2b7;
+    --text-muted:#8f8e86; --grid:#2a2a28; --muted-fill:#4a4946; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surface-0); color:var(--text-primary);
+    font:15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 16px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; letter-spacing:-0.01em; }
+  h2 { font-size:15px; margin:0 0 14px; color:var(--text-secondary); text-transform:uppercase;
+    letter-spacing:0.06em; font-weight:600; }
+  .sub { color:var(--text-secondary); margin:0 0 22px; font-size:14px; }
+  .panel { background:var(--surface-1); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin:0 0 18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;
+    color:var(--text-secondary); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border); }
+  td { padding:7px 8px; border-bottom:1px solid var(--border); }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .swatch { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:8px; }
+  .moved { color:var(--series-2); font-weight:600; }
+  .cgroup td { font-weight:600; padding-top:16px; color:var(--text-secondary);
+    border-bottom:1px solid var(--border); }
+  .ctag { font-size:11px; padding:1px 6px; border-radius:99px; border:1px solid var(--border);
+    color:var(--text-secondary); margin-left:6px; }
+  .delta-up { color:var(--series-3); } .delta-flat { color:var(--text-secondary); }
+  svg.chart { width:100%; height:auto; overflow:visible; display:block; }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .tick { fill:var(--text-muted); font-size:11px; }
+  .s { fill:none; stroke-width:2; stroke-linejoin:round; }
+  .lbl { font-size:12px; font-weight:600; dominant-baseline:middle; }
+  #chartplay { stroke:var(--text-primary); stroke-width:1.5; opacity:.5; }
+
+  /* ---- transport ---- */
+  .transport { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px;
+    background:var(--surface-1); border:1px solid var(--border); border-radius:12px;
+    padding:12px 16px; margin:0 0 18px; flex-wrap:wrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .transport button { font:inherit; font-weight:600; cursor:pointer; color:var(--text-primary);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:6px 14px; }
+  .transport button:hover { border-color:var(--text-muted); }
+  .transport .t { font-variant-numeric:tabular-nums; font-weight:650; min-width:104px; }
+  .transport input[type=range] { flex:1; min-width:220px; accent-color:var(--series-1); }
+  .speeds { display:flex; gap:4px; }
+  .speeds button { padding:6px 10px; font-size:13px; }
+  .speeds button[aria-pressed="true"] { background:var(--series-1); border-color:var(--series-1); color:#fff; }
+  .buffer { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+
+  /* ---- players ---- */
+  .grid-players { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .player { padding:12px; margin:0; }
+  .phead { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:13px; }
+  .rank { width:20px; height:20px; border-radius:6px; background:var(--surface-2); color:var(--text-secondary);
+    display:grid; place-items:center; font-size:11px; font-weight:700; flex:none; }
+  .plabel { font-weight:650; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pauc { color:var(--text-muted); font-variant-numeric:tabular-nums; }
+  .screen { position:relative; aspect-ratio:16/10; background:var(--surface-2);
+    border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .screen img { width:100%; height:100%; object-fit:cover; object-position:top center; display:block; }
+  .screen img[data-empty="1"] { visibility:hidden; }
+  .badge { position:absolute; left:8px; bottom:8px; font-size:11px; font-weight:700;
+    padding:3px 7px; border-radius:6px; background:rgba(0,0,0,.62); color:#fff; letter-spacing:.02em; }
+  .spark { width:100%; height:46px; margin-top:8px; display:block; }
+  .sline { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; }
+  .splay { stroke:var(--text-muted); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .pfoot { display:flex; align-items:baseline; gap:8px; margin-top:6px; font-size:12px;
+    color:var(--text-secondary); flex-wrap:wrap; }
+  .pscore { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--text-primary); }
+  .pmeta { color:var(--text-muted); }
+  .plinks { margin-left:auto; }
+  .plinks a { color:var(--text-secondary); }
+  .note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+  @media (max-width:560px) { .wrap { padding:18px 12px 48px; } .transport { position:static; } }
+</style></head><body><div class="wrap">
+
+<h1>Dense ops dashboard: five agent/model pairs, three vendors</h1>
+<p class="sub">ops-dashboard · 15 runs · horizon 420s ·
+  38 distinct screenshots</p>
+
+<div class="transport">
+  <button id="playpause" aria-label="Play or pause">▶ Play</button>
+  <span class="t" id="tnow">00:00 / 00:00</span>
+  <input id="scrub" type="range" min="0" max="420000" value="0" step="100" aria-label="Scrub"/>
+  <span class="speeds" role="group" aria-label="Playback speed">
+    <button data-speed="1">1×</button><button data-speed="4">4×</button>
+    <button data-speed="10" aria-pressed="true">10×</button><button data-speed="30">30×</button>
+  </span>
+  <span class="buffer" id="buffer"></span>
+</div>
+
+<div class="grid-players"><figure class="panel player" data-i="0">
+      <figcaption class="phead">
+        <span class="rank">1</span>
+        <span class="plabel" style="color:var(--series-1)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.962</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 16.1s · reviewable 16.1s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-sonnet-5.5-muxxkuzu-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="1">
+      <figcaption class="phead">
+        <span class="rank">2</span>
+        <span class="plabel" style="color:var(--series-2)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.957</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 18.0s · reviewable 18.0s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-sonnet-5.5-muxwycap-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="2">
+      <figcaption class="phead">
+        <span class="rank">3</span>
+        <span class="plabel" style="color:var(--series-3)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.955</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 18.9s · reviewable 18.9s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-sonnet-5.5-muxwzk2r-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="3">
+      <figcaption class="phead">
+        <span class="rank">4</span>
+        <span class="plabel" style="color:var(--series-4)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.952</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-4)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 20.0s · reviewable 20.0s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-sonnet-5.5-muxx0oji-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="4">
+      <figcaption class="phead">
+        <span class="rank">5</span>
+        <span class="plabel" style="color:var(--series-5)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.945</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-5)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 23.3s · reviewable 23.3s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-sonnet-5.5-muxxlvz1-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="5">
+      <figcaption class="phead">
+        <span class="rank">6</span>
+        <span class="plabel" style="color:var(--series-6)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.929</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-6)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 29.6s · reviewable 29.6s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-sonnet-5.5-muxxjii0-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="6">
+      <figcaption class="phead">
+        <span class="rank">7</span>
+        <span class="plabel" style="color:var(--series-1)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.929</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 30.0s · reviewable 30.0s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gpt-5.5-muxx3dgx-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="7">
+      <figcaption class="phead">
+        <span class="rank">8</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.926</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 30.9s · reviewable 30.9s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gpt-5.5-muxx4rdf-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="8">
+      <figcaption class="phead">
+        <span class="rank">9</span>
+        <span class="plabel" style="color:var(--series-3)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.920</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 33.4s · reviewable 33.4s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-opus-5.5-muxxorwp-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="9">
+      <figcaption class="phead">
+        <span class="rank">10</span>
+        <span class="plabel" style="color:var(--series-4)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.917</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-4)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 34.7s · reviewable 34.7s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="10">
+      <figcaption class="phead">
+        <span class="rank">11</span>
+        <span class="plabel" style="color:var(--series-5)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.915</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-5)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 35.7s · reviewable 35.7s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gpt-5.5-muxx1uh2-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="11">
+      <figcaption class="phead">
+        <span class="rank">12</span>
+        <span class="plabel" style="color:var(--series-6)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.914</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-6)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 36.1s · reviewable 36.1s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-cc-opus-5.5-muxxn5jg-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="12">
+      <figcaption class="phead">
+        <span class="rank">13</span>
+        <span class="plabel" style="color:var(--series-1)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.909</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 38.2s · reviewable 38.2s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="13">
+      <figcaption class="phead">
+        <span class="rank">14</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.908</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 38.6s · reviewable 38.6s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="14">
+      <figcaption class="phead">
+        <span class="rank">15</span>
+        <span class="plabel" style="color:var(--series-3)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.893</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 45.1s · reviewable 45.1s</span>
+        <span class="plinks"><a href="runs/ops-dashboard-pi-gemini-3.8-flash-muxx6n27-r1/report.html">report</a></span>
+      </div>
+    </figure></div>
+
+<section class="panel" style="margin-top:18px"><h2>Correctness over time</h2>
+<svg class="chart" viewBox="0 0 900 260" role="img" aria-label="Correctness over time for 15 runs">
+  <line class="grid" x1="44" x2="784" y1="230" y2="230"/>
+        <text class="tick" x="36" y="234" text-anchor="end">0.00</text><line class="grid" x1="44" x2="784" y1="176" y2="176"/>
+        <text class="tick" x="36" y="180" text-anchor="end">0.25</text><line class="grid" x1="44" x2="784" y1="122" y2="122"/>
+        <text class="tick" x="36" y="126" text-anchor="end">0.50</text><line class="grid" x1="44" x2="784" y1="68" y2="68"/>
+        <text class="tick" x="36" y="72" text-anchor="end">0.75</text><line class="grid" x1="44" x2="784" y1="14" y2="14"/>
+        <text class="tick" x="36" y="18" text-anchor="end">1.00</text><text class="tick" x="44" y="252" text-anchor="middle">0s</text><text class="tick" x="167.33333333333331" y="252" text-anchor="middle">70s</text><text class="tick" x="290.66666666666663" y="252" text-anchor="middle">140s</text><text class="tick" x="414" y="252" text-anchor="middle">210s</text><text class="tick" x="537.3333333333333" y="252" text-anchor="middle">280s</text><text class="tick" x="660.6666666666667" y="252" text-anchor="middle">350s</text><text class="tick" x="784" y="252" text-anchor="middle">420s</text>
+  <path class="s" d="M 44 230 L 46.28342857142857 230 L 46.28342857142857 230 L 48.48580952380952 230 L 48.48580952380952 230 L 50.721666666666664 230 L 50.721666666666664 230 L 52.93461904761905 230 L 52.93461904761905 230 L 55.04009523809523 230 L 55.04009523809523 230 L 57.17552380952381 230 L 57.17552380952381 230 L 59.3567619047619 230 L 59.3567619047619 230 L 61.56619047619048 230 L 61.56619047619048 230 L 63.71042857142857 230 L 63.71042857142857 230 L 65.84585714285714 230 L 65.84585714285714 230 L 68.03942857142857 230 L 68.03942857142857 230 L 70.24357142857143 230 L 70.24357142857143 230 L 72.42128571428572 230 L 72.42128571428572 14 L 74.7064761904762 14 L 74.7064761904762 14 L 76.81195238095238 14 L 76.81195238095238 14 L 78.98614285714285 14 L 78.98614285714285 14 L 81.08104761904762 14 L 81.08104761904762 14 L 83.2904761904762 14 L 83.2904761904762 14 L 85.41357142857143 14 L 85.41357142857143 14 L 87.64942857142857 14 L 87.64942857142857 14 L 89.85533333333333 14 L 89.85533333333333 14 L 91.96080952380953 14 L 91.96080952380953 14 L 94.16142857142856 14 L 94.16142857142856 14 L 96.29861904761904 14 L 96.29861904761904 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 46.34509523809524 230 L 46.34509523809524 230 L 48.772999999999996 230 L 48.772999999999996 230 L 51.20619047619048 230 L 51.20619047619048 230 L 53.50547619047619 230 L 53.50547619047619 230 L 55.700809523809525 230 L 55.700809523809525 230 L 57.94723809523809 230 L 57.94723809523809 230 L 60.28 230 L 60.28 230 L 62.570476190476185 230 L 62.570476190476185 230 L 64.75347619047619 230 L 64.75347619047619 230 L 66.92414285714285 230 L 66.92414285714285 230 L 69.086 230 L 69.086 230 L 71.36942857142857 230 L 71.36942857142857 230 L 73.59295238095238 230 L 73.59295238095238 230 L 75.73895238095238 230 L 75.73895238095238 14 L 78.14395238095238 14 L 78.14395238095238 14 L 80.31814285714286 14 L 80.31814285714286 14 L 82.41657142857142 14 L 82.41657142857142 14 L 84.55023809523809 14 L 84.55023809523809 14 L 86.84247619047619 14 L 86.84247619047619 14 L 89.1805238095238 14 L 89.1805238095238 14 L 91.48333333333333 14 L 91.48333333333333 14 L 93.63814285714287 14 L 93.63814285714287 14 L 95.82819047619047 14 L 95.82819047619047 14 L 97.94423809523809 14 L 97.94423809523809 14 L 100.13780952380952 14 L 100.13780952380952 14 L 102.30495238095239 14 L 102.30495238095239 14 L 104.495 14 L 104.495 14 L 106.77314285714286 14 L 106.77314285714286 14 L 109.05480952380952 14 L 109.05480952380952 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 46.299285714285716 230 L 46.299285714285716 230 L 48.66728571428571 230 L 48.66728571428571 230 L 50.77804761904762 230 L 50.77804761904762 230 L 53.00333333333333 230 L 53.00333333333333 230 L 55.26561904761905 230 L 55.26561904761905 230 L 57.388714285714286 230 L 57.388714285714286 230 L 59.58404761904762 230 L 59.58404761904762 230 L 61.74766666666667 230 L 61.74766666666667 230 L 63.92185714285714 230 L 63.92185714285714 230 L 66.06257142857143 230 L 66.06257142857143 230 L 68.25085714285714 230 L 68.25085714285714 230 L 70.4567619047619 230 L 70.4567619047619 230 L 72.68028571428572 230 L 72.68028571428572 230 L 74.92495238095238 230 L 74.92495238095238 230 L 77.226 230 L 77.226 14 L 79.594 14 L 79.594 14 L 81.72942857142857 14 L 81.72942857142857 14 L 83.88247619047618 14 L 83.88247619047618 14 L 86.02319047619048 14 L 86.02319047619048 14 L 88.24671428571429 14 L 88.24671428571429 14 L 90.44909523809523 14 L 90.44909523809523 14 L 92.68319047619048 14 L 92.68319047619048 14 L 94.87147619047619 14 L 94.87147619047619 14 L 97.05271428571429 14 L 97.05271428571429 14 L 99.21104761904762 14 L 99.21104761904762 14 L 101.39757142857142 14 L 101.39757142857142 14 L 103.5030476190476 14 L 103.5030476190476 14 L 784 14" stroke="var(--series-3)"/><path class="s" d="M 44 230 L 46.35038095238095 230 L 46.35038095238095 230 L 48.59504761904762 230 L 48.59504761904762 230 L 50.804476190476194 230 L 50.804476190476194 230 L 53.0262380952381 230 L 53.0262380952381 230 L 55.23390476190476 230 L 55.23390476190476 230 L 57.38166666666667 230 L 57.38166666666667 230 L 59.621047619047616 230 L 59.621047619047616 230 L 61.789952380952386 230 L 61.789952380952386 230 L 64.00995238095238 230 L 64.00995238095238 230 L 66.15595238095239 230 L 66.15595238095239 230 L 68.309 230 L 68.309 230 L 70.46733333333333 230 L 70.46733333333333 230 L 72.6027619047619 230 L 72.6027619047619 230 L 74.76461904761905 230 L 74.76461904761905 230 L 77.0075238095238 230 L 77.0075238095238 230 L 79.17995238095239 230 L 79.17995238095239 14 L 81.58495238095239 14 L 81.58495238095239 14 L 83.67809523809524 14 L 83.67809523809524 14 L 85.78885714285714 14 L 85.78885714285714 14 L 87.90314285714285 14 L 87.90314285714285 14 L 90.14957142857142 14 L 90.14957142857142 14 L 92.26209523809524 14 L 92.26209523809524 14 L 94.394 14 L 94.394 14 L 96.55761904761906 14 L 96.55761904761906 14 L 98.74942857142857 14 L 98.74942857142857 14 L 100.9042380952381 14 L 100.9042380952381 14 L 103.22642857142856 14 L 103.22642857142856 14 L 784 14" stroke="var(--series-4)"/><path class="s" d="M 44 230 L 46.251714285714286 230 L 46.251714285714286 230 L 48.36247619047619 230 L 48.36247619047619 230 L 50.46795238095238 230 L 50.46795238095238 230 L 52.608666666666664 230 L 52.608666666666664 230 L 54.79342857142857 230 L 54.79342857142857 230 L 56.91652380952381 230 L 56.91652380952381 230 L 59.150619047619045 230 L 59.150619047619045 230 L 61.289571428571435 230 L 61.289571428571435 230 L 63.439095238095234 230 L 63.439095238095234 230 L 65.682 230 L 65.682 230 L 67.76104761904762 230 L 67.76104761904762 230 L 69.93171428571428 230 L 69.93171428571428 230 L 72.09533333333334 230 L 72.09533333333334 230 L 74.1955238095238 230 L 74.1955238095238 230 L 76.36619047619047 230 L 76.36619047619047 230 L 78.44171428571428 230 L 78.44171428571428 230 L 80.65819047619047 230 L 80.65819047619047 230 L 82.79185714285714 230 L 82.79185714285714 230 L 84.9942380952381 230 L 84.9942380952381 14 L 87.25652380952381 14 L 87.25652380952381 14 L 89.50119047619047 14 L 89.50119047619047 14 L 91.59785714285715 14 L 91.59785714285715 14 L 93.73152380952381 14 L 93.73152380952381 14 L 95.86342857142856 14 L 95.86342857142856 14 L 97.94247619047619 14 L 97.94247619047619 14 L 100.07614285714286 14 L 100.07614285714286 14 L 102.22742857142858 14 L 102.22742857142858 14 L 104.35228571428571 14 L 104.35228571428571 14 L 106.57228571428571 14 L 106.57228571428571 14 L 108.81342857142857 14 L 108.81342857142857 14 L 110.98761904761905 14 L 110.98761904761905 14 L 784 14" stroke="var(--series-5)"/><path class="s" d="M 44 230 L 46.26580952380952 230 L 46.26580952380952 230 L 48.549238095238096 230 L 48.549238095238096 230 L 50.81152380952381 230 L 50.81152380952381 230 L 52.94342857142857 230 L 52.94342857142857 230 L 55.19690476190476 230 L 55.19690476190476 230 L 57.40457142857143 230 L 57.40457142857143 230 L 59.53647619047619 230 L 59.53647619047619 230 L 61.687761904761906 230 L 61.687761904761906 230 L 63.823190476190476 230 L 63.823190476190476 230 L 66.015 230 L 66.015 230 L 68.18214285714286 230 L 68.18214285714286 230 L 70.32638095238096 230 L 70.32638095238096 230 L 72.45828571428572 230 L 72.45828571428572 230 L 74.56023809523809 230 L 74.56023809523809 230 L 76.71504761904762 230 L 76.71504761904762 230 L 78.854 230 L 78.854 230 L 81.00880952380953 230 L 81.00880952380953 230 L 83.17595238095238 230 L 83.17595238095238 230 L 85.34661904761904 230 L 85.34661904761904 230 L 87.46619047619048 230 L 87.46619047619048 230 L 89.67561904761905 230 L 89.67561904761905 230 L 91.84628571428571 230 L 91.84628571428571 230 L 93.97642857142857 230 L 93.97642857142857 230 L 96.19466666666668 230 L 96.19466666666668 14 L 98.41290476190477 14 L 98.41290476190477 14 L 100.54833333333333 14 L 100.54833333333333 14 L 102.71195238095238 14 L 102.71195238095238 14 L 104.85442857142857 14 L 104.85442857142857 14 L 106.99866666666668 14 L 106.99866666666668 14 L 109.14114285714285 14 L 109.14114285714285 14 L 111.36466666666666 14 L 111.36466666666666 14 L 113.53357142857142 14 L 113.53357142857142 14 L 115.70071428571428 14 L 115.70071428571428 14 L 117.83438095238095 14 L 117.83438095238095 14 L 119.98742857142857 14 L 119.98742857142857 14 L 122.13695238095238 14 L 122.13695238095238 14 L 784 14" stroke="var(--series-6)"/><path class="s" d="M 44 230 L 46.32747619047619 230 L 46.32747619047619 230 L 48.57038095238095 230 L 48.57038095238095 230 L 50.75514285714286 230 L 50.75514285714286 230 L 52.885285714285715 230 L 52.885285714285715 230 L 55.03304761904762 230 L 55.03304761904762 230 L 57.156142857142854 230 L 57.156142857142854 230 L 59.252809523809525 230 L 59.252809523809525 230 L 61.39704761904762 230 L 61.39704761904762 230 L 63.65228571428571 230 L 63.65228571428571 230 L 65.75071428571428 230 L 65.75071428571428 230 L 67.96190476190476 230 L 67.96190476190476 230 L 70.18719047619048 230 L 70.18719047619048 230 L 72.28914285714286 230 L 72.28914285714286 230 L 74.4087142857143 230 L 74.4087142857143 230 L 76.60580952380953 230 L 76.60580952380953 230 L 78.73419047619048 230 L 78.73419047619048 230 L 80.88371428571429 230 L 80.88371428571429 230 L 83.17419047619047 230 L 83.17419047619047 230 L 85.73599999999999 230 L 85.73599999999999 230 L 87.87319047619047 230 L 87.87319047619047 230 L 90.06147619047618 230 L 90.06147619047618 230 L 92.27971428571428 230 L 92.27971428571428 230 L 94.51733333333334 230 L 94.51733333333334 230 L 96.77961904761905 230 L 96.77961904761905 14 L 99.55285714285714 14 L 99.55285714285714 14 L 102.12876190476192 14 L 102.12876190476192 14 L 104.77338095238096 14 L 104.77338095238096 14 L 107.23828571428572 14 L 107.23828571428572 14 L 109.68557142857142 14 L 109.68557142857142 14 L 112.15928571428572 14 L 112.15928571428572 14 L 114.72461904761904 14 L 114.72461904761904 14 L 117.23533333333333 14 L 117.23533333333333 14 L 119.628 14 L 119.628 14 L 122.09114285714286 14 L 122.09114285714286 14 L 124.64238095238095 14 L 124.64238095238095 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 46.32747619047619 230 L 46.32747619047619 230 L 48.49285714285714 230 L 48.49285714285714 230 L 50.642380952380954 230 L 50.642380952380954 230 L 52.81480952380952 230 L 52.81480952380952 230 L 54.989000000000004 230 L 54.989000000000004 230 L 57.20019047619048 230 L 57.20019047619048 230 L 59.34795238095238 230 L 59.34795238095238 230 L 61.4992380952381 230 L 61.4992380952381 230 L 63.721000000000004 230 L 63.721000000000004 230 L 65.95861904761904 230 L 65.95861904761904 230 L 68.08347619047619 230 L 68.08347619047619 230 L 70.29290476190477 230 L 70.29290476190477 230 L 72.43538095238095 230 L 72.43538095238095 230 L 74.56904761904762 230 L 74.56904761904762 230 L 76.7097619047619 230 L 76.7097619047619 230 L 78.95442857142856 230 L 78.95442857142856 230 L 81.0704761904762 230 L 81.0704761904762 230 L 83.22704761904762 230 L 83.22704761904762 230 L 85.32195238095238 230 L 85.32195238095238 230 L 87.59657142857142 230 L 87.59657142857142 230 L 89.72847619047619 230 L 89.72847619047619 230 L 91.93261904761906 230 L 91.93261904761906 230 L 94.0645238095238 230 L 94.0645238095238 230 L 96.26866666666666 230 L 96.26866666666666 230 L 98.47809523809525 230 L 98.47809523809525 14 L 100.99761904761905 14 L 100.99761904761905 14 L 103.32333333333332 14 L 103.32333333333332 14 L 105.69661904761905 14 L 105.69661904761905 14 L 108.26899999999999 14 L 108.26899999999999 14 L 110.56476190476191 14 L 110.56476190476191 14 L 112.94861904761905 14 L 112.94861904761905 14 L 115.25847619047619 14 L 115.25847619047619 14 L 117.55247619047618 14 L 117.55247619047618 14 L 120.00152380952382 14 L 120.00152380952382 14 L 122.3712857142857 14 L 122.3712857142857 14 L 124.72166666666666 14 L 124.72166666666666 14 L 125.41761904761904 14 L 125.41761904761904 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 46.32042857142857 230 L 46.32042857142857 230 L 48.65671428571429 230 L 48.65671428571429 230 L 50.756904761904764 230 L 50.756904761904764 230 L 52.97161904761905 230 L 52.97161904761905 230 L 55.14228571428571 230 L 55.14228571428571 230 L 57.293571428571425 230 L 57.293571428571425 230 L 59.55761904761905 230 L 59.55761904761905 230 L 61.687761904761906 230 L 61.687761904761906 230 L 63.82847619047619 230 L 63.82847619047619 230 L 66.03085714285714 230 L 66.03085714285714 230 L 68.17861904761905 230 L 68.17861904761905 230 L 70.30171428571428 230 L 70.30171428571428 230 L 72.40542857142857 230 L 72.40542857142857 230 L 74.71704761904762 230 L 74.71704761904762 230 L 76.85423809523809 230 L 76.85423809523809 230 L 78.99671428571429 230 L 78.99671428571429 230 L 81.13038095238096 230 L 81.13038095238096 230 L 83.34861904761905 230 L 83.34861904761905 230 L 85.49461904761904 230 L 85.49461904761904 230 L 87.61419047619049 230 L 87.61419047619049 230 L 89.89233333333334 230 L 89.89233333333334 230 L 92.01190476190476 230 L 92.01190476190476 230 L 94.209 230 L 94.209 230 L 96.30214285714285 230 L 96.30214285714285 230 L 98.49747619047619 230 L 98.49747619047619 230 L 100.73685714285713 230 L 100.73685714285713 230 L 102.87580952380952 230 L 102.87580952380952 14 L 105.16628571428572 14 L 105.16628571428572 14 L 107.37747619047619 14 L 107.37747619047619 14 L 109.65914285714287 14 L 109.65914285714287 14 L 111.75933333333333 14 L 111.75933333333333 14 L 113.87009523809525 14 L 113.87009523809525 14 L 115.9632380952381 14 L 115.9632380952381 14 L 118.18147619047619 14 L 118.18147619047619 14 L 120.28871428571428 14 L 120.28871428571428 14 L 122.42766666666667 14 L 122.42766666666667 14 L 124.6917142857143 14 L 124.6917142857143 14 L 126.93990476190476 14 L 126.93990476190476 14 L 129.05595238095236 14 L 129.05595238095236 14 L 131.21604761904763 14 L 131.21604761904763 14 L 133.33561904761905 14 L 133.33561904761905 14 L 135.45519047619047 14 L 135.45519047619047 14 L 784 14" stroke="var(--series-3)"/><path class="s" d="M 44 230 L 46.30985714285714 230 L 46.30985714285714 230 L 48.72014285714286 230 L 48.72014285714286 230 L 50.943666666666665 230 L 50.943666666666665 230 L 53.163666666666664 230 L 53.163666666666664 230 L 55.359 230 L 55.359 230 L 57.60190476190476 230 L 57.60190476190476 230 L 59.982238095238095 230 L 59.982238095238095 230 L 62.06833333333333 230 L 62.06833333333333 230 L 64.19847619047619 230 L 64.19847619047619 230 L 66.39733333333334 230 L 66.39733333333334 230 L 68.62438095238095 230 L 68.62438095238095 230 L 70.72457142857144 230 L 70.72457142857144 230 L 72.86528571428572 230 L 72.86528571428572 230 L 75.15047619047618 230 L 75.15047619047618 230 L 77.25771428571429 230 L 77.25771428571429 230 L 79.37904761904761 230 L 79.37904761904761 230 L 81.56380952380952 230 L 81.56380952380952 230 L 83.74680952380953 230 L 83.74680952380953 230 L 85.86461904761904 230 L 85.86461904761904 230 L 88.01238095238095 230 L 88.01238095238095 230 L 90.1777619047619 230 L 90.1777619047619 230 L 92.29380952380953 230 L 92.29380952380953 230 L 94.41161904761904 230 L 94.41161904761904 230 L 96.54704761904762 230 L 96.54704761904762 230 L 98.74238095238096 230 L 98.74238095238096 230 L 100.869 230 L 100.869 230 L 102.97095238095238 230 L 102.97095238095238 230 L 105.0834761904762 230 L 105.0834761904762 14 L 107.43738095238095 14 L 107.43738095238095 14 L 109.5252380952381 14 L 109.5252380952381 14 L 111.68709523809524 14 L 111.68709523809524 14 L 113.84542857142857 14 L 113.84542857142857 14 L 115.99495238095238 14 L 115.99495238095238 14 L 118.34709523809524 14 L 118.34709523809524 14 L 120.64814285714286 14 L 120.64814285714286 14 L 122.77652380952381 14 L 122.77652380952381 14 L 124.8802380952381 14 L 124.8802380952381 14 L 126.9892380952381 14 L 126.9892380952381 14 L 129.07357142857143 14 L 129.07357142857143 14 L 131.21780952380954 14 L 131.21780952380954 14 L 133.43428571428572 14 L 133.43428571428572 14 L 135.54504761904764 14 L 135.54504761904764 14 L 137.67166666666668 14 L 137.67166666666668 14 L 139.89166666666665 14 L 139.89166666666665 14 L 141.9777619047619 14 L 141.9777619047619 14 L 144.0462380952381 14 L 144.0462380952381 14 L 146.15171428571426 14 L 146.15171428571426 14 L 784 14" stroke="var(--series-4)"/><path class="s" d="M 44 230 L 46.31161904761905 230 L 46.31161904761905 230 L 48.646142857142856 230 L 48.646142857142856 230 L 50.94895238095238 230 L 50.94895238095238 230 L 53.08614285714286 230 L 53.08614285714286 230 L 55.429476190476194 230 L 55.429476190476194 230 L 57.59838095238095 230 L 57.59838095238095 230 L 59.85361904761905 230 L 59.85361904761905 230 L 62.14585714285714 230 L 62.14585714285714 230 L 64.43633333333334 230 L 64.43633333333334 230 L 66.70038095238095 230 L 66.70038095238095 230 L 68.85519047619047 230 L 68.85519047619047 230 L 71.02761904761904 230 L 71.02761904761904 230 L 73.27228571428572 230 L 73.27228571428572 230 L 75.5927142857143 230 L 75.5927142857143 230 L 77.86733333333333 230 L 77.86733333333333 230 L 80.18071428571429 230 L 80.18071428571429 230 L 82.34609523809524 230 L 82.34609523809524 230 L 84.62247619047619 230 L 84.62247619047619 230 L 86.79138095238096 230 L 86.79138095238096 230 L 88.98319047619049 230 L 88.98319047619049 230 L 91.09923809523809 230 L 91.09923809523809 230 L 93.2857619047619 230 L 93.2857619047619 230 L 95.52338095238096 230 L 95.52338095238096 230 L 97.85261904761904 230 L 97.85261904761904 230 L 100.17833333333333 230 L 100.17833333333333 230 L 102.423 230 L 102.423 230 L 104.59190476190477 230 L 104.59190476190477 230 L 106.94580952380952 230 L 106.94580952380952 14 L 109.58690476190476 14 L 109.58690476190476 14 L 111.94785714285715 14 L 111.94785714285715 14 L 114.32466666666666 14 L 114.32466666666666 14 L 116.84242857142857 14 L 116.84242857142857 14 L 119.39895238095238 14 L 119.39895238095238 14 L 121.90085714285715 14 L 121.90085714285715 14 L 124.28119047619047 14 L 124.28119047619047 14 L 126.68971428571429 14 L 126.68971428571429 14 L 129.07533333333333 14 L 129.07533333333333 14 L 131.40633333333335 14 L 131.40633333333335 14 L 133.7655238095238 14 L 133.7655238095238 14 L 784 14" stroke="var(--series-5)"/><path class="s" d="M 44 230 L 46.325714285714284 230 L 46.325714285714284 230 L 48.603857142857144 230 L 48.603857142857144 230 L 50.89609523809524 230 L 50.89609523809524 230 L 53.12314285714286 230 L 53.12314285714286 230 L 55.34314285714286 230 L 55.34314285714286 230 L 57.55080952380952 230 L 57.55080952380952 230 L 59.874761904761904 230 L 59.874761904761904 230 L 62.21457142857143 230 L 62.21457142857143 230 L 64.36409523809525 230 L 64.36409523809525 230 L 66.5382857142857 230 L 66.5382857142857 230 L 68.74771428571428 230 L 68.74771428571428 230 L 70.936 230 L 70.936 230 L 73.119 230 L 73.119 230 L 75.32314285714286 230 L 75.32314285714286 230 L 77.46738095238095 230 L 77.46738095238095 230 L 79.62219047619047 230 L 79.62219047619047 230 L 81.78404761904761 230 L 81.78404761904761 230 L 83.98819047619048 230 L 83.98819047619048 230 L 86.106 230 L 86.106 230 L 88.26433333333333 230 L 88.26433333333333 230 L 90.36980952380952 230 L 90.36980952380952 230 L 92.56690476190477 230 L 92.56690476190477 230 L 94.70938095238095 230 L 94.70938095238095 230 L 96.8395238095238 230 L 96.8395238095238 230 L 98.95380952380953 230 L 98.95380952380953 230 L 101.0874761904762 230 L 101.0874761904762 230 L 103.20880952380952 230 L 103.20880952380952 230 L 105.33719047619047 230 L 105.33719047619047 230 L 107.60300000000001 230 L 107.60300000000001 14 L 109.90404761904762 14 L 109.90404761904762 14 L 112.154 14 L 112.154 14 L 114.31585714285714 14 L 114.31585714285714 14 L 116.43190476190476 14 L 116.43190476190476 14 L 118.65719047619048 14 L 118.65719047619048 14 L 120.79261904761904 14 L 120.79261904761904 14 L 122.93157142857143 14 L 122.93157142857143 14 L 125.0282380952381 14 L 125.0282380952381 14 L 127.20595238095238 14 L 127.20595238095238 14 L 129.33433333333335 14 L 129.33433333333335 14 L 131.56666666666666 14 L 131.56666666666666 14 L 133.70033333333333 14 L 133.70033333333333 14 L 135.9872857142857 14 L 135.9872857142857 14 L 784 14" stroke="var(--series-6)"/><path class="s" d="M 44 230 L 46.251714285714286 230 L 46.251714285714286 230 L 48.41885714285714 230 L 48.41885714285714 230 L 50.684666666666665 230 L 50.684666666666665 230 L 52.83947619047619 230 L 52.83947619047619 230 L 54.99957142857143 230 L 54.99957142857143 230 L 57.14204761904762 230 L 57.14204761904762 230 L 59.28804761904762 230 L 59.28804761904762 230 L 61.388238095238094 230 L 61.388238095238094 230 L 63.58004761904762 230 L 63.58004761904762 230 L 65.76480952380952 230 L 65.76480952380952 230 L 67.87204761904762 230 L 67.87204761904762 230 L 69.9775238095238 230 L 69.9775238095238 230 L 72.1587619047619 230 L 72.1587619047619 230 L 74.26247619047619 230 L 74.26247619047619 230 L 76.49480952380952 230 L 76.49480952380952 230 L 78.5967619047619 230 L 78.5967619047619 230 L 80.76390476190477 230 L 80.76390476190477 230 L 83.03147619047618 230 L 83.03147619047618 230 L 85.15633333333334 230 L 85.15633333333334 230 L 87.25828571428572 230 L 87.25828571428572 230 L 89.41838095238094 230 L 89.41838095238094 230 L 91.56438095238096 230 L 91.56438095238096 230 L 93.73328571428571 230 L 93.73328571428571 230 L 95.89866666666667 230 L 95.89866666666667 230 L 98.02704761904762 230 L 98.02704761904762 230 L 100.11314285714286 230 L 100.11314285714286 230 L 102.37719047619048 230 L 102.37719047619048 230 L 104.57780952380952 230 L 104.57780952380952 230 L 106.91409523809523 230 L 106.91409523809523 230 L 109.09533333333333 230 L 109.09533333333333 230 L 111.29419047619048 230 L 111.29419047619048 14 L 113.56176190476191 14 L 113.56176190476191 14 L 115.67428571428572 14 L 115.67428571428572 14 L 117.88195238095238 14 L 117.88195238095238 14 L 120.17595238095238 14 L 120.17595238095238 14 L 122.29904761904763 14 L 122.29904761904763 14 L 124.40804761904761 14 L 124.40804761904761 14 L 126.51528571428571 14 L 126.51528571428571 14 L 128.60138095238096 14 L 128.60138095238096 14 L 130.74033333333333 14 L 130.74033333333333 14 L 132.92333333333335 14 L 132.92333333333335 14 L 135.0217619047619 14 L 135.0217619047619 14 L 137.13428571428574 14 L 137.13428571428574 14 L 139.37542857142859 14 L 139.37542857142859 14 L 141.5284761904762 14 L 141.5284761904762 14 L 143.74319047619048 14 L 143.74319047619048 14 L 145.8909523809524 14 L 145.8909523809524 14 L 148.118 14 L 148.118 14 L 150.375 14 L 150.375 14 L 152.49985714285714 14 L 152.49985714285714 14 L 154.60180952380952 14 L 154.60180952380952 14 L 156.81123809523808 14 L 156.81123809523808 14 L 158.89557142857143 14 L 158.89557142857143 14 L 161.01866666666666 14 L 161.01866666666666 14 L 163.1805238095238 14 L 163.1805238095238 14 L 165.2824761904762 14 L 165.2824761904762 14 L 167.4020476190476 14 L 167.4020476190476 14 L 169.6502380952381 14 L 169.6502380952381 14 L 171.83499999999998 14 L 171.83499999999998 14 L 173.92638095238095 14 L 173.92638095238095 14 L 176.0212857142857 14 L 176.0212857142857 14 L 178.21838095238095 14 L 178.21838095238095 14 L 180.31680952380952 14 L 180.31680952380952 14 L 182.46809523809526 14 L 182.46809523809526 14 L 184.61585714285712 14 L 184.61585714285712 14 L 186.7530476190476 14 L 186.7530476190476 14 L 188.87261904761905 14 L 188.87261904761905 14 L 191.1472380952381 14 L 191.1472380952381 14 L 193.38485714285713 14 L 193.38485714285713 14 L 195.6242380952381 14 L 195.6242380952381 14 L 197.83895238095238 14 L 197.83895238095238 14 L 200.01314285714284 14 L 200.01314285714284 14 L 202.12742857142857 14 L 202.12742857142857 14 L 204.27342857142858 14 L 204.27342857142858 14 L 206.3894761904762 14 L 206.3894761904762 14 L 208.60419047619047 14 L 208.60419047619047 14 L 210.85061904761903 14 L 210.85061904761903 14 L 213.016 14 L 213.016 14 L 215.21838095238095 14 L 215.21838095238095 14 L 217.66742857142856 14 L 217.66742857142856 14 L 219.81342857142857 14 L 219.81342857142857 14 L 222.11095238095237 14 L 222.11095238095237 14 L 224.33095238095237 14 L 224.33095238095237 14 L 226.4787142857143 14 L 226.4787142857143 14 L 228.76038095238096 14 L 228.76038095238096 14 L 230.95042857142857 14 L 230.95042857142857 14 L 233.1404761904762 14 L 233.1404761904762 14 L 235.2935238095238 14 L 235.2935238095238 14 L 237.42014285714285 14 L 237.42014285714285 14 L 239.5502857142857 14 L 239.5502857142857 14 L 241.70685714285713 14 L 241.70685714285713 14 L 243.87928571428574 14 L 243.87928571428574 14 L 246.06933333333333 14 L 246.06933333333333 14 L 248.18009523809525 14 L 248.18009523809525 14 L 250.3807142857143 14 L 250.3807142857143 14 L 252.49323809523807 14 L 252.49323809523807 14 L 254.64100000000002 14 L 254.64100000000002 14 L 256.7817142857143 14 L 256.7817142857143 14 L 258.89952380952377 14 L 258.89952380952377 14 L 261.0314285714286 14 L 261.0314285714286 14 L 263.20385714285715 14 L 263.20385714285715 14 L 265.31814285714285 14 L 265.31814285714285 14 L 267.4535714285714 14 L 267.4535714285714 14 L 269.6030952380952 14 L 269.6030952380952 14 L 271.789619047619 14 L 271.789619047619 14 L 273.9655714285714 14 L 273.9655714285714 14 L 276.0657619047619 14 L 276.0657619047619 14 L 278.23466666666667 14 L 278.23466666666667 14 L 280.3348571428571 14 L 280.3348571428571 14 L 282.4949523809524 14 L 282.4949523809524 14 L 284.6339047619048 14 L 284.6339047619048 14 L 286.72704761904765 14 L 286.72704761904765 14 L 288.8712857142857 14 L 288.8712857142857 14 L 290.9644285714286 14 L 290.9644285714286 14 L 293.1280476190476 14 L 293.1280476190476 14 L 295.304 14 L 295.304 14 L 297.4411904761905 14 L 297.4411904761905 14 L 299.62947619047617 14 L 299.62947619047617 14 L 301.7384761904762 14 L 301.7384761904762 14 L 303.8756666666667 14 L 303.8756666666667 14 L 306.0110952380952 14 L 306.0110952380952 14 L 308.2117142857143 14 L 308.2117142857143 14 L 310.3400952380953 14 L 310.3400952380953 14 L 312.46495238095235 14 L 312.46495238095235 14 L 314.600380952381 14 L 314.600380952381 14 L 316.72171428571426 14 L 316.72171428571426 14 L 319.11966666666666 14 L 319.11966666666666 14 L 321.2498095238095 14 L 321.2498095238095 14 L 323.35176190476193 14 L 323.35176190476193 14 L 325.51714285714286 14 L 325.51714285714286 14 L 327.6367142857143 14 L 327.6367142857143 14 L 329.7598095238095 14 L 329.7598095238095 14 L 331.8511904761905 14 L 331.8511904761905 14 L 333.969 14 L 333.969 14 L 336.07976190476194 14 L 336.07976190476194 14 L 338.1799523809524 14 L 338.1799523809524 14 L 340.3788095238095 14 L 340.3788095238095 14 L 342.56709523809525 14 L 342.56709523809525 14 L 344.68666666666667 14 L 344.68666666666667 14 L 346.85028571428575 14 L 346.85028571428575 14 L 349.0209523809524 14 L 349.0209523809524 14 L 351.17047619047617 14 L 351.17047619047617 14 L 353.29709523809527 14 L 353.29709523809527 14 L 355.392 14 L 355.392 14 L 357.52038095238095 14 L 357.52038095238095 14 L 359.647 14 L 359.647 14 L 361.93395238095235 14 L 361.93395238095235 14 L 364.08523809523814 14 L 364.08523809523814 14 L 366.2312380952381 14 L 366.2312380952381 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 46.306333333333335 230 L 46.306333333333335 230 L 48.549238095238096 230 L 48.549238095238096 230 L 50.73047619047619 230 L 50.73047619047619 230 L 52.95928571428571 230 L 52.95928571428571 230 L 55.26385714285714 230 L 55.26385714285714 230 L 57.38695238095238 230 L 57.38695238095238 230 L 59.578761904761905 230 L 59.578761904761905 230 L 61.761761904761904 230 L 61.761761904761904 230 L 64.00114285714287 230 L 64.00114285714287 230 L 66.14890476190476 230 L 66.14890476190476 230 L 68.2702380952381 230 L 68.2702380952381 230 L 70.45852380952381 230 L 70.45852380952381 230 L 72.61509523809524 230 L 72.61509523809524 230 L 74.84038095238095 230 L 74.84038095238095 230 L 77.152 230 L 77.152 230 L 79.30152380952381 230 L 79.30152380952381 230 L 81.54090476190476 230 L 81.54090476190476 230 L 83.68338095238096 230 L 83.68338095238096 230 L 85.86461904761904 230 L 85.86461904761904 230 L 88.02295238095238 230 L 88.02295238095238 230 L 90.16014285714286 230 L 90.16014285714286 230 L 92.31847619047619 230 L 92.31847619047619 230 L 94.47504761904761 230 L 94.47504761904761 230 L 96.7214761904762 230 L 96.7214761904762 230 L 98.82519047619047 230 L 98.82519047619047 230 L 101.00290476190476 230 L 101.00290476190476 230 L 103.17885714285714 230 L 103.17885714285714 230 L 105.34952380952382 230 L 105.34952380952382 230 L 107.60300000000001 230 L 107.60300000000001 230 L 109.72257142857143 230 L 109.72257142857143 230 L 111.92847619047619 230 L 111.92847619047619 14 L 114.16961904761904 14 L 114.16961904761904 14 L 116.31209523809524 14 L 116.31209523809524 14 L 118.48628571428571 14 L 118.48628571428571 14 L 120.61114285714285 14 L 120.61114285714285 14 L 122.78709523809523 14 L 122.78709523809523 14 L 124.89785714285713 14 L 124.89785714285713 14 L 127.10904761904762 14 L 127.10904761904762 14 L 129.21628571428573 14 L 129.21628571428573 14 L 131.4345238095238 14 L 131.4345238095238 14 L 133.58933333333334 14 L 133.58933333333334 14 L 135.7511904761905 14 L 135.7511904761905 14 L 137.90952380952382 14 L 137.90952380952382 14 L 140.1964761904762 14 L 140.1964761904762 14 L 142.35657142857144 14 L 142.35657142857144 14 L 144.45147619047617 14 L 144.45147619047617 14 L 146.58690476190475 14 L 146.58690476190475 14 L 148.72409523809523 14 L 148.72409523809523 14 L 150.87890476190478 14 L 150.87890476190478 14 L 152.97909523809525 14 L 152.97909523809525 14 L 155.11980952380952 14 L 155.11980952380952 14 L 157.21119047619047 14 L 157.21119047619047 14 L 159.42766666666665 14 L 159.42766666666665 14 L 161.60890476190474 14 L 161.60890476190474 14 L 163.78133333333332 14 L 163.78133333333332 14 L 165.9502380952381 14 L 165.9502380952381 14 L 168.11209523809526 14 L 168.11209523809526 14 L 170.207 14 L 170.207 14 L 172.3177619047619 14 L 172.3177619047619 14 L 174.44085714285714 14 L 174.44085714285714 14 L 176.64852380952382 14 L 176.64852380952382 14 L 178.85090476190476 14 L 178.85090476190476 14 L 181.11142857142858 14 L 181.11142857142858 14 L 183.3825238095238 14 L 183.3825238095238 14 L 185.53380952380954 14 L 185.53380952380954 14 L 187.72209523809525 14 L 187.72209523809525 14 L 189.8962857142857 14 L 189.8962857142857 14 L 192.08809523809524 14 L 192.08809523809524 14 L 194.23409523809525 14 L 194.23409523809525 14 L 196.35366666666667 14 L 196.35366666666667 14 L 198.5472380952381 14 L 198.5472380952381 14 L 200.64390476190476 14 L 200.64390476190476 14 L 202.81104761904763 14 L 202.81104761904763 14 L 205.11033333333333 14 L 205.11033333333333 14 L 207.2757142857143 14 L 207.2757142857143 14 L 209.4604761904762 14 L 209.4604761904762 14 L 211.6487619047619 14 L 211.6487619047619 14 L 213.7912380952381 14 L 213.7912380952381 14 L 215.939 14 L 215.939 14 L 218.11319047619048 14 L 218.11319047619048 14 L 220.44419047619047 14 L 220.44419047619047 14 L 222.66419047619047 14 L 222.66419047619047 14 L 224.86304761904762 14 L 224.86304761904762 14 L 227.0460476190476 14 L 227.0460476190476 14 L 229.23609523809523 14 L 229.23609523809523 14 L 231.36095238095237 14 L 231.36095238095237 14 L 233.71838095238095 14 L 233.71838095238095 14 L 235.82561904761906 14 L 235.82561904761906 14 L 238.11961904761904 14 L 238.11961904761904 14 L 240.27090476190477 14 L 240.27090476190477 14 L 242.42923809523808 14 L 242.42923809523808 14 L 244.55761904761903 14 L 244.55761904761903 14 L 246.75823809523808 14 L 246.75823809523808 14 L 248.92890476190476 14 L 248.92890476190476 14 L 251.03438095238093 14 L 251.03438095238093 14 L 253.16628571428572 14 L 253.16628571428572 14 L 255.3475238095238 14 L 255.3475238095238 14 L 257.5516666666667 14 L 257.5516666666667 14 L 259.692380952381 14 L 259.692380952381 14 L 261.9317619047619 14 L 261.9317619047619 14 L 264.14823809523807 14 L 264.14823809523807 14 L 266.2537142857143 14 L 266.2537142857143 14 L 268.38033333333334 14 L 268.38033333333334 14 L 270.5421904761905 14 L 270.5421904761905 14 L 272.7639523809524 14 L 272.7639523809524 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 46.39442857142857 230 L 46.39442857142857 230 L 48.63204761904762 230 L 48.63204761904762 230 L 50.943666666666665 230 L 50.943666666666665 230 L 53.15309523809524 230 L 53.15309523809524 230 L 55.260333333333335 230 L 55.260333333333335 230 L 57.44157142857143 230 L 57.44157142857143 230 L 59.638666666666666 230 L 59.638666666666666 230 L 61.81461904761905 230 L 61.81461904761905 230 L 64.1685238095238 230 L 64.1685238095238 230 L 66.37619047619047 230 L 66.37619047619047 230 L 68.59266666666666 230 L 68.59266666666666 230 L 70.7897619047619 230 L 70.7897619047619 230 L 73.01504761904762 230 L 73.01504761904762 230 L 75.1892380952381 230 L 75.1892380952381 230 L 77.41452380952381 230 L 77.41452380952381 230 L 79.57990476190477 230 L 79.57990476190477 230 L 81.78404761904761 230 L 81.78404761904761 230 L 83.96704761904762 230 L 83.96704761904762 230 L 86.2575238095238 230 L 86.2575238095238 230 L 88.4352380952381 230 L 88.4352380952381 230 L 90.6534761904762 230 L 90.6534761904762 230 L 92.87171428571429 230 L 92.87171428571429 230 L 95.06 230 L 95.06 230 L 97.25004761904762 230 L 97.25004761904762 230 L 99.44890476190476 230 L 99.44890476190476 230 L 101.57904761904763 230 L 101.57904761904763 230 L 103.65985714285713 230 L 103.65985714285713 230 L 105.80938095238096 230 L 105.80938095238096 230 L 107.94480952380952 230 L 107.94480952380952 230 L 110.09433333333334 230 L 110.09433333333334 230 L 112.31433333333334 230 L 112.31433333333334 230 L 114.64357142857142 230 L 114.64357142857142 230 L 116.83009523809524 230 L 116.83009523809524 230 L 119.05009523809524 230 L 119.05009523809524 230 L 121.22957142857143 230 L 121.22957142857143 230 L 123.40552380952381 230 L 123.40552380952381 14 L 125.67309523809524 14 L 125.67309523809524 14 L 127.842 14 L 127.842 14 L 129.9844761904762 14 L 129.9844761904762 14 L 132.18333333333334 14 L 132.18333333333334 14 L 134.37161904761905 14 L 134.37161904761905 14 L 136.6391904761905 14 L 136.6391904761905 14 L 138.74995238095238 14 L 138.74995238095238 14 L 140.85014285714286 14 L 140.85014285714286 14 L 142.9432857142857 14 L 142.9432857142857 14 L 145.18795238095237 14 L 145.18795238095237 14 L 147.39561904761905 14 L 147.39561904761905 14 L 149.6755238095238 14 L 149.6755238095238 14 L 151.87614285714284 14 L 151.87614285714284 14 L 154.02566666666667 14 L 154.02566666666667 14 L 156.1928095238095 14 L 156.1928095238095 14 L 158.30533333333335 14 L 158.30533333333335 14 L 160.41257142857143 14 L 160.41257142857143 14 L 162.56033333333335 14 L 162.56033333333335 14 L 164.7292380952381 14 L 164.7292380952381 14 L 166.93161904761905 14 L 166.93161904761905 14 L 169.08114285714285 14 L 169.08114285714285 14 L 171.2341904761905 14 L 171.2341904761905 14 L 173.40309523809523 14 L 173.40309523809523 14 L 175.61957142857145 14 L 175.61957142857145 14 L 177.84133333333335 14 L 177.84133333333335 14 L 180.06309523809523 14 L 180.06309523809523 14 L 182.20909523809524 14 L 182.20909523809524 14 L 184.38680952380952 14 L 184.38680952380952 14 L 186.51519047619047 14 L 186.51519047619047 14 L 188.7422380952381 14 L 188.7422380952381 14 L 190.90233333333333 14 L 190.90233333333333 14 L 193.147 14 L 193.147 14 L 195.27890476190476 14 L 195.27890476190476 14 L 197.56057142857142 14 L 197.56057142857142 14 L 199.6942380952381 14 L 199.6942380952381 14 L 201.89661904761905 14 L 201.89661904761905 14 L 204.0919523809524 14 L 204.0919523809524 14 L 206.2467619047619 14 L 206.2467619047619 14 L 208.35928571428573 14 L 208.35928571428573 14 L 210.51761904761904 14 L 210.51761904761904 14 L 212.80104761904764 14 L 212.80104761904764 14 L 214.93295238095237 14 L 214.93295238095237 14 L 217.0542857142857 14 L 217.0542857142857 14 L 219.2214285714286 14 L 219.2214285714286 14 L 221.3762380952381 14 L 221.3762380952381 14 L 223.5680476190476 14 L 223.5680476190476 14 L 225.7122857142857 14 L 225.7122857142857 14 L 227.9252380952381 14 L 227.9252380952381 14 L 230.06419047619048 14 L 230.06419047619048 14 L 232.23838095238096 14 L 232.23838095238096 14 L 234.402 14 L 234.402 14 L 236.65195238095237 14 L 236.65195238095237 14 L 238.75919047619047 14 L 238.75919047619047 14 L 240.89109523809523 14 L 240.89109523809523 14 L 243.01595238095237 14 L 243.01595238095237 14 L 245.14785714285713 14 L 245.14785714285713 14 L 247.32028571428572 14 L 247.32028571428572 14 L 249.46628571428573 14 L 249.46628571428573 14 L 251.69861904761908 14 L 251.69861904761908 14 L 253.94857142857143 14 L 253.94857142857143 14 L 256.101619047619 14 L 256.101619047619 14 L 258.284619047619 14 L 258.284619047619 14 L 260.3900952380952 14 L 260.3900952380952 14 L 262.5167142857143 14 L 262.5167142857143 14 L 264.65742857142857 14 L 264.65742857142857 14 L 266.81399999999996 14 L 266.81399999999996 14 L 268.9282857142857 14 L 268.9282857142857 14 L 784 14" stroke="var(--series-3)"/>
+  <text class="lbl" x="792" y="14" fill="var(--series-1)">pi-sonnet-5.5</text><text class="lbl" x="792" y="28" fill="var(--series-2)">cc-sonnet-5.5</text><text class="lbl" x="792" y="42" fill="var(--series-3)">cc-sonnet-5.5</text><text class="lbl" x="792" y="56" fill="var(--series-4)">cc-sonnet-5.5</text><text class="lbl" x="792" y="70" fill="var(--series-5)">pi-sonnet-5.5</text><text class="lbl" x="792" y="84" fill="var(--series-6)">pi-sonnet-5.5</text><text class="lbl" x="792" y="98" fill="var(--series-1)">pi-gpt-5.5</text><text class="lbl" x="792" y="112" fill="var(--series-2)">pi-gpt-5.5</text><text class="lbl" x="792" y="126" fill="var(--series-3)">cc-opus-5.5</text><text class="lbl" x="792" y="140" fill="var(--series-4)">cc-opus-5.5</text><text class="lbl" x="792" y="154" fill="var(--series-5)">pi-gpt-5.5</text><text class="lbl" x="792" y="168" fill="var(--series-6)">cc-opus-5.5</text><text class="lbl" x="792" y="182" fill="var(--series-1)">pi-gemini-3.8-f</text><text class="lbl" x="792" y="196" fill="var(--series-2)">pi-gemini-3.8-f</text><text class="lbl" x="792" y="210" fill="var(--series-3)">pi-gemini-3.8-f</text>
+  <line id="chartplay" y1="14" y2="230" x1="44" x2="44"/>
+</svg></section>
+
+<section class="panel"><h2>Ranking</h2>
+<table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
+<th class="num">First render</th><th class="num">First reviewable</th>
+<th class="num">By AUC</th><th class="num">By final</th><th>Window closed by</th></tr></thead><tbody>
+<tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.962</b></td><td class="num">1.00</td>
+  <td class="num">16.1s</td><td class="num">16.1s</td>
+  <td class="num">1</td>
+  <td class="num ">1</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.957</b></td><td class="num">1.00</td>
+  <td class="num">18.0s</td><td class="num">18.0s</td>
+  <td class="num">2</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.955</b></td><td class="num">1.00</td>
+  <td class="num">18.9s</td><td class="num">18.9s</td>
+  <td class="num">3</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-4)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.952</b></td><td class="num">1.00</td>
+  <td class="num">20.0s</td><td class="num">20.0s</td>
+  <td class="num">4</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-5)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.945</b></td><td class="num">1.00</td>
+  <td class="num">23.3s</td><td class="num">23.3s</td>
+  <td class="num">5</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-6)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.929</b></td><td class="num">1.00</td>
+  <td class="num">29.6s</td><td class="num">29.6s</td>
+  <td class="num">6</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.929</b></td><td class="num">1.00</td>
+  <td class="num">30.0s</td><td class="num">30.0s</td>
+  <td class="num">7</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.926</b></td><td class="num">1.00</td>
+  <td class="num">30.9s</td><td class="num">30.9s</td>
+  <td class="num">8</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.920</b></td><td class="num">1.00</td>
+  <td class="num">33.4s</td><td class="num">33.4s</td>
+  <td class="num">9</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-4)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.917</b></td><td class="num">1.00</td>
+  <td class="num">34.7s</td><td class="num">34.7s</td>
+  <td class="num">10</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-5)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.915</b></td><td class="num">1.00</td>
+  <td class="num">35.7s</td><td class="num">35.7s</td>
+  <td class="num">11</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-6)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.914</b></td><td class="num">1.00</td>
+  <td class="num">36.1s</td><td class="num">36.1s</td>
+  <td class="num">12</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.909</b></td><td class="num">1.00</td>
+  <td class="num">38.2s</td><td class="num">38.2s</td>
+  <td class="num">13</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.908</b></td><td class="num">1.00</td>
+  <td class="num">38.6s</td><td class="num">38.6s</td>
+  <td class="num">14</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.893</b></td><td class="num">1.00</td>
+  <td class="num">45.1s</td><td class="num">45.1s</td>
+  <td class="num">15</td>
+  <td class="num moved">1 ≠</td>
+  <td>signal</td></tr>
+</tbody></table>
+<p class="note">Highlighted rows rank differently by trajectory than by final score — the disagreement the trajectory metric exists to surface. Playback shows the frames the scores were computed from, on one shared clock, so the ranking above and the pictures below cannot disagree.</p>
+</section>
+
+
+</div>
+<script id="tracks" type="application/json">[{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.9615928571428571,"finalScore":1,"ttfnbrMs":16131,"ttfrrMs":16131,"runEndMs":30479,"endReason":"signal","srcs":["runs/ops-dashboard-pi-sonnet-5.5-muxxkuzu-r2/frames/f00000.png","runs/ops-dashboard-pi-sonnet-5.5-muxxkuzu-r2/frames/f00012.png"],"t":[1296,2546,3815,5071,6266,7478,8716,9970,11187,12399,13644,14895,16131,17428,18623,19857,21046,22300,23505,24774,26026,27221,28470,29683],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1296,0],[2546,0],[3815,0],[5071,0],[6266,0],[7478,0],[8716,0],[9970,0],[11187,0],[12399,0],[13644,0],[14895,0],[16131,100],[17428,100],[18623,100],[19857,100],[21046,100],[22300,100],[23505,100],[24774,100],[26026,100],[27221,100],[28470,100],[29683,100]],"reportHref":"runs/ops-dashboard-pi-sonnet-5.5-muxxkuzu-r2/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.9571095238095239,"finalScore":1,"ttfnbrMs":18014,"ttfrrMs":18014,"runEndMs":37882,"endReason":"signal","srcs":["runs/ops-dashboard-cc-sonnet-5.5-muxwycap-r1/frames/f00000.png","runs/ops-dashboard-cc-sonnet-5.5-muxwycap-r1/frames/f00013.png"],"t":[1331,2709,4090,5395,6641,7916,9240,10540,11779,13011,14238,15534,16796,18014,19379,20613,21804,23015,24316,25643,26950,28173,29416,30617,31862,33092,34335,35628,36923],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1331,0],[2709,0],[4090,0],[5395,0],[6641,0],[7916,0],[9240,0],[10540,0],[11779,0],[13011,0],[14238,0],[15534,0],[16796,0],[18014,100],[19379,100],[20613,100],[21804,100],[23015,100],[24316,100],[25643,100],[26950,100],[28173,100],[29416,100],[30617,100],[31862,100],[33092,100],[34335,100],[35628,100],[36923,100]],"reportHref":"runs/ops-dashboard-cc-sonnet-5.5-muxwycap-r1/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.9551,"finalScore":1,"ttfnbrMs":18858,"ttfrrMs":18858,"runEndMs":34194,"endReason":"signal","srcs":["runs/ops-dashboard-cc-sonnet-5.5-muxwzk2r-r2/frames/f00000.png","runs/ops-dashboard-cc-sonnet-5.5-muxwzk2r-r2/frames/f00014.png"],"t":[1305,2649,3847,5110,6394,7599,8845,10073,11307,12522,13764,15016,16278,17552,18858,20202,21414,22636,23851,25113,26363,27631,28873,30111,31336,32577,33772],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1305,0],[2649,0],[3847,0],[5110,0],[6394,0],[7599,0],[8845,0],[10073,0],[11307,0],[12522,0],[13764,0],[15016,0],[16278,0],[17552,0],[18858,100],[20202,100],[21414,100],[22636,100],[23851,100],[25113,100],[26363,100],[27631,100],[28873,100],[30111,100],[31336,100],[32577,100],[33772,100]],"reportHref":"runs/ops-dashboard-cc-sonnet-5.5-muxwzk2r-r2/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.9524595238095238,"finalScore":1,"ttfnbrMs":19967,"ttfrrMs":19967,"runEndMs":33968,"endReason":"signal","srcs":["runs/ops-dashboard-cc-sonnet-5.5-muxx0oji-r3/frames/f00000.png","runs/ops-dashboard-cc-sonnet-5.5-muxx0oji-r3/frames/f00015.png"],"t":[1334,2608,3862,5123,6376,7595,8866,10097,11357,12575,13797,15022,16234,17461,18734,19967,21332,22520,23718,24918,26193,27392,28602,29830,31074,32297,33615],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1334,0],[2608,0],[3862,0],[5123,0],[6376,0],[7595,0],[8866,0],[10097,0],[11357,0],[12575,0],[13797,0],[15022,0],[16234,0],[17461,0],[18734,0],[19967,100],[21332,100],[22520,100],[23718,100],[24918,100],[26193,100],[27392,100],[28602,100],[29830,100],[31074,100],[32297,100],[33615,100]],"reportHref":"runs/ops-dashboard-cc-sonnet-5.5-muxx0oji-r3/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.9446023809523809,"finalScore":1,"ttfnbrMs":23267,"ttfrrMs":23267,"runEndMs":38053,"endReason":"signal","srcs":["runs/ops-dashboard-pi-sonnet-5.5-muxxlvz1-r3/frames/f00000.png","runs/ops-dashboard-pi-sonnet-5.5-muxxlvz1-r3/frames/f00018.png"],"t":[1278,2476,3671,4886,6126,7331,8599,9813,11033,12306,13486,14718,15946,17138,18370,19548,20806,22017,23267,24551,25825,27015,28226,29436,30616,31827,33048,34254,35514,36786,38020],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1278,0],[2476,0],[3671,0],[4886,0],[6126,0],[7331,0],[8599,0],[9813,0],[11033,0],[12306,0],[13486,0],[14718,0],[15946,0],[17138,0],[18370,0],[19548,0],[20806,0],[22017,0],[23267,100],[24551,100],[25825,100],[27015,100],[28226,100],[29436,100],[30616,100],[31827,100],[33048,100],[34254,100],[35514,100],[36786,100],[38020,100]],"reportHref":"runs/ops-dashboard-pi-sonnet-5.5-muxxlvz1-r3/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.9294666666666667,"finalScore":1,"ttfnbrMs":29624,"ttfrrMs":29624,"runEndMs":44680,"endReason":"signal","srcs":["runs/ops-dashboard-pi-sonnet-5.5-muxxjii0-r1/frames/f00000.png","runs/ops-dashboard-pi-sonnet-5.5-muxxjii0-r1/frames/f00023.png"],"t":[1286,2582,3866,5076,6355,7608,8818,10039,11251,12495,13725,14942,16152,17345,18568,19782,21005,22235,23467,24670,25924,27156,28365,29624,30883,32095,33323,34539,35756,36972,38234,39465,40695,41906,43128,44348],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1286,0],[2582,0],[3866,0],[5076,0],[6355,0],[7608,0],[8818,0],[10039,0],[11251,0],[12495,0],[13725,0],[14942,0],[16152,0],[17345,0],[18568,0],[19782,0],[21005,0],[22235,0],[23467,0],[24670,0],[25924,0],[27156,0],[28365,0],[29624,100],[30883,100],[32095,100],[33323,100],[34539,100],[35756,100],[36972,100],[38234,100],[39465,100],[40695,100],[41906,100],[43128,100],[44348,100]],"reportHref":"runs/ops-dashboard-pi-sonnet-5.5-muxxjii0-r1/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9286761904761904,"finalScore":1,"ttfnbrMs":29956,"ttfrrMs":29956,"runEndMs":46016,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gpt-5.5-muxx3dgx-r2/frames/f00000.png","runs/ops-dashboard-pi-gpt-5.5-muxx3dgx-r2/frames/f00023.png"],"t":[1321,2594,3834,5043,6262,7467,8657,9874,11154,12345,13600,14863,16056,17259,18506,19714,20934,22234,23688,24901,26143,27402,28672,29956,31530,32992,34493,35892,37281,38685,40141,41566,42924,44322,45770],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1321,0],[2594,0],[3834,0],[5043,0],[6262,0],[7467,0],[8657,0],[9874,0],[11154,0],[12345,0],[13600,0],[14863,0],[16056,0],[17259,0],[18506,0],[19714,0],[20934,0],[22234,0],[23688,0],[24901,0],[26143,0],[27402,0],[28672,0],[29956,100],[31530,100],[32992,100],[34493,100],[35892,100],[37281,100],[38685,100],[40141,100],[41566,100],[42924,100],[44322,100],[45770,100]],"reportHref":"runs/ops-dashboard-pi-gpt-5.5-muxx3dgx-r2/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9263809523809524,"finalScore":1,"ttfnbrMs":30920,"ttfrrMs":30920,"runEndMs":46210,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gpt-5.5-muxx4rdf-r3/frames/f00000.png","runs/ops-dashboard-pi-gpt-5.5-muxx4rdf-r3/frames/f00024.png"],"t":[1321,2550,3770,5003,6237,7492,8711,9932,11193,12463,13669,14923,16139,17350,18565,19839,21040,22264,23453,24744,25954,27205,28415,29666,30920,32350,33670,35017,36477,37780,39133,40444,41746,43136,44481,45815,46210],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1321,0],[2550,0],[3770,0],[5003,0],[6237,0],[7492,0],[8711,0],[9932,0],[11193,0],[12463,0],[13669,0],[14923,0],[16139,0],[17350,0],[18565,0],[19839,0],[21040,0],[22264,0],[23453,0],[24744,0],[25954,0],[27205,0],[28415,0],[29666,0],[30920,100],[32350,100],[33670,100],[35017,100],[36477,100],[37780,100],[39133,100],[40444,100],[41746,100],[43136,100],[44481,100],[45815,100],[46210,100]],"reportHref":"runs/ops-dashboard-pi-gpt-5.5-muxx4rdf-r3/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.9204380952380953,"finalScore":1,"ttfnbrMs":33416,"ttfrrMs":33416,"runEndMs":52769,"endReason":"signal","srcs":["runs/ops-dashboard-cc-opus-5.5-muxxorwp-r2/frames/f00000.png","runs/ops-dashboard-cc-opus-5.5-muxxorwp-r2/frames/f00026.png"],"t":[1317,2643,3835,5092,6324,7545,8830,10039,11254,12504,13723,14928,16122,17434,18647,19863,21074,22333,23551,24754,26047,27250,28497,29685,30931,32202,33416,34716,35971,37266,38458,39656,40844,42103,43299,44513,45798,47074,48275,49501,50704,51907],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1317,0],[2643,0],[3835,0],[5092,0],[6324,0],[7545,0],[8830,0],[10039,0],[11254,0],[12504,0],[13723,0],[14928,0],[16122,0],[17434,0],[18647,0],[19863,0],[21074,0],[22333,0],[23551,0],[24754,0],[26047,0],[27250,0],[28497,0],[29685,0],[30931,0],[32202,0],[33416,100],[34716,100],[35971,100],[37266,100],[38458,100],[39656,100],[40844,100],[42103,100],[43299,100],[44513,100],[45798,100],[47074,100],[48275,100],[49501,100],[50704,100],[51907,100]],"reportHref":"runs/ops-dashboard-cc-opus-5.5-muxxorwp-r2/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.9174547619047619,"finalScore":1,"ttfnbrMs":34669,"ttfrrMs":34669,"runEndMs":59008,"endReason":"signal","srcs":["runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/frames/f00000.png","runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/frames/f00027.png","runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/frames/f00032.png","runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/frames/f00033.png"],"t":[1311,2679,3941,5201,6447,7720,9071,10255,11464,12712,13976,15168,16383,17680,18876,20080,21320,22559,23761,24980,26209,27410,28612,29824,31070,32277,33470,34669,36005,37190,38417,39642,40862,42197,43503,44711,45905,47102,48285,49502,50760,51958,53165,54425,55609,56783,57978],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1311,0],[2679,0],[3941,0],[5201,0],[6447,0],[7720,0],[9071,0],[10255,0],[11464,0],[12712,0],[13976,0],[15168,0],[16383,0],[17680,0],[18876,0],[20080,0],[21320,0],[22559,0],[23761,0],[24980,0],[26209,0],[27410,0],[28612,0],[29824,0],[31070,0],[32277,0],[33470,0],[34669,100],[36005,100],[37190,100],[38417,100],[39642,100],[40862,100],[42197,100],[43503,100],[44711,100],[45905,100],[47102,100],[48285,100],[49502,100],[50760,100],[51958,100],[53165,100],[54425,100],[55609,100],[56783,100],[57978,100]],"reportHref":"runs/ops-dashboard-cc-opus-5.5-muxxqetl-r3/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9149380952380952,"finalScore":1,"ttfnbrMs":35726,"ttfrrMs":35726,"runEndMs":51897,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gpt-5.5-muxx1uh2-r1/frames/f00000.png","runs/ops-dashboard-pi-gpt-5.5-muxx1uh2-r1/frames/f00027.png"],"t":[1312,2637,3944,5157,6487,7718,8998,10299,11599,12884,14107,15340,16614,17931,19222,20535,21764,23056,24287,25531,26732,27973,29243,30565,31885,33159,34390,35726,37225,38565,39914,41343,42794,44214,45565,46932,48286,49609,50948],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1312,0],[2637,0],[3944,0],[5157,0],[6487,0],[7718,0],[8998,0],[10299,0],[11599,0],[12884,0],[14107,0],[15340,0],[16614,0],[17931,0],[19222,0],[20535,0],[21764,0],[23056,0],[24287,0],[25531,0],[26732,0],[27973,0],[29243,0],[30565,0],[31885,0],[33159,0],[34390,0],[35726,100],[37225,100],[38565,100],[39914,100],[41343,100],[42794,100],[44214,100],[45565,100],[46932,100],[48286,100],[49609,100],[50948,100]],"reportHref":"runs/ops-dashboard-pi-gpt-5.5-muxx1uh2-r1/report.html","videoHref":null,"condition":"prompted"},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.91405,"finalScore":1,"ttfnbrMs":36099,"ttfrrMs":36099,"runEndMs":53409,"endReason":"signal","srcs":["runs/ops-dashboard-cc-opus-5.5-muxxn5jg-r1/frames/f00000.png","runs/ops-dashboard-cc-opus-5.5-muxxn5jg-r1/frames/f00028.png"],"t":[1320,2613,3914,5178,6438,7691,9010,10338,11558,12792,14046,15288,16527,17778,18995,20218,21445,22696,23898,25123,26318,27565,28781,29990,31190,32401,33605,34813,36099,37405,38682,39909,41110,42373,43585,44799,45989,47225,48433,49700,50911,52209],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1320,0],[2613,0],[3914,0],[5178,0],[6438,0],[7691,0],[9010,0],[10338,0],[11558,0],[12792,0],[14046,0],[15288,0],[16527,0],[17778,0],[18995,0],[20218,0],[21445,0],[22696,0],[23898,0],[25123,0],[26318,0],[27565,0],[28781,0],[29990,0],[31190,0],[32401,0],[33605,0],[34813,0],[36099,100],[37405,100],[38682,100],[39909,100],[41110,100],[42373,100],[43585,100],[44799,100],[45989,100],[47225,100],[48433,100],[49700,100],[50911,100],[52209,100]],"reportHref":"runs/ops-dashboard-cc-opus-5.5-muxxn5jg-r1/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.9090619047619047,"finalScore":1,"ttfnbrMs":38194,"ttfrrMs":38194,"runEndMs":182972,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/frames/f00000.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/frames/f00030.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/frames/f00066.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/frames/f00078.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/frames/f00125.png"],"t":[1278,2508,3794,5017,6243,7459,8677,9869,11113,12353,13549,14744,15982,17176,18443,19636,20866,22153,23359,24552,25778,26996,28227,29456,30664,31848,33133,34382,35708,36946,38194,39481,40680,41933,43235,44440,45637,46833,48017,49231,50470,51661,52860,54132,55354,56611,57830,59094,60375,61581,62774,64028,65211,66416,67643,68836,70039,71315,72555,73742,74931,76178,77369,78590,79809,81022,82225,83516,84786,86057,87314,88548,89748,90966,92167,93424,94699,95928,97178,98568,99786,101090,102350,103569,104864,106107,107350,108572,109779,110988,112212,113445,114688,115886,117135,118334,119553,120768,121970,123180,124413,125613,126825,128045,129286,130521,131713,132944,134136,135362,136576,137764,138981,140169,141397,142632,143845,145087,146284,147497,148709,149958,151166,152372,153584,154788,156149,157358,158551,159780,160983,162188,163375,164577,165775,166967,168215,169457,170660,171888,173120,174340,175547,176736,177944,179151,180449,181670,182888],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1278,0],[2508,0],[3794,0],[5017,0],[6243,0],[7459,0],[8677,0],[9869,0],[11113,0],[12353,0],[13549,0],[14744,0],[15982,0],[17176,0],[18443,0],[19636,0],[20866,0],[22153,0],[23359,0],[24552,0],[25778,0],[26996,0],[28227,0],[29456,0],[30664,0],[31848,0],[33133,0],[34382,0],[35708,0],[36946,0],[38194,100],[39481,100],[40680,100],[41933,100],[43235,100],[44440,100],[45637,100],[46833,100],[48017,100],[49231,100],[50470,100],[51661,100],[52860,100],[54132,100],[55354,100],[56611,100],[57830,100],[59094,100],[60375,100],[61581,100],[62774,100],[64028,100],[65211,100],[66416,100],[67643,100],[68836,100],[70039,100],[71315,100],[72555,100],[73742,100],[74931,100],[76178,100],[77369,100],[78590,100],[79809,100],[81022,100],[82225,100],[83516,100],[84786,100],[86057,100],[87314,100],[88548,100],[89748,100],[90966,100],[92167,100],[93424,100],[94699,100],[95928,100],[97178,100],[98568,100],[99786,100],[101090,100],[102350,100],[103569,100],[104864,100],[106107,100],[107350,100],[108572,100],[109779,100],[110988,100],[112212,100],[113445,100],[114688,100],[115886,100],[117135,100],[118334,100],[119553,100],[120768,100],[121970,100],[123180,100],[124413,100],[125613,100],[126825,100],[128045,100],[129286,100],[130521,100],[131713,100],[132944,100],[134136,100],[135362,100],[136576,100],[137764,100],[138981,100],[140169,100],[141397,100],[142632,100],[143845,100],[145087,100],[146284,100],[147497,100],[148709,100],[149958,100],[151166,100],[152372,100],[153584,100],[154788,100],[156149,100],[157358,100],[158551,100],[159780,100],[160983,100],[162188,100],[163375,100],[164577,100],[165775,100],[166967,100],[168215,100],[169457,100],[170660,100],[171888,100],[173120,100],[174340,100],[175547,100],[176736,100],[177944,100],[179151,100],[180449,100],[181670,100],[182888,100]],"reportHref":"runs/ops-dashboard-pi-gemini-3.8-flash-muxxe7aw-r3/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.908204761904762,"finalScore":1,"ttfnbrMs":38554,"ttfrrMs":38554,"runEndMs":130430,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/frames/f00000.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/frames/f00030.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/frames/f00062.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/frames/f00085.png"],"t":[1309,2582,3820,5085,6393,7598,8842,10081,11352,12571,13775,15017,16241,17504,18816,20036,21307,22523,23761,24986,26199,27424,28648,29923,31117,32353,33588,34820,36099,37302,38554,39826,41042,42276,43482,44717,45915,47170,48366,49625,50848,52075,53300,54598,55824,57013,58225,59438,60661,61853,63068,64255,65513,66751,67984,69215,70442,71631,72829,74034,75287,76537,77820,79109,80330,81572,82806,84050,85268,86471,87716,88906,90136,91441,92670,93910,95152,96368,97587,98821,100144,101404,102652,103891,105134,106340,107678,108874,110176,111397,112622,113830,115079,116311,117506,118716,119954,121205,122420,123691,124949,126144,127351,128578,129839],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1309,0],[2582,0],[3820,0],[5085,0],[6393,0],[7598,0],[8842,0],[10081,0],[11352,0],[12571,0],[13775,0],[15017,0],[16241,0],[17504,0],[18816,0],[20036,0],[21307,0],[22523,0],[23761,0],[24986,0],[26199,0],[27424,0],[28648,0],[29923,0],[31117,0],[32353,0],[33588,0],[34820,0],[36099,0],[37302,0],[38554,100],[39826,100],[41042,100],[42276,100],[43482,100],[44717,100],[45915,100],[47170,100],[48366,100],[49625,100],[50848,100],[52075,100],[53300,100],[54598,100],[55824,100],[57013,100],[58225,100],[59438,100],[60661,100],[61853,100],[63068,100],[64255,100],[65513,100],[66751,100],[67984,100],[69215,100],[70442,100],[71631,100],[72829,100],[74034,100],[75287,100],[76537,100],[77820,100],[79109,100],[80330,100],[81572,100],[82806,100],[84050,100],[85268,100],[86471,100],[87716,100],[88906,100],[90136,100],[91441,100],[92670,100],[93910,100],[95152,100],[96368,100],[97587,100],[98821,100],[100144,100],[101404,100],[102652,100],[103891,100],[105134,100],[106340,100],[107678,100],[108874,100],[110176,100],[111397,100],[112622,100],[113830,100],[115079,100],[116311,100],[117506,100],[118716,100],[119954,100],[121205,100],[122420,100],[123691,100],[124949,100],[126144,100],[127351,100],[128578,100],[129839,100]],"reportHref":"runs/ops-dashboard-pi-gemini-3.8-flash-muxxabok-r2/report.html","videoHref":null,"condition":"prompted"},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.8926952380952381,"finalScore":1,"ttfnbrMs":45068,"ttfrrMs":45068,"runEndMs":128347,"endReason":"signal","srcs":["runs/ops-dashboard-pi-gemini-3.8-flash-muxx6n27-r1/frames/f00000.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxx6n27-r1/frames/f00035.png","runs/ops-dashboard-pi-gemini-3.8-flash-muxx6n27-r1/frames/f00075.png"],"t":[1359,2629,3941,5195,6391,7629,8876,10111,11447,12700,13958,15205,16468,17702,18965,20194,21445,22684,23984,25220,26479,27738,28980,30223,31471,32680,33861,35081,36293,37513,38773,40095,41336,42596,43833,45068,46355,47586,48802,50050,51292,52579,53777,54969,56157,57431,58684,59978,61227,62447,63677,64876,66072,67291,68522,69772,70992,72214,73445,74703,75964,77225,78443,79679,80887,82151,83377,84651,85861,87156,88367,89617,90863,92086,93285,94510,95806,97016,98220,99450,100673,101917,103134,104390,105604,106838,108066,109343,110539,111749,112955,114165,115398,116616,117883,119160,120382,121621,122816,124023,125238,126462,127662],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1359,0],[2629,0],[3941,0],[5195,0],[6391,0],[7629,0],[8876,0],[10111,0],[11447,0],[12700,0],[13958,0],[15205,0],[16468,0],[17702,0],[18965,0],[20194,0],[21445,0],[22684,0],[23984,0],[25220,0],[26479,0],[27738,0],[28980,0],[30223,0],[31471,0],[32680,0],[33861,0],[35081,0],[36293,0],[37513,0],[38773,0],[40095,0],[41336,0],[42596,0],[43833,0],[45068,100],[46355,100],[47586,100],[48802,100],[50050,100],[51292,100],[52579,100],[53777,100],[54969,100],[56157,100],[57431,100],[58684,100],[59978,100],[61227,100],[62447,100],[63677,100],[64876,100],[66072,100],[67291,100],[68522,100],[69772,100],[70992,100],[72214,100],[73445,100],[74703,100],[75964,100],[77225,100],[78443,100],[79679,100],[80887,100],[82151,100],[83377,100],[84651,100],[85861,100],[87156,100],[88367,100],[89617,100],[90863,100],[92086,100],[93285,100],[94510,100],[95806,100],[97016,100],[98220,100],[99450,100],[100673,100],[101917,100],[103134,100],[104390,100],[105604,100],[106838,100],[108066,100],[109343,100],[110539,100],[111749,100],[112955,100],[114165,100],[115398,100],[116616,100],[117883,100],[119160,100],[120382,100],[121621,100],[122816,100],[124023,100],[125238,100],[126462,100],[127662,100]],"reportHref":"runs/ops-dashboard-pi-gemini-3.8-flash-muxx6n27-r1/report.html","videoHref":null,"condition":"prompted"}]</script>
+<script>
+(() => {
+  const tracks = JSON.parse(document.getElementById('tracks').textContent);
+  const HZ = 420000;
+  const CLASS = ['no server', 'error', 'blank', 'rendering'];
+  const players = [...document.querySelectorAll('.player')].map((el, i) => ({
+    el,
+    tr: tracks[i],
+    img: el.querySelector('img'),
+    badge: el.querySelector('.badge'),
+    score: el.querySelector('.pscore'),
+    play: el.querySelector('.splay'),
+    cursor: -1,
+  }));
+
+  // Draw each panel's own curve once, in the sparkline's own coordinate space.
+  for (const p of players) {
+    const path = p.el.querySelector('.sline');
+    const pts = p.tr.curve;
+    let prev = pts.length ? pts[0][1] : 0;
+    let d = 'M 0 ' + (44 - prev * 0.42);
+    for (let k = 1; k < pts.length; k++) {
+      const px = Math.min(1, pts[k][0] / HZ) * 300;
+      d += ' L ' + px + ' ' + (44 - prev * 0.42) + ' L ' + px + ' ' + (44 - pts[k][1] * 0.42);
+      prev = pts[k][1];
+    }
+    d += ' L 300 ' + (44 - prev * 0.42);
+    path.setAttribute('d', d);
+  }
+
+  // Warm the cache in the background. Playback works without this; it just
+  // stutters on the first pass, which reads as the run being jerky when it was
+  // not. Progress is shown rather than blocking the controls.
+  const all = tracks.flatMap((t) => t.srcs);
+  let loaded = 0;
+  const bufferEl = document.getElementById('buffer');
+  const showBuffer = () => {
+    bufferEl.textContent = loaded >= all.length ? '' : 'buffering ' + Math.round((loaded / all.length) * 100) + '%';
+  };
+  showBuffer();
+  for (const src of all) {
+    const im = new Image();
+    im.onload = im.onerror = () => { loaded++; showBuffer(); };
+    im.src = src;
+  }
+
+  const chartPlay = document.getElementById('chartplay');
+  const CH = { l: 44, pw: 740 };
+  const scrub = document.getElementById('scrub');
+  const tnow = document.getElementById('tnow');
+  const btn = document.getElementById('playpause');
+  const mmss = (ms) => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  };
+
+  /** Last frame at or before t. Frames are in time order, so this walks. */
+  function seek(p, t) {
+    const times = p.tr.t;
+    let i = p.cursor;
+    if (i < 0 || times[i] > t) i = -1;
+    while (i + 1 < times.length && times[i + 1] <= t) i++;
+    return i;
+  }
+
+  let clock = 0, playing = false, speed = 10, last = 0;
+
+  function render() {
+    for (const p of players) {
+      const i = seek(p, clock);
+      if (i === p.cursor) continue;
+      p.cursor = i;
+      if (i < 0) {
+        p.img.dataset.empty = '1';
+        p.badge.textContent = 'not started';
+        p.score.textContent = '--';
+      } else {
+        const s = p.tr.shot[i];
+        if (s >= 0) { p.img.dataset.empty = '0'; p.img.src = p.tr.srcs[s]; }
+        else p.img.dataset.empty = '1';
+        p.badge.textContent = CLASS[p.tr.cls[i]] + (clock > p.tr.runEndMs ? ' · run ended' : '');
+        p.score.textContent = (p.tr.score[i] / 100).toFixed(2);
+      }
+    }
+    for (const p of players) p.play.setAttribute('transform', 'translate(' + Math.min(1, clock / HZ) * 300 + ',0)');
+    const px = CH.l + Math.min(1, clock / HZ) * CH.pw;
+    chartPlay.setAttribute('x1', px); chartPlay.setAttribute('x2', px);
+    tnow.textContent = mmss(clock) + ' / ' + mmss(HZ);
+    scrub.value = String(Math.round(clock));
+  }
+
+  function frame(now) {
+    if (!playing) return;
+    const dt = last ? now - last : 0;
+    last = now;
+    clock = Math.min(HZ, clock + dt * speed);
+    render();
+    if (clock >= HZ) { setPlaying(false); return; }
+    requestAnimationFrame(frame);
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    btn.textContent = on ? '❚❚ Pause' : '▶ Play';
+    if (on) {
+      if (clock >= HZ) clock = 0;
+      last = 0;
+      requestAnimationFrame(frame);
+    }
+  }
+
+  btn.addEventListener('click', () => setPlaying(!playing));
+  scrub.addEventListener('input', () => { clock = Number(scrub.value); render(); });
+  for (const b of document.querySelectorAll('.speeds button')) {
+    b.addEventListener('click', () => {
+      speed = Number(b.dataset.speed);
+      for (const o of document.querySelectorAll('.speeds button')) o.setAttribute('aria-pressed', String(o === b));
+    });
+  }
+  addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+    if (e.key === 'ArrowRight') { clock = Math.min(HZ, clock + 1000); render(); }
+    if (e.key === 'ArrowLeft') { clock = Math.max(0, clock - 1000); render(); }
+  });
+
+  render();
+})();
+</script>
+</body></html>
