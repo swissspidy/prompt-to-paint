@@ -1,0 +1,868 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Task board on a running Vite + React project: five agent/model pairs, three vendors</title>
+<style>
+  :root { color-scheme: light; --surface-0:#f6f5f2; --surface-1:#fcfcfb; --surface-2:#eeede9;
+    --border:#e2e1dc; --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77756f;
+    --grid:#e8e7e2; --muted-fill:#c9c8c2; --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+    --surface-0:#111110; --surface-1:#1a1a19; --surface-2:#232321; --border:#302f2d;
+    --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e86; --grid:#2a2a28;
+    --muted-fill:#4a4946; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; } }
+  :root[data-theme="dark"] { color-scheme: dark; --surface-0:#111110; --surface-1:#1a1a19;
+    --surface-2:#232321; --border:#302f2d; --text-primary:#fff; --text-secondary:#c3c2b7;
+    --text-muted:#8f8e86; --grid:#2a2a28; --muted-fill:#4a4946; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181; --series-6: #008300; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surface-0); color:var(--text-primary);
+    font:15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 16px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; letter-spacing:-0.01em; }
+  h2 { font-size:15px; margin:0 0 14px; color:var(--text-secondary); text-transform:uppercase;
+    letter-spacing:0.06em; font-weight:600; }
+  .sub { color:var(--text-secondary); margin:0 0 22px; font-size:14px; }
+  .panel { background:var(--surface-1); border:1px solid var(--border); border-radius:12px;
+    padding:18px; margin:0 0 18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;
+    color:var(--text-secondary); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border); }
+  td { padding:7px 8px; border-bottom:1px solid var(--border); }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .swatch { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:8px; }
+  .moved { color:var(--series-2); font-weight:600; }
+  .cgroup td { font-weight:600; padding-top:16px; color:var(--text-secondary);
+    border-bottom:1px solid var(--border); }
+  .ctag { font-size:11px; padding:1px 6px; border-radius:99px; border:1px solid var(--border);
+    color:var(--text-secondary); margin-left:6px; }
+  .delta-up { color:var(--series-3); } .delta-flat { color:var(--text-secondary); }
+  svg.chart { width:100%; height:auto; overflow:visible; display:block; }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .tick { fill:var(--text-muted); font-size:11px; }
+  .s { fill:none; stroke-width:2; stroke-linejoin:round; }
+  .lbl { font-size:12px; font-weight:600; dominant-baseline:middle; }
+  #chartplay { stroke:var(--text-primary); stroke-width:1.5; opacity:.5; }
+
+  /* ---- transport ---- */
+  .transport { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px;
+    background:var(--surface-1); border:1px solid var(--border); border-radius:12px;
+    padding:12px 16px; margin:0 0 18px; flex-wrap:wrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .transport button { font:inherit; font-weight:600; cursor:pointer; color:var(--text-primary);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:6px 14px; }
+  .transport button:hover { border-color:var(--text-muted); }
+  .transport .t { font-variant-numeric:tabular-nums; font-weight:650; min-width:104px; }
+  .transport input[type=range] { flex:1; min-width:220px; accent-color:var(--series-1); }
+  .speeds { display:flex; gap:4px; }
+  .speeds button { padding:6px 10px; font-size:13px; }
+  .speeds button[aria-pressed="true"] { background:var(--series-1); border-color:var(--series-1); color:#fff; }
+  .buffer { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+
+  /* ---- players ---- */
+  .grid-players { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .player { padding:12px; margin:0; }
+  .phead { display:flex; align-items:center; gap:8px; margin:0 0 8px; font-size:13px; }
+  .rank { width:20px; height:20px; border-radius:6px; background:var(--surface-2); color:var(--text-secondary);
+    display:grid; place-items:center; font-size:11px; font-weight:700; flex:none; }
+  .plabel { font-weight:650; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pauc { color:var(--text-muted); font-variant-numeric:tabular-nums; }
+  .screen { position:relative; aspect-ratio:16/10; background:var(--surface-2);
+    border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .screen img { width:100%; height:100%; object-fit:cover; object-position:top center; display:block; }
+  .screen img[data-empty="1"] { visibility:hidden; }
+  .badge { position:absolute; left:8px; bottom:8px; font-size:11px; font-weight:700;
+    padding:3px 7px; border-radius:6px; background:rgba(0,0,0,.62); color:#fff; letter-spacing:.02em; }
+  .spark { width:100%; height:46px; margin-top:8px; display:block; }
+  .sline { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; }
+  .splay { stroke:var(--text-muted); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .pfoot { display:flex; align-items:baseline; gap:8px; margin-top:6px; font-size:12px;
+    color:var(--text-secondary); flex-wrap:wrap; }
+  .pscore { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--text-primary); }
+  .pmeta { color:var(--text-muted); }
+  .plinks { margin-left:auto; }
+  .plinks a { color:var(--text-secondary); }
+  .note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+  .psteps { position:relative; height:14px; margin-top:2px; }
+  .mark { position:absolute; transform:translateX(-50%); font-size:11px; line-height:14px; cursor:help; }
+  .m1 { color:#1f8a4c; } .m0 { color:var(--text-muted); } .m-1 { color:#c0392b; }
+  .pnote { margin:4px 0 0; font-size:12px; color:var(--text-secondary); min-height:1.4em; }
+  .etransport { position:static; box-shadow:none; background:var(--surface-0); }
+  .eplayer { padding:12px; margin:0; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
+  .tabs button { font:inherit; font-size:13px; font-weight:600; cursor:pointer; color:var(--text-secondary);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:99px; padding:4px 12px; }
+  .tabs button[aria-selected="true"] { background:var(--series-1); border-color:var(--series-1); color:#fff; }
+  .eprompt { margin:0 0 12px; font-size:14px; }
+  .eprompt::before { content:"Prompt: "; color:var(--text-muted); }
+  .badge[data-state="landed"] { background:var(--series-3); }
+  .badge[data-state="never"], .badge[data-state="void"] { background:#8a2a2a; }
+  @media (max-width:560px) { .wrap { padding:18px 12px 48px; } .transport { position:static; } }
+</style></head><body><div class="wrap">
+
+<h1>Task board on a running Vite + React project: five agent/model pairs, three vendors</h1>
+<p class="sub">todo-app-scaffolded · 15 runs · horizon 480s ·
+  67 distinct screenshots · showing the first 150s, by when every run had ended</p>
+
+<div class="transport">
+  <button id="playpause" aria-label="Play or pause">▶ Play</button>
+  <span class="t" id="tnow">00:00 / 00:00</span>
+  <input id="scrub" type="range" min="0" max="150000" value="0" step="100" aria-label="Scrub"/>
+  <span class="speeds" role="group" aria-label="Playback speed">
+    <button data-speed="1">1×</button><button data-speed="4">4×</button>
+    <button data-speed="10" aria-pressed="true">10×</button><button data-speed="30">30×</button>
+  </span>
+  <span class="buffer" id="buffer"></span>
+</div>
+
+<div class="grid-players"><figure class="panel player" data-i="0">
+      <figcaption class="phead">
+        <span class="rank">1</span>
+        <span class="plabel" style="color:var(--series-1)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.973</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 12.9s · reviewable 12.9s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ok1m-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="1">
+      <figcaption class="phead">
+        <span class="rank">2</span>
+        <span class="plabel" style="color:var(--series-2)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.971</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 13.8s · reviewable 13.8s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="2">
+      <figcaption class="phead">
+        <span class="rank">3</span>
+        <span class="plabel" style="color:var(--series-3)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.967</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 15.8s · reviewable 15.8s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="3">
+      <figcaption class="phead">
+        <span class="rank">4</span>
+        <span class="plabel" style="color:var(--series-4)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.964</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-4)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m1" style="left:15.67%" title="23.5s, better: After shows styled columns, cards, badges, and properly placed Add task button">▲</span><span class="mark m1" style="left:18.04%" title="27.1s, better: After matches brief: header 'Orbit' with 'Sprint 14' subtitle correctly placed">▲</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 12.5s · reviewable 12.5s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="4">
+      <figcaption class="phead">
+        <span class="rank">5</span>
+        <span class="plabel" style="color:var(--series-5)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.956</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-5)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m0" style="left:17.11%" title="25.7s, about the same: Nearly identical; only minor size/padding differences, both fully satisfy the brief">●</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 21.2s · reviewable 21.2s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="5">
+      <figcaption class="phead">
+        <span class="rank">6</span>
+        <span class="plabel" style="color:var(--series-6)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.955</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-6)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 21.5s · reviewable 21.5s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="6">
+      <figcaption class="phead">
+        <span class="rank">7</span>
+        <span class="plabel" style="color:var(--series-1)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.951</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m0" style="left:20.13%" title="30.2s, about the same: Nearly identical; only minor spacing/logo icon differences">●</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 23.6s · reviewable 23.6s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="7">
+      <figcaption class="phead">
+        <span class="rank">8</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gpt-5.5</span>
+        <span class="pauc">AUC 0.947</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 25.4s · reviewable 25.4s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gpt-5.5-muy8ren3-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="8">
+      <figcaption class="phead">
+        <span class="rank">9</span>
+        <span class="plabel" style="color:var(--series-3)">cc-sonnet-5.5</span>
+        <span class="pauc">AUC 0.945</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 26.4s · reviewable 26.4s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ma3z-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="9">
+      <figcaption class="phead">
+        <span class="rank">10</span>
+        <span class="plabel" style="color:var(--series-4)">cc-opus-5.5</span>
+        <span class="pauc">AUC 0.944</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-4)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m0" style="left:25.91%" title="38.9s, about the same: Nearly identical; only minor spacing/icon differences, no functional improvement">●</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 26.9s · reviewable 26.9s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="10">
+      <figcaption class="phead">
+        <span class="rank">11</span>
+        <span class="plabel" style="color:var(--series-5)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.940</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-5)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 28.9s · reviewable 28.9s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="11">
+      <figcaption class="phead">
+        <span class="rank">12</span>
+        <span class="plabel" style="color:var(--series-6)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.878</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-6)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m1" style="left:71.86%" title="107.8s, better: After adds task counter badge and cleaner move-action labels with arrows">▲</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 58.4s · reviewable 58.4s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="12">
+      <figcaption class="phead">
+        <span class="rank">13</span>
+        <span class="plabel" style="color:var(--series-1)">pi-sonnet-5.5</span>
+        <span class="pauc">AUC 0.874</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-1)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 60.3s · reviewable 60.3s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-sonnet-5.5-muy97ir4-r1/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="13">
+      <figcaption class="phead">
+        <span class="rank">14</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.860</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-2)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m-1" style="left:52.38%" title="78.6s, worse: Before shows 'Sprint 14' subtitle badge and project description; after lacks subtitle text">▼</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 67.4s · reviewable 67.4s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/report.html">report</a></span>
+      </div>
+    </figure><figure class="panel player" data-i="14">
+      <figcaption class="phead">
+        <span class="rank">15</span>
+        <span class="plabel" style="color:var(--series-3)">pi-gemini-3.8-flash</span>
+        <span class="pauc">AUC 0.854</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash at the current time" decoding="async"/>
+        <span class="badge"></span></div>
+      <svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true">
+        <path class="sline" stroke="var(--series-3)"/>
+        <line class="splay" y1="0" y2="46"/>
+      </svg><div class="psteps"><span class="mark m-1" style="left:53.99%" title="81.0s, worse: Before includes 'SPRINT 14' badge and task count subtitle detail">▼</span><span class="mark m0" style="left:58.49%" title="87.7s, about the same: Both screenshots appear identical in content, layout, and design.">●</span></div><p class="pnote"></p>
+      <div class="pfoot">
+        <span class="pscore">--</span>
+        <span class="pmeta">first render 68.8s · reviewable 68.8s</span>
+        <span class="plinks"><a href="runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/report.html">report</a></span>
+      </div>
+    </figure></div>
+<section class="panel" id="edits" style="margin-top:18px"><h2>Follow-up edits</h2>
+<p class="note" style="margin:0 0 12px">Once the first build was on screen, every agent got the same follow-up
+prompts in its live session. Each edit is replayed from the moment its prompt was sent, so the panels show the
+same edit at the same moment however long each agent took over the first build.</p>
+<div class="tabs" role="tablist" aria-label="Edit"><button role="tab" data-edit="header-blue" aria-selected="true">header-blue</button><button role="tab" data-edit="add-column" aria-selected="false">add-column</button></div>
+<p class="eprompt" id="eprompt"></p>
+<div class="transport etransport">
+  <button id="eplaypause" aria-label="Play or pause the edit">▶ Play</button>
+  <span class="t" id="etnow">0.0s</span>
+  <input id="escrub" type="range" min="0" max="1000" value="0" step="50" aria-label="Scrub the edit"/>
+  <span class="speeds" role="group" aria-label="Edit playback speed">
+    <button data-espeed="1" aria-pressed="true">1×</button><button data-espeed="2">2×</button><button data-espeed="5">5×</button>
+  </span>
+</div>
+<div class="grid-players"><figure class="panel eplayer" data-i="0">
+      <figcaption class="phead">
+        <span class="rank">1</span>
+        <span class="plabel" style="color:var(--series-1)">cc-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="1">
+      <figcaption class="phead">
+        <span class="rank">2</span>
+        <span class="plabel" style="color:var(--series-2)">cc-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="2">
+      <figcaption class="phead">
+        <span class="rank">3</span>
+        <span class="plabel" style="color:var(--series-3)">pi-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="3">
+      <figcaption class="phead">
+        <span class="rank">4</span>
+        <span class="plabel" style="color:var(--series-4)">pi-gpt-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="4">
+      <figcaption class="phead">
+        <span class="rank">5</span>
+        <span class="plabel" style="color:var(--series-5)">cc-opus-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="5">
+      <figcaption class="phead">
+        <span class="rank">6</span>
+        <span class="plabel" style="color:var(--series-6)">pi-gpt-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="6">
+      <figcaption class="phead">
+        <span class="rank">7</span>
+        <span class="plabel" style="color:var(--series-1)">cc-opus-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="7">
+      <figcaption class="phead">
+        <span class="rank">8</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gpt-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gpt-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="8">
+      <figcaption class="phead">
+        <span class="rank">9</span>
+        <span class="plabel" style="color:var(--series-3)">cc-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="9">
+      <figcaption class="phead">
+        <span class="rank">10</span>
+        <span class="plabel" style="color:var(--series-4)">cc-opus-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="cc-opus-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="10">
+      <figcaption class="phead">
+        <span class="rank">11</span>
+        <span class="plabel" style="color:var(--series-5)">pi-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="11">
+      <figcaption class="phead">
+        <span class="rank">12</span>
+        <span class="plabel" style="color:var(--series-6)">pi-gemini-3.8-flash</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="12">
+      <figcaption class="phead">
+        <span class="rank">13</span>
+        <span class="plabel" style="color:var(--series-1)">pi-sonnet-5.5</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-sonnet-5.5 during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="13">
+      <figcaption class="phead">
+        <span class="rank">14</span>
+        <span class="plabel" style="color:var(--series-2)">pi-gemini-3.8-flash</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure><figure class="panel eplayer" data-i="14">
+      <figcaption class="phead">
+        <span class="rank">15</span>
+        <span class="plabel" style="color:var(--series-3)">pi-gemini-3.8-flash</span>
+      </figcaption>
+      <div class="screen"><img alt="pi-gemini-3.8-flash during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure></div>
+</section>
+
+<section class="panel" style="margin-top:18px"><h2>Correctness over time</h2>
+<svg class="chart" viewBox="0 0 900 260" role="img" aria-label="Correctness over time for 15 runs">
+  <line class="grid" x1="44" x2="784" y1="230" y2="230"/>
+        <text class="tick" x="36" y="234" text-anchor="end">0.00</text><line class="grid" x1="44" x2="784" y1="176" y2="176"/>
+        <text class="tick" x="36" y="180" text-anchor="end">0.25</text><line class="grid" x1="44" x2="784" y1="122" y2="122"/>
+        <text class="tick" x="36" y="126" text-anchor="end">0.50</text><line class="grid" x1="44" x2="784" y1="68" y2="68"/>
+        <text class="tick" x="36" y="72" text-anchor="end">0.75</text><line class="grid" x1="44" x2="784" y1="14" y2="14"/>
+        <text class="tick" x="36" y="18" text-anchor="end">1.00</text><text class="tick" x="44" y="252" text-anchor="middle">0s</text><text class="tick" x="167.33333333333331" y="252" text-anchor="middle">25s</text><text class="tick" x="290.66666666666663" y="252" text-anchor="middle">50s</text><text class="tick" x="414" y="252" text-anchor="middle">75s</text><text class="tick" x="537.3333333333333" y="252" text-anchor="middle">100s</text><text class="tick" x="660.6666666666667" y="252" text-anchor="middle">125s</text><text class="tick" x="784" y="252" text-anchor="middle">150s</text>
+  <path class="s" d="M 44 230 L 50.57613333333333 230 L 50.57613333333333 230 L 57.2164 230 L 57.2164 230 L 62.62826666666666 230 L 62.62826666666666 230 L 68.14866666666667 230 L 68.14866666666667 230 L 73.68386666666666 230 L 73.68386666666666 230 L 79.96893333333333 230 L 79.96893333333333 230 L 85.42026666666666 230 L 85.42026666666666 230 L 90.83706666666666 230 L 90.83706666666666 230 L 96.31306666666666 230 L 96.31306666666666 230 L 102.15413333333333 230 L 102.15413333333333 230 L 107.6992 230 L 107.6992 14 L 113.5452 14 L 113.5452 14 L 118.9472 14 L 118.9472 14 L 124.60573333333333 14 L 124.60573333333333 14 L 130.03733333333332 14 L 130.03733333333332 14 L 135.41466666666668 14 L 135.41466666666668 14 L 140.7772 14 L 140.7772 14 L 146.3568 14 L 146.3568 14 L 151.91173333333333 14 L 151.91173333333333 14 L 157.2496 14 L 157.2496 14 L 162.6170666666667 14 L 162.6170666666667 14 L 168.0930666666667 14 L 168.0930666666667 14 L 173.46053333333333 14 L 173.46053333333333 14 L 178.8132 14 L 178.8132 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 50.43306666666667 230 L 50.43306666666667 230 L 57.468 230 L 57.468 230 L 62.83546666666667 230 L 62.83546666666667 230 L 68.20293333333333 230 L 68.20293333333333 230 L 73.7332 230 L 73.7332 230 L 79.53973333333334 230 L 79.53973333333334 230 L 85.19333333333333 230 L 85.19333333333333 230 L 90.55586666666667 230 L 90.55586666666667 230 L 95.83946666666667 230 L 95.83946666666667 230 L 101.50293333333333 230 L 101.50293333333333 230 L 106.83093333333333 230 L 106.83093333333333 230 L 112.154 230 L 112.154 14 L 117.79773333333334 14 L 117.79773333333334 14 L 123.17999999999999 14 L 123.17999999999999 14 L 128.582 14 L 128.582 14 L 133.95440000000002 14 L 133.95440000000002 14 L 139.4205333333333 14 L 139.4205333333333 14 L 144.7584 14 L 144.7584 14 L 150.1209333333333 14 L 150.1209333333333 14 L 155.61173333333335 14 L 155.61173333333335 14 L 161.08280000000002 14 L 161.08280000000002 14 L 166.68213333333333 14 L 166.68213333333333 14 L 172.02493333333334 14 L 172.02493333333334 14 L 177.4565333333333 14 L 177.4565333333333 14 L 182.76973333333333 14 L 182.76973333333333 14 L 188.152 14 L 188.152 14 L 188.81306666666666 14 L 188.81306666666666 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 50.35906666666666 230 L 50.35906666666666 230 L 56.76253333333334 230 L 56.76253333333334 230 L 62.134933333333336 230 L 62.134933333333336 230 L 67.45306666666667 230 L 67.45306666666667 230 L 72.89453333333333 230 L 72.89453333333333 230 L 78.6024 230 L 78.6024 230 L 84.0044 230 L 84.0044 230 L 89.44586666666666 230 L 89.44586666666666 230 L 94.75906666666667 230 L 94.75906666666667 230 L 100.39293333333333 230 L 100.39293333333333 230 L 105.69626666666666 230 L 105.69626666666666 230 L 111.0736 230 L 111.0736 230 L 116.43613333333333 230 L 116.43613333333333 230 L 122.01573333333333 230 L 122.01573333333333 14 L 127.6644 14 L 127.6644 14 L 133.12560000000002 14 L 133.12560000000002 14 L 138.47826666666668 14 L 138.47826666666668 14 L 143.8654666666667 14 L 143.8654666666667 14 L 149.2132 14 L 149.2132 14 L 154.77800000000002 14 L 154.77800000000002 14 L 160.31813333333332 14 L 160.31813333333332 14 L 165.73493333333334 14 L 165.73493333333334 14 L 171.14186666666666 14 L 171.14186666666666 14 L 176.57840000000002 14 L 176.57840000000002 14 L 182.16293333333334 14 L 182.16293333333334 14 L 187.65866666666665 14 L 187.65866666666665 14 L 193.17906666666667 14 L 193.17906666666667 14 L 784 14" stroke="var(--series-3)"/><path class="s" d="M 44 230 L 50.7784 230 L 50.7784 230 L 57.12266666666667 230 L 57.12266666666667 230 L 62.50986666666667 230 L 62.50986666666667 230 L 67.8132 230 L 67.8132 230 L 73.23986666666667 230 L 73.23986666666667 230 L 78.928 230 L 78.928 230 L 84.26586666666667 230 L 84.26586666666667 230 L 89.60373333333334 230 L 89.60373333333334 230 L 94.93666666666667 230 L 94.93666666666667 230 L 100.54586666666667 230 L 100.54586666666667 230 L 105.864 230 L 105.864 109.03999999999999 L 111.47813333333333 109.03999999999999 L 111.47813333333333 109.03999999999999 L 116.95906666666667 109.03999999999999 L 116.95906666666667 109.03999999999999 L 122.43013333333334 109.03999999999999 L 122.43013333333334 109.03999999999999 L 127.7384 109.03999999999999 L 127.7384 109.03999999999999 L 133.0713333333333 109.03999999999999 L 133.0713333333333 109.03999999999999 L 138.38453333333334 109.03999999999999 L 138.38453333333334 109.03999999999999 L 143.83586666666667 109.03999999999999 L 143.83586666666667 109.03999999999999 L 149.24773333333331 109.03999999999999 L 149.24773333333331 109.03999999999999 L 154.5856 109.03999999999999 L 154.5856 109.03999999999999 L 159.96786666666668 109.03999999999999 L 159.96786666666668 14 L 166.00133333333332 14 L 166.00133333333332 14 L 171.68453333333332 14 L 171.68453333333332 14 L 177.46146666666667 14 L 177.46146666666667 14 L 183.70213333333334 14 L 183.70213333333334 14 L 189.5728 14 L 189.5728 14 L 195.35466666666667 14 L 195.35466666666667 14 L 201.12173333333334 14 L 201.12173333333334 14 L 206.85426666666666 14 L 206.85426666666666 14 L 212.85813333333334 14 L 212.85813333333334 14 L 218.64 14 L 218.64 14 L 224.37253333333334 14 L 224.37253333333334 14 L 230.22346666666667 14 L 230.22346666666667 14 L 236.17306666666667 14 L 236.17306666666667 14 L 242.01906666666667 14 L 242.01906666666667 14 L 247.9588 14 L 247.9588 14 L 253.76533333333333 14 L 253.76533333333333 14 L 784 14" stroke="var(--series-4)"/><path class="s" d="M 44 230 L 50.270266666666664 230 L 50.270266666666664 230 L 56.5356 230 L 56.5356 230 L 61.8784 230 L 61.8784 230 L 67.21133333333333 230 L 67.21133333333333 230 L 72.5788 230 L 72.5788 230 L 78.15346666666667 230 L 78.15346666666667 230 L 83.56533333333334 230 L 83.56533333333334 230 L 89.0216 230 L 89.0216 230 L 94.4088 230 L 94.4088 230 L 99.9292 230 L 99.9292 230 L 105.28186666666667 230 L 105.28186666666667 230 L 110.63946666666666 230 L 110.63946666666666 230 L 116.11053333333334 230 L 116.11053333333334 230 L 121.64573333333334 230 L 121.64573333333334 230 L 127.00826666666667 230 L 127.00826666666667 230 L 132.47933333333333 230 L 132.47933333333333 230 L 137.76293333333334 230 L 137.76293333333334 230 L 143.2488 230 L 143.2488 230 L 148.67053333333334 230 L 148.67053333333334 14 L 154.37346666666667 14 L 154.37346666666667 14 L 159.79026666666667 14 L 159.79026666666667 14 L 165.18239999999997 14 L 165.18239999999997 14 L 170.6238666666667 14 L 170.6238666666667 14 L 176.33666666666667 14 L 176.33666666666667 14 L 181.714 14 L 181.714 14 L 187.09626666666668 14 L 187.09626666666668 14 L 192.43906666666666 14 L 192.43906666666666 14 L 197.94466666666665 14 L 197.94466666666665 14 L 203.29240000000001 14 L 203.29240000000001 14 L 208.80293333333333 14 L 208.80293333333333 14 L 214.23946666666666 14 L 214.23946666666666 14 L 219.59706666666665 14 L 219.59706666666665 14 L 224.9596 14 L 224.9596 14 L 230.33200000000002 14 L 230.33200000000002 14 L 235.68959999999998 14 L 235.68959999999998 14 L 241.0176 14 L 241.0176 14 L 784 14" stroke="var(--series-5)"/><path class="s" d="M 44 230 L 50.3048 230 L 50.3048 230 L 56.85626666666667 230 L 56.85626666666667 230 L 62.28293333333333 230 L 62.28293333333333 230 L 67.67013333333333 230 L 67.67013333333333 230 L 73.04746666666666 230 L 73.04746666666666 230 L 78.93786666666668 230 L 78.93786666666668 230 L 84.61613333333332 230 L 84.61613333333332 230 L 90.02799999999999 230 L 90.02799999999999 230 L 95.3708 230 L 95.3708 230 L 100.99973333333332 230 L 100.99973333333332 230 L 106.3524 230 L 106.3524 230 L 111.82346666666668 230 L 111.82346666666668 230 L 117.30933333333333 230 L 117.30933333333333 230 L 123.03693333333332 230 L 123.03693333333332 230 L 128.54746666666665 230 L 128.54746666666665 230 L 134.02346666666665 230 L 134.02346666666665 230 L 139.3564 230 L 139.3564 230 L 144.86693333333332 230 L 144.86693333333332 230 L 150.19493333333332 230 L 150.19493333333332 14 L 156.8204 14 L 156.8204 14 L 162.7996 14 L 162.7996 14 L 168.7788 14 L 168.7788 14 L 174.83200000000002 14 L 174.83200000000002 14 L 180.78653333333332 14 L 180.78653333333332 14 L 186.84959999999998 14 L 186.84959999999998 14 L 192.80906666666667 14 L 192.80906666666667 14 L 198.79813333333334 14 L 198.79813333333334 14 L 204.6244 14 L 204.6244 14 L 210.71706666666668 14 L 210.71706666666668 14 L 216.8196 14 L 216.8196 14 L 222.98626666666667 14 L 222.98626666666667 14 L 229.06906666666666 14 L 229.06906666666666 14 L 235.09266666666664 14 L 235.09266666666664 14 L 784 14" stroke="var(--series-6)"/><path class="s" d="M 44 230 L 50.59093333333333 230 L 50.59093333333333 230 L 56.8464 230 L 56.8464 230 L 62.480266666666665 230 L 62.480266666666665 230 L 67.85266666666666 230 L 67.85266666666666 230 L 73.16093333333333 230 L 73.16093333333333 230 L 78.9872 230 L 78.9872 230 L 84.47306666666665 230 L 84.47306666666665 230 L 89.81093333333334 230 L 89.81093333333334 230 L 95.2968 230 L 95.2968 230 L 100.82213333333334 230 L 100.82213333333334 230 L 106.23893333333334 230 L 106.23893333333334 230 L 111.60146666666667 230 L 111.60146666666667 230 L 116.97386666666667 230 L 116.97386666666667 230 L 122.58306666666667 230 L 122.58306666666667 230 L 127.90613333333333 230 L 127.90613333333333 230 L 133.3328 230 L 133.3328 230 L 138.7052 230 L 138.7052 230 L 144.2996 230 L 144.2996 230 L 149.65226666666666 230 L 149.65226666666666 230 L 155.04933333333332 230 L 155.04933333333332 230 L 160.45626666666666 230 L 160.45626666666666 14 L 166.22333333333333 14 L 166.22333333333333 14 L 171.57106666666667 14 L 171.57106666666667 14 L 176.92866666666666 14 L 176.92866666666666 14 L 182.26653333333334 14 L 182.26653333333334 14 L 187.65866666666665 14 L 187.65866666666665 14 L 192.98173333333332 14 L 192.98173333333332 14 L 198.86226666666667 14 L 198.86226666666667 14 L 204.2544 14 L 204.2544 14 L 209.59226666666666 14 L 209.59226666666666 14 L 214.9844 14 L 214.9844 14 L 220.416 14 L 220.416 14 L 225.8476 14 L 225.8476 14 L 231.22493333333333 14 L 231.22493333333333 14 L 236.55786666666668 14 L 236.55786666666668 14 L 241.9352 14 L 241.9352 14 L 247.34213333333335 14 L 247.34213333333335 14 L 252.8428 14 L 252.8428 14 L 258.2596 14 L 258.2596 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 50.669866666666664 230 L 50.669866666666664 230 L 57.172 230 L 57.172 230 L 62.8996 230 L 62.8996 230 L 68.4644 230 L 68.4644 230 L 73.96013333333333 230 L 73.96013333333333 230 L 80.10706666666667 230 L 80.10706666666667 230 L 85.47946666666667 230 L 85.47946666666667 230 L 91.14786666666666 230 L 91.14786666666666 230 L 96.47586666666666 230 L 96.47586666666666 230 L 102.24293333333333 230 L 102.24293333333333 230 L 107.9212 230 L 107.9212 230 L 113.40213333333334 230 L 113.40213333333334 230 L 119.0656 230 L 119.0656 230 L 125.0004 230 L 125.0004 230 L 130.48626666666667 230 L 130.48626666666667 230 L 136.10533333333333 230 L 136.10533333333333 230 L 141.43826666666666 230 L 141.43826666666666 230 L 147.21026666666666 230 L 147.21026666666666 230 L 152.58266666666668 230 L 152.58266666666668 230 L 158.0488 230 L 158.0488 230 L 163.4656 230 L 163.4656 230 L 169.17346666666666 230 L 169.17346666666666 14 L 175.01946666666666 14 L 175.01946666666666 14 L 180.77666666666667 14 L 180.77666666666667 14 L 186.52893333333333 14 L 186.52893333333333 14 L 192.03453333333334 14 L 192.03453333333334 14 L 197.56480000000002 14 L 197.56480000000002 14 L 203.21346666666668 14 L 203.21346666666668 14 L 208.8128 14 L 208.8128 14 L 214.46146666666667 14 L 214.46146666666667 14 L 220.02626666666666 14 L 220.02626666666666 14 L 225.60093333333333 14 L 225.60093333333333 14 L 231.2545333333333 14 L 231.2545333333333 14 L 237.00186666666667 14 L 237.00186666666667 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 50.3936 230 L 50.3936 230 L 65.4008 230 L 65.4008 230 L 75.69173333333333 230 L 75.69173333333333 230 L 81.71039999999999 230 L 81.71039999999999 230 L 87.49719999999999 230 L 87.49719999999999 230 L 93.78226666666667 230 L 93.78226666666667 230 L 100.5212 230 L 100.5212 230 L 106.40173333333333 230 L 106.40173333333333 230 L 112.20826666666666 230 L 112.20826666666666 230 L 118.61666666666666 230 L 118.61666666666666 230 L 124.4232 230 L 124.4232 230 L 130.19026666666667 230 L 130.19026666666667 230 L 135.5824 230 L 135.5824 230 L 141.22613333333334 230 L 141.22613333333334 230 L 146.712 230 L 146.712 230 L 152.24226666666667 230 L 152.24226666666667 230 L 157.6492 230 L 157.6492 230 L 163.28306666666666 230 L 163.28306666666666 230 L 168.74426666666665 230 L 168.74426666666665 230 L 174.27453333333332 230 L 174.27453333333332 14 L 180.04160000000002 14 L 180.04160000000002 14 L 185.5916 14 L 185.5916 14 L 191.04293333333334 14 L 191.04293333333334 14 L 196.5584 14 L 196.5584 14 L 202.04426666666666 14 L 202.04426666666666 14 L 207.4068 14 L 207.4068 14 L 212.73973333333333 14 L 212.73973333333333 14 L 218.122 14 L 218.122 14 L 223.57826666666665 14 L 223.57826666666665 14 L 229.03946666666667 14 L 229.03946666666667 14 L 234.49573333333336 14 L 234.49573333333336 14 L 239.804 14 L 239.804 14 L 245.27506666666665 14 L 245.27506666666665 14 L 784 14" stroke="var(--series-3)"/><path class="s" d="M 44 230 L 50.28013333333333 230 L 50.28013333333333 230 L 56.95493333333333 230 L 56.95493333333333 230 L 62.59373333333333 230 L 62.59373333333333 230 L 68.00066666666666 230 L 68.00066666666666 230 L 73.30893333333333 230 L 73.30893333333333 230 L 78.88853333333333 230 L 78.88853333333333 230 L 84.33 230 L 84.33 230 L 89.7912 230 L 89.7912 230 L 95.18333333333334 230 L 95.18333333333334 230 L 101.18226666666666 230 L 101.18226666666666 230 L 106.54973333333334 230 L 106.54973333333334 230 L 111.92213333333333 230 L 111.92213333333333 230 L 117.25506666666666 230 L 117.25506666666666 230 L 122.75573333333334 230 L 122.75573333333334 230 L 128.11333333333334 230 L 128.11333333333334 230 L 133.44626666666665 230 L 133.44626666666665 230 L 138.81373333333335 230 L 138.81373333333335 230 L 144.32920000000001 230 L 144.32920000000001 230 L 149.72133333333335 230 L 149.72133333333335 230 L 155.03453333333334 230 L 155.03453333333334 230 L 160.328 230 L 160.328 230 L 165.8484 230 L 165.8484 230 L 171.18626666666665 230 L 171.18626666666665 230 L 176.50933333333333 230 L 176.50933333333333 14 L 182.21226666666666 14 L 182.21226666666666 14 L 187.58466666666666 14 L 187.58466666666666 14 L 192.92253333333332 14 L 192.92253333333332 14 L 198.2752 14 L 198.2752 14 L 203.63773333333333 14 L 203.63773333333333 14 L 208.9756 14 L 208.9756 14 L 214.3332 14 L 214.3332 14 L 219.7204 14 L 219.7204 14 L 225.05826666666667 14 L 225.05826666666667 14 L 230.42079999999999 14 L 230.42079999999999 14 L 235.73893333333334 14 L 235.73893333333334 14 L 241.4468 14 L 241.4468 14 L 246.79946666666666 14 L 246.79946666666666 14 L 252.15706666666668 14 L 252.15706666666668 14 L 257.5344 14 L 257.5344 14 L 262.9413333333333 14 L 262.9413333333333 14 L 268.294 14 L 268.294 14 L 273.6664 14 L 273.6664 14 L 279.08320000000003 14 L 279.08320000000003 14 L 284.50986666666665 14 L 284.50986666666665 14 L 289.8230666666667 14 L 289.8230666666667 14 L 295.1412 14 L 295.1412 14 L 300.4938666666667 14 L 300.4938666666667 14 L 305.8465333333333 14 L 305.8465333333333 14 L 784 14" stroke="var(--series-4)"/><path class="s" d="M 44 230 L 50.2752 230 L 50.2752 230 L 56.78226666666667 230 L 56.78226666666667 230 L 62.16453333333334 230 L 62.16453333333334 230 L 67.6208 230 L 67.6208 230 L 72.91426666666666 230 L 72.91426666666666 230 L 78.5284 230 L 78.5284 230 L 83.82679999999999 230 L 83.82679999999999 230 L 89.14 230 L 89.14 230 L 94.45320000000001 230 L 94.45320000000001 230 L 99.94893333333334 230 L 99.94893333333334 230 L 105.4496 230 L 105.4496 230 L 110.7776 230 L 110.7776 230 L 116.11053333333334 230 L 116.11053333333334 230 L 121.63093333333333 230 L 121.63093333333333 230 L 126.97373333333333 230 L 126.97373333333333 230 L 132.29186666666666 230 L 132.29186666666666 230 L 137.63960000000003 230 L 137.63960000000003 230 L 143.15506666666664 230 L 143.15506666666664 230 L 148.51760000000002 230 L 148.51760000000002 230 L 153.816 230 L 153.816 230 L 159.13413333333335 230 L 159.13413333333335 230 L 164.6496 230 L 164.6496 230 L 170.03186666666667 230 L 170.03186666666667 230 L 175.42893333333333 230 L 175.42893333333333 230 L 180.85559999999998 230 L 180.85559999999998 230 L 186.376 230 L 186.376 14 L 191.95066666666665 14 L 191.95066666666665 14 L 197.33293333333333 14 L 197.33293333333333 14 L 202.83853333333334 14 L 202.83853333333334 14 L 208.16653333333332 14 L 208.16653333333332 14 L 213.4896 14 L 213.4896 14 L 218.84226666666666 14 L 218.84226666666666 14 L 224.22453333333334 14 L 224.22453333333334 14 L 229.64133333333334 14 L 229.64133333333334 14 L 235.10746666666668 14 L 235.10746666666668 14 L 240.4996 14 L 240.4996 14 L 245.83253333333334 14 L 245.83253333333334 14 L 251.16053333333335 14 L 251.16053333333335 14 L 256.4885333333333 14 L 256.4885333333333 14 L 784 14" stroke="var(--series-5)"/><path class="s" d="M 44 230 L 50.19133333333333 230 L 50.19133333333333 230 L 56.436933333333336 230 L 56.436933333333336 230 L 61.7896 230 L 61.7896 230 L 67.07813333333334 230 L 67.07813333333334 230 L 72.39133333333334 230 L 72.39133333333334 230 L 77.91173333333333 230 L 77.91173333333333 230 L 83.21013333333333 230 L 83.21013333333333 230 L 88.58746666666667 230 L 88.58746666666667 230 L 93.89573333333334 230 L 93.89573333333334 230 L 99.3816 230 L 99.3816 230 L 104.72933333333333 230 L 104.72933333333333 230 L 110.09186666666666 230 L 110.09186666666666 230 L 115.42479999999999 230 L 115.42479999999999 230 L 121.08826666666667 230 L 121.08826666666667 230 L 126.4804 230 L 126.4804 230 L 131.9564 230 L 131.9564 230 L 137.42253333333332 230 L 137.42253333333332 230 L 142.9084 230 L 142.9084 230 L 148.45346666666666 230 L 148.45346666666666 230 L 153.86533333333333 230 L 153.86533333333333 230 L 159.23773333333332 230 L 159.23773333333332 230 L 164.62493333333333 230 L 164.62493333333333 230 L 170.2736 230 L 170.2736 230 L 175.6164 230 L 175.6164 230 L 180.95426666666668 230 L 180.95426666666668 230 L 186.31186666666667 230 L 186.31186666666667 230 L 191.78786666666667 230 L 191.78786666666667 230 L 197.23426666666666 230 L 197.23426666666666 230 L 202.60173333333333 230 L 202.60173333333333 230 L 207.99386666666666 230 L 207.99386666666666 230 L 213.56853333333333 230 L 213.56853333333333 230 L 218.87186666666665 230 L 218.87186666666665 230 L 224.1604 230 L 224.1604 230 L 229.43413333333334 230 L 229.43413333333334 230 L 235.04333333333332 230 L 235.04333333333332 230 L 240.37626666666668 230 L 240.37626666666668 230 L 245.68453333333332 230 L 245.68453333333332 230 L 250.978 230 L 250.978 230 L 256.58226666666667 230 L 256.58226666666667 230 L 262.05826666666667 230 L 262.05826666666667 230 L 267.3616 230 L 267.3616 230 L 272.6550666666667 230 L 272.6550666666667 230 L 278.11626666666666 230 L 278.11626666666666 230 L 283.4146666666667 230 L 283.4146666666667 230 L 288.72293333333334 230 L 288.72293333333334 230 L 293.99173333333334 230 L 293.99173333333334 230 L 299.5910666666667 230 L 299.5910666666667 230 L 304.98813333333334 230 L 304.98813333333334 230 L 310.30626666666666 230 L 310.30626666666666 230 L 315.73786666666666 230 L 315.73786666666666 230 L 321.3668 230 L 321.3668 230 L 326.7984 230 L 326.7984 230 L 332.1116 230 L 332.1116 14 L 337.73560000000003 14 L 337.73560000000003 14 L 343.13759999999996 14 L 343.13759999999996 14 L 348.5198666666667 14 L 348.5198666666667 14 L 353.9909333333333 14 L 353.9909333333333 14 L 359.3781333333333 14 L 359.3781333333333 14 L 364.8689333333333 14 L 364.8689333333333 14 L 370.6261333333333 14 L 370.6261333333333 14 L 376.01826666666665 14 L 376.01826666666665 14 L 381.3758666666667 14 L 381.3758666666667 14 L 386.73346666666663 14 L 386.73346666666663 14 L 392.10586666666666 14 L 392.10586666666666 14 L 397.6065333333333 14 L 397.6065333333333 14 L 402.93946666666665 14 L 402.93946666666665 14 L 408.3168 14 L 408.3168 14 L 413.704 14 L 413.704 14 L 419.10106666666667 14 L 419.10106666666667 14 L 424.76946666666663 14 L 424.76946666666663 14 L 430.1221333333333 14 L 430.1221333333333 14 L 435.52906666666667 14 L 435.52906666666667 14 L 440.9508 14 L 440.9508 14 L 446.36266666666666 14 L 446.36266666666666 14 L 451.74986666666666 14 L 451.74986666666666 14 L 457.1124 14 L 457.1124 14 L 462.5588 14 L 462.5588 14 L 467.93119999999993 14 L 467.93119999999993 14 L 473.2592 14 L 473.2592 14 L 478.6266666666667 14 L 478.6266666666667 14 L 483.9892 14 L 483.9892 14 L 489.3024 14 L 489.3024 14 L 494.80306666666667 14 L 494.80306666666667 14 L 500.2149333333333 14 L 500.2149333333333 14 L 505.6465333333333 14 L 505.6465333333333 14 L 511.0534666666667 14 L 511.0534666666667 14 L 516.4159999999999 14 L 516.4159999999999 14 L 521.7588 14 L 521.7588 14 L 527.1657333333333 14 L 527.1657333333333 14 L 532.5036 14 L 532.5036 14 L 537.8365333333334 14 L 537.8365333333334 14 L 543.2089333333333 14 L 543.2089333333333 14 L 548.5665333333334 14 L 548.5665333333334 14 L 553.9438666666667 14 L 553.9438666666667 14 L 559.4248 14 L 559.4248 14 L 564.8514666666666 14 L 564.8514666666666 14 L 570.4113333333333 14 L 570.4113333333333 14 L 575.7689333333333 14 L 575.7689333333333 14 L 581.3978666666667 14 L 581.3978666666667 14 L 586.7258666666667 14 L 586.7258666666667 14 L 592.0489333333334 14 L 592.0489333333334 14 L 597.446 14 L 597.446 14 L 602.8628 14 L 602.8628 14 L 608.2253333333333 14 L 608.2253333333333 14 L 613.5977333333333 14 L 613.5977333333333 14 L 618.9997333333333 14 L 618.9997333333333 14 L 624.4510666666667 14 L 624.4510666666667 14 L 629.858 14 L 629.858 14 L 635.3636 14 L 635.3636 14 L 640.7754666666667 14 L 640.7754666666667 14 L 646.1972 14 L 646.1972 14 L 651.6682666666667 14 L 651.6682666666667 14 L 657.1245333333334 14 L 657.1245333333334 14 L 662.4969333333333 14 L 662.4969333333333 14 L 667.9038666666667 14 L 667.9038666666667 14 L 673.3354666666667 14 L 673.3354666666667 14 L 784 14" stroke="var(--series-6)"/><path class="s" d="M 44 230 L 50.97573333333333 230 L 50.97573333333333 230 L 58.050133333333335 230 L 58.050133333333335 230 L 63.6248 230 L 63.6248 230 L 69.17973333333333 230 L 69.17973333333333 230 L 74.61133333333333 230 L 74.61133333333333 230 L 80.3636 230 L 80.3636 230 L 85.94319999999999 230 L 85.94319999999999 230 L 91.49813333333333 230 L 91.49813333333333 230 L 96.9988 230 L 96.9988 230 L 102.59813333333334 230 L 102.59813333333334 230 L 107.94093333333333 230 L 107.94093333333333 230 L 113.30839999999999 230 L 113.30839999999999 230 L 118.68079999999999 230 L 118.68079999999999 230 L 124.26533333333333 230 L 124.26533333333333 230 L 129.6328 230 L 129.6328 230 L 134.96573333333333 230 L 134.96573333333333 230 L 140.422 230 L 140.422 230 L 146.0756 230 L 146.0756 230 L 151.40853333333334 230 L 151.40853333333334 230 L 156.85986666666668 230 L 156.85986666666668 230 L 162.2026666666667 230 L 162.2026666666667 230 L 167.80693333333335 230 L 167.80693333333335 230 L 173.22866666666667 230 L 173.22866666666667 230 L 178.5616 230 L 178.5616 230 L 183.8896 230 L 183.8896 230 L 189.37546666666668 230 L 189.37546666666668 230 L 195.02906666666667 230 L 195.02906666666667 230 L 200.40146666666666 230 L 200.40146666666666 230 L 205.75413333333333 230 L 205.75413333333333 230 L 211.2992 230 L 211.2992 230 L 216.69626666666665 230 L 216.69626666666665 230 L 222.21173333333334 230 L 222.21173333333334 230 L 227.52986666666666 230 L 227.52986666666666 230 L 233.33639999999997 230 L 233.33639999999997 230 L 238.81733333333332 230 L 238.81733333333332 230 L 244.25386666666665 230 L 244.25386666666665 230 L 249.572 230 L 249.572 230 L 255.08253333333332 230 L 255.08253333333332 230 L 260.4056 230 L 260.4056 230 L 265.81253333333336 230 L 265.81253333333336 230 L 271.17013333333335 230 L 271.17013333333335 230 L 276.78920000000005 230 L 276.78920000000005 230 L 282.1172 230 L 282.1172 230 L 287.41066666666666 230 L 287.41066666666666 230 L 292.73866666666663 230 L 292.73866666666663 230 L 298.2788 230 L 298.2788 230 L 303.6413333333333 230 L 303.6413333333333 230 L 308.9594666666667 230 L 308.9594666666667 230 L 314.3910666666667 230 L 314.3910666666667 230 L 319.88186666666667 230 L 319.88186666666667 230 L 325.2049333333333 230 L 325.2049333333333 230 L 330.51813333333337 230 L 330.51813333333337 230 L 335.93986666666666 230 L 335.93986666666666 230 L 341.3862666666667 230 L 341.3862666666667 14 L 347.2717333333333 14 L 347.2717333333333 14 L 352.69346666666667 14 L 352.69346666666667 14 L 358.31746666666663 14 L 358.31746666666663 14 L 363.7244 14 L 363.7244 14 L 369.12146666666666 14 L 369.12146666666666 14 L 374.5333333333333 14 L 374.5333333333333 14 L 379.96986666666663 14 L 379.96986666666663 14 L 385.44093333333336 14 L 385.44093333333336 14 L 390.9662666666666 14 L 390.9662666666666 14 L 396.61986666666667 14 L 396.61986666666667 14 L 402.04653333333334 14 L 402.04653333333334 14 L 407.43373333333335 14 L 407.43373333333335 14 L 412.8505333333333 14 L 412.8505333333333 14 L 784 14" stroke="var(--series-1)"/><path class="s" d="M 44 230 L 50.452799999999996 230 L 50.452799999999996 230 L 56.940133333333335 230 L 56.940133333333335 230 L 62.2928 230 L 62.2928 230 L 67.74906666666666 230 L 67.74906666666666 230 L 73.07213333333333 230 L 73.07213333333333 230 L 78.7652 230 L 78.7652 230 L 84.09813333333334 230 L 84.09813333333334 230 L 89.50013333333334 230 L 89.50013333333334 230 L 94.8972 230 L 94.8972 230 L 100.44720000000001 230 L 100.44720000000001 230 L 105.80973333333333 230 L 105.80973333333333 230 L 111.20186666666666 230 L 111.20186666666666 230 L 116.57426666666666 230 L 116.57426666666666 230 L 122.29693333333333 230 L 122.29693333333333 230 L 127.6496 230 L 127.6496 230 L 133.24893333333335 230 L 133.24893333333335 230 L 138.56706666666668 230 L 138.56706666666668 230 L 143.98386666666667 230 L 143.98386666666667 230 L 149.26253333333332 230 L 149.26253333333332 230 L 154.84706666666665 230 L 154.84706666666665 230 L 160.18493333333333 230 L 160.18493333333333 230 L 165.54253333333332 230 L 165.54253333333332 230 L 170.92973333333333 230 L 170.92973333333333 230 L 176.63760000000002 230 L 176.63760000000002 230 L 181.99026666666666 230 L 181.99026666666666 230 L 187.412 230 L 187.412 230 L 192.8436 230 L 192.8436 230 L 198.3788 230 L 198.3788 230 L 203.84986666666666 230 L 203.84986666666666 230 L 209.2913333333333 230 L 209.2913333333333 230 L 214.60453333333334 230 L 214.60453333333334 230 L 220.22853333333333 230 L 220.22853333333333 230 L 225.58613333333332 230 L 225.58613333333332 230 L 230.89440000000002 230 L 230.89440000000002 230 L 236.30133333333336 230 L 236.30133333333336 230 L 241.81186666666667 230 L 241.81186666666667 230 L 247.17933333333335 230 L 247.17933333333335 230 L 252.4876 230 L 252.4876 230 L 257.80573333333336 230 L 257.80573333333336 230 L 263.28666666666663 230 L 263.28666666666663 230 L 268.6492 230 L 268.6492 230 L 274.1104 230 L 274.1104 230 L 279.5074666666667 230 L 279.5074666666667 230 L 284.9834666666667 230 L 284.9834666666667 230 L 290.30653333333333 230 L 290.30653333333333 230 L 295.5852 230 L 295.5852 230 L 300.86879999999996 230 L 300.86879999999996 230 L 306.4484 230 L 306.4484 230 L 311.7714666666667 230 L 311.7714666666667 230 L 317.13893333333334 230 L 317.13893333333334 230 L 322.5064 230 L 322.5064 230 L 328.13533333333334 230 L 328.13533333333334 230 L 333.43373333333335 230 L 333.43373333333335 230 L 338.7617333333333 230 L 338.7617333333333 230 L 344.0996 230 L 344.0996 230 L 349.7384 230 L 349.7384 230 L 355.0664 230 L 355.0664 230 L 360.3648 230 L 360.3648 230 L 365.68786666666665 230 L 365.68786666666665 230 L 371.2576 230 L 371.2576 230 L 376.6546666666667 230 L 376.6546666666667 14 L 382.4513333333333 14 L 382.4513333333333 14 L 387.84346666666664 14 L 387.84346666666664 14 L 393.53653333333335 14 L 393.53653333333335 14 L 398.978 14 L 398.978 14 L 404.3405333333333 14 L 404.3405333333333 14 L 409.78200000000004 14 L 409.78200000000004 14 L 415.32213333333334 14 L 415.32213333333334 14 L 420.7192 14 L 420.7192 14 L 426.1310666666667 14 L 426.1310666666667 14 L 431.59226666666666 14 L 431.59226666666666 14 L 437.3593333333333 14 L 437.3593333333333 14 L 442.7416 14 L 442.7416 14 L 448.2077333333333 14 L 448.2077333333333 14 L 453.59 14 L 453.59 14 L 459.1104 14 L 459.1104 14 L 464.5568 14 L 464.5568 14 L 469.99333333333334 14 L 469.99333333333334 14 L 475.49893333333335 14 L 475.49893333333335 14 L 480.9848 14 L 480.9848 14 L 486.42133333333334 14 L 486.42133333333334 14 L 491.9762666666667 14 L 491.9762666666667 14 L 497.2993333333334 14 L 497.2993333333334 14 L 502.79013333333336 14 L 502.79013333333336 14 L 508.1576 14 L 508.1576 14 L 513.5447999999999 14 L 513.5447999999999 14 L 519.0208 14 L 519.0208 14 L 524.4721333333333 14 L 524.4721333333333 14 L 529.9333333333333 14 L 529.9333333333333 14 L 535.3846666666667 14 L 535.3846666666667 14 L 784 14" stroke="var(--series-2)"/><path class="s" d="M 44 230 L 50.5564 230 L 50.5564 230 L 57.107866666666666 230 L 57.107866666666666 230 L 62.62826666666666 230 L 62.62826666666666 230 L 67.98093333333333 230 L 67.98093333333333 230 L 73.4668 230 L 73.4668 230 L 79.37693333333334 230 L 79.37693333333334 230 L 84.76413333333333 230 L 84.76413333333333 230 L 90.12173333333334 230 L 90.12173333333334 230 L 95.43986666666666 230 L 95.43986666666666 230 L 100.96520000000001 230 L 100.96520000000001 230 L 106.28826666666667 230 L 106.28826666666667 230 L 111.69026666666667 230 L 111.69026666666667 230 L 117.112 230 L 117.112 230 L 122.71626666666667 230 L 122.71626666666667 230 L 128.06893333333335 230 L 128.06893333333335 230 L 133.44133333333332 230 L 133.44133333333332 230 L 138.81866666666667 230 L 138.81866666666667 230 L 144.4377333333333 230 L 144.4377333333333 230 L 149.93346666666667 230 L 149.93346666666667 230 L 155.27133333333336 230 L 155.27133333333336 230 L 160.76706666666666 230 L 160.76706666666666 230 L 166.50946666666667 230 L 166.50946666666667 230 L 171.89173333333332 230 L 171.89173333333332 230 L 177.20493333333334 230 L 177.20493333333334 230 L 182.5132 230 L 182.5132 230 L 188.1372 230 L 188.1372 230 L 193.51946666666666 230 L 193.51946666666666 230 L 198.82773333333333 230 L 198.82773333333333 230 L 204.14093333333332 230 L 204.14093333333332 230 L 209.6712 230 L 209.6712 230 L 215.01893333333334 230 L 215.01893333333334 230 L 220.40613333333334 230 L 220.40613333333334 230 L 225.76373333333333 230 L 225.76373333333333 230 L 231.37786666666668 230 L 231.37786666666668 230 L 236.76506666666668 230 L 236.76506666666668 230 L 242.2312 230 L 242.2312 230 L 247.53946666666664 230 L 247.53946666666664 230 L 253.0352 230 L 253.0352 230 L 258.39279999999997 230 L 258.39279999999997 230 L 263.8589333333333 230 L 263.8589333333333 230 L 269.17213333333336 230 L 269.17213333333336 230 L 274.7517333333333 230 L 274.7517333333333 230 L 280.14386666666667 230 L 280.14386666666667 230 L 285.6346666666667 230 L 285.6346666666667 230 L 290.9824 230 L 290.9824 230 L 296.4732 230 L 296.4732 230 L 301.816 230 L 301.816 230 L 307.2821333333333 230 L 307.2821333333333 230 L 312.69893333333334 230 L 312.69893333333334 230 L 318.1552 230 L 318.1552 230 L 323.5917333333333 230 L 323.5917333333333 230 L 328.9789333333333 230 L 328.9789333333333 230 L 334.3464 230 L 334.3464 230 L 340.0148 230 L 340.0148 230 L 345.3822666666667 230 L 345.3822666666667 230 L 350.72506666666663 230 L 350.72506666666663 230 L 356.09746666666666 230 L 356.09746666666666 230 L 361.68693333333334 230 L 361.68693333333334 230 L 366.9952 230 L 366.9952 230 L 372.3281333333333 230 L 372.3281333333333 230 L 377.8090666666667 230 L 377.8090666666667 230 L 383.33933333333334 230 L 383.33933333333334 14 L 389.1261333333333 14 L 389.1261333333333 14 L 394.6218666666667 14 L 394.6218666666667 230 L 400.2853333333333 230 L 400.2853333333333 14 L 405.79586666666665 14 L 405.79586666666665 14 L 411.13866666666667 14 L 411.13866666666667 14 L 416.5850666666667 14 L 416.5850666666667 14 L 421.94759999999997 14 L 421.94759999999997 14 L 427.3249333333333 14 L 427.3249333333333 14 L 432.69239999999996 14 L 432.69239999999996 14 L 438.12893333333335 14 L 438.12893333333335 14 L 443.51120000000003 14 L 443.51120000000003 14 L 449.2536 14 L 449.2536 14 L 454.6210666666667 14 L 454.6210666666667 14 L 459.98359999999997 14 L 459.98359999999997 14 L 465.7358666666667 14 L 465.7358666666667 14 L 471.2710666666666 14 L 471.2710666666666 14 L 476.7914666666667 14 L 476.7914666666667 14 L 482.48453333333333 14 L 482.48453333333333 14 L 487.9210666666666 14 L 487.9210666666666 14 L 493.25893333333335 14 L 493.25893333333335 14 L 498.67573333333337 14 L 498.67573333333337 14 L 504.41319999999996 14 L 504.41319999999996 14 L 509.8152 14 L 509.8152 14 L 515.2665333333333 14 L 515.2665333333333 14 L 520.6537333333333 14 L 520.6537333333333 14 L 526.1099999999999 14 L 526.1099999999999 14 L 531.6304 14 L 531.6304 14 L 537.062 14 L 537.062 14 L 542.4196 14 L 542.4196 14 L 547.8117333333333 14 L 547.8117333333333 14 L 553.2087999999999 14 L 553.2087999999999 14 L 558.6650666666667 14 L 558.6650666666667 14 L 564.0868 14 L 564.0868 14 L 569.4690666666667 14 L 569.4690666666667 14 L 574.9401333333334 14 L 574.9401333333334 14 L 580.4408 14 L 580.4408 14 L 585.8970666666667 14 L 585.8970666666667 14 L 591.3385333333333 14 L 591.3385333333333 14 L 596.6961333333334 14 L 596.6961333333334 14 L 602.0784 14 L 602.0784 14 L 607.4705333333334 14 L 607.4705333333334 14 L 612.9070666666667 14 L 612.9070666666667 14 L 618.3584 14 L 618.3584 14 L 623.7801333333333 14 L 623.7801333333333 14 L 629.2166666666667 14 L 629.2166666666667 14 L 634.5890666666667 14 L 634.5890666666667 14 L 639.9861333333333 14 L 639.9861333333333 14 L 645.4473333333333 14 L 645.4473333333333 14 L 650.8246666666666 14 L 650.8246666666666 14 L 656.3204 14 L 656.3204 14 L 661.7569333333333 14 L 661.7569333333333 14 L 667.2230666666667 14 L 667.2230666666667 14 L 784 14" stroke="var(--series-3)"/>
+  <text class="lbl" x="792" y="14" fill="var(--series-1)">cc-sonnet-5.5</text><text class="lbl" x="792" y="28" fill="var(--series-2)">cc-sonnet-5.5</text><text class="lbl" x="792" y="42" fill="var(--series-3)">pi-sonnet-5.5</text><text class="lbl" x="792" y="56" fill="var(--series-4)">pi-gpt-5.5</text><text class="lbl" x="792" y="70" fill="var(--series-5)">cc-opus-5.5</text><text class="lbl" x="792" y="84" fill="var(--series-6)">pi-gpt-5.5</text><text class="lbl" x="792" y="98" fill="var(--series-1)">cc-opus-5.5</text><text class="lbl" x="792" y="112" fill="var(--series-2)">pi-gpt-5.5</text><text class="lbl" x="792" y="126" fill="var(--series-3)">cc-sonnet-5.5</text><text class="lbl" x="792" y="140" fill="var(--series-4)">cc-opus-5.5</text><text class="lbl" x="792" y="154" fill="var(--series-5)">pi-sonnet-5.5</text><text class="lbl" x="792" y="168" fill="var(--series-6)">pi-gemini-3.8-f</text><text class="lbl" x="792" y="182" fill="var(--series-1)">pi-sonnet-5.5</text><text class="lbl" x="792" y="196" fill="var(--series-2)">pi-gemini-3.8-f</text><text class="lbl" x="792" y="210" fill="var(--series-3)">pi-gemini-3.8-f</text>
+  <line id="chartplay" y1="14" y2="230" x1="44" x2="44"/>
+</svg><p class="note">The chart stops at 150s because every run had ended by then. Each curve
+holds its last value from there to the 480s horizon, and the AUC is integrated over all of it.</p></section>
+
+<section class="panel"><h2>Ranking</h2>
+<table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
+<th class="num">First render</th><th class="num">First reviewable</th>
+<th class="num">By AUC</th><th class="num">By final</th><th class="num" title="Each visible change after the first render, judged against the state it replaced">Later changes</th><th>Window closed by</th></tr></thead><tbody>
+<tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.973</b></td><td class="num">1.00</td>
+  <td class="num">12.9s</td><td class="num">12.9s</td>
+  <td class="num">1</td>
+  <td class="num ">1</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.971</b></td><td class="num">1.00</td>
+  <td class="num">13.8s</td><td class="num">13.8s</td>
+  <td class="num">2</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.967</b></td><td class="num">1.00</td>
+  <td class="num">15.8s</td><td class="num">15.8s</td>
+  <td class="num">3</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-4)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.964</b></td><td class="num">1.00</td>
+  <td class="num">12.5s</td><td class="num">12.5s</td>
+  <td class="num">4</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲2</span> <span class="m0">●0</span> <span class="m-1">▼0</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-5)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.956</b></td><td class="num">1.00</td>
+  <td class="num">21.2s</td><td class="num">21.2s</td>
+  <td class="num">5</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲0</span> <span class="m0">●1</span> <span class="m-1">▼0</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-6)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.955</b></td><td class="num">1.00</td>
+  <td class="num">21.5s</td><td class="num">21.5s</td>
+  <td class="num">6</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.951</b></td><td class="num">1.00</td>
+  <td class="num">23.6s</td><td class="num">23.6s</td>
+  <td class="num">7</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲0</span> <span class="m0">●1</span> <span class="m-1">▼0</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>pi-gpt-5.5</td>
+  <td class="num"><b>0.947</b></td><td class="num">1.00</td>
+  <td class="num">25.4s</td><td class="num">25.4s</td>
+  <td class="num">8</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>cc-sonnet-5.5</td>
+  <td class="num"><b>0.945</b></td><td class="num">1.00</td>
+  <td class="num">26.4s</td><td class="num">26.4s</td>
+  <td class="num">9</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-4)"></span>cc-opus-5.5</td>
+  <td class="num"><b>0.944</b></td><td class="num">1.00</td>
+  <td class="num">26.9s</td><td class="num">26.9s</td>
+  <td class="num">10</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲0</span> <span class="m0">●1</span> <span class="m-1">▼0</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-5)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.940</b></td><td class="num">1.00</td>
+  <td class="num">28.9s</td><td class="num">28.9s</td>
+  <td class="num">11</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-6)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.878</b></td><td class="num">1.00</td>
+  <td class="num">58.4s</td><td class="num">58.4s</td>
+  <td class="num">12</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲1</span> <span class="m0">●0</span> <span class="m-1">▼0</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-1)"></span>pi-sonnet-5.5</td>
+  <td class="num"><b>0.874</b></td><td class="num">1.00</td>
+  <td class="num">60.3s</td><td class="num">60.3s</td>
+  <td class="num">13</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num">none</td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-2)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.860</b></td><td class="num">1.00</td>
+  <td class="num">67.4s</td><td class="num">67.4s</td>
+  <td class="num">14</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲0</span> <span class="m0">●0</span> <span class="m-1">▼1</span></td><td>signal</td></tr><tr>
+  <td><span class="swatch" style="background:var(--series-3)"></span>pi-gemini-3.8-flash</td>
+  <td class="num"><b>0.854</b></td><td class="num">1.00</td>
+  <td class="num">68.8s</td><td class="num">68.8s</td>
+  <td class="num">15</td>
+  <td class="num moved">1 ≠</td>
+  <td class="num"><span class="m1">▲0</span> <span class="m0">●1</span> <span class="m-1">▼1</span></td><td>signal</td></tr>
+</tbody></table>
+<p class="note">Highlighted rows rank differently by trajectory than by final score — the disagreement the trajectory metric exists to surface. Playback shows the frames the scores were computed from, on one shared clock, so the ranking above and the pictures below cannot disagree. <b>Later changes</b> counts each visible change after the first render, judged against the state it replaced — ▲ better, ● about the same, ▼ worse. It is reported beside the scores and never changes them; a rubric that every version passes cannot say whether a change helped, and this can. Each pair is judged in both orders, and a preference that flips with the order is counted as the same.</p>
+</section>
+
+
+</div>
+<script id="tracks" type="application/json">[{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.9731,"finalScore":1,"ttfnbrMs":12912,"ttfrrMs":12912,"runEndMs":27914,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ok1m-r3/frames/f00000.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ok1m-r3/frames/f00010.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ok1m-r3/frames/f00036.png"],"t":[1333,2679,3776,4895,6017,7291,8396,9494,10604,11788,12912,14097,15192,16339,17440,18530,19617,20748,21874,22956,24044,25154,26242,27327],"shot":[0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1333,0],[2679,0],[3776,0],[4895,0],[6017,0],[7291,0],[8396,0],[9494,0],[10604,0],[11788,0],[12912,100],[14097,100],[15192,100],[16339,100],[17440,100],[18530,100],[19617,100],[20748,100],[21874,100],[22956,100],[24044,100],[25154,100],[26242,100],[27327,100]],"reportHref":"runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ok1m-r3/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,313,672,1008,1349,1688,2046,2376,2741,3085,3460],"shot":[1,1,1,1,1,1,1,1,1,1,1],"firstChangeMs":3460,"correctMs":3460,"endMs":3460,"outcome":"landed","toolCalls":0,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,142,467,825,1193,1518],"shot":[2,2,2,2,2,2],"firstChangeMs":1518,"correctMs":1518,"endMs":1518,"outcome":"landed","toolCalls":1,"rechecked":null}],"steps":[]},{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.97121875,"finalScore":1,"ttfnbrMs":13815,"ttfrrMs":13815,"runEndMs":29354,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/frames/f00000.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/frames/f00011.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/frames/f00036.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/frames/f00044.png"],"t":[1304,2730,3818,4906,6027,7204,8350,9437,10508,11656,12736,13815,14959,16050,17145,18234,19342,20424,21511,22624,23733,24868,25951,27052,28129,29220,29354],"shot":[0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1304,0],[2730,0],[3818,0],[4906,0],[6027,0],[7204,0],[8350,0],[9437,0],[10508,0],[11656,0],[12736,0],[13815,100],[14959,100],[16050,100],[17145,100],[18234,100],[19342,100],[20424,100],[21511,100],[22624,100],[23733,100],[24868,100],[25951,100],[27052,100],[28129,100],[29220,100],[29354,100]],"reportHref":"runs/todo-app-scaffolded-cc-sonnet-5.5-muy8nk32-r2/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,744,1112,1473,1825,2185,2529,2903,3286],"shot":[1,1,1,1,1,1,1,1,1],"firstChangeMs":3286,"correctMs":3286,"endMs":3286,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,246,587,926,1261,1601],"shot":[2,2,2,2,2,3],"firstChangeMs":1601,"correctMs":1601,"endMs":1601,"outcome":"landed","toolCalls":1,"rechecked":null}],"steps":[]},{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.9670541666666667,"finalScore":1,"ttfnbrMs":15814,"ttfrrMs":15814,"runEndMs":30364,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/frames/f00000.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/frames/f00013.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/frames/f00037.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/frames/f00049.png"],"t":[1289,2587,3676,4754,5857,7014,8109,9212,10289,11431,12506,13596,14683,15814,16959,18066,19151,20243,21327,22455,23578,24676,25772,26874,28006,29120,30239],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1289,0],[2587,0],[3676,0],[4754,0],[5857,0],[7014,0],[8109,0],[9212,0],[10289,0],[11431,0],[12506,0],[13596,0],[14683,0],[15814,100],[16959,100],[18066,100],[19151,100],[20243,100],[21327,100],[22455,100],[23578,100],[24676,100],[25772,100],[26874,100],[28006,100],[29120,100],[30239,100]],"reportHref":"runs/todo-app-scaffolded-pi-sonnet-5.5-muy99kzf-r2/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,769,1117,1457,1804,2146,2500,2875,3213,3549],"shot":[1,1,1,1,1,1,1,1,1,2],"firstChangeMs":3549,"correctMs":3549,"endMs":3549,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,238,593,962,1310,1662,2041,2401,2744,3128,3494,3845,4195,4574,4915,5258,5614,5966,6339,6698,7055,7409,7759,8122,8469,8830,9175,9534,9878,10219,10594,10946,11310,11671,12034,12371,12709,13066,13406,13746,14090,14445,14795,15137,15474,15830,16174,16550,16891,17238,17586,17933,18298,18647,19018,19383,19735,20107,20454,20803,21154,21513,21874,22222,22587,22943,23296,23674,24039],"shot":[2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"firstChangeMs":2744,"correctMs":2744,"endMs":24132,"outcome":"landed","toolCalls":2,"rechecked":"The brief's check matched \\bblocked\\b, and this column header renders as \u003ch2>Blocked\u003cspan>0\u003c/span>\u003c/h2>, whose innerText is BLOCKED0 with no word boundary, so it reported NEVER LANDED. Re-checked after the run with the corrected check against the run's final code: it passes. The page changed once after the prompt and held that state to the end of the window, so the edit landed at its first visible change."}],"steps":[]},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9637203703703703,"finalScore":1,"ttfnbrMs":12540,"ttfrrMs":12540,"runEndMs":43514,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00000.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00010.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00020.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00023.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00057.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/frames/f00117.png"],"t":[1374,2660,3752,4827,5927,7080,8162,9244,10325,11462,12540,13678,14789,15898,16974,18055,19132,20237,21334,22416,23507,24730,25882,27053,28318,29508,30680,31849,33011,34228,35400,36562,37748,38954,40139,41343,42520],"shot":[0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"score":[0,0,0,0,0,0,0,0,0,0,56,56,56,56,56,56,56,56,56,56,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1374,0],[2660,0],[3752,0],[4827,0],[5927,0],[7080,0],[8162,0],[9244,0],[10325,0],[11462,0],[12540,56],[13678,56],[14789,56],[15898,56],[16974,56],[18055,56],[19132,56],[20237,56],[21334,56],[22416,56],[23507,100],[24730,100],[25882,100],[27053,100],[28318,100],[29508,100],[30680,100],[31849,100],[33011,100],[34228,100],[35400,100],[36562,100],[37748,100],[38954,100],[40139,100],[41343,100],[42520,100]],"reportHref":"runs/todo-app-scaffolded-pi-gpt-5.5-muy8t8e4-r3/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,81,497,909,1331,1757,2188,2651,3062,3470,3881,4305,4727,5134,5541,5973,6393,6834,7257,7701,8205,8646,9100,9519,9966,10398,10827,11255,11670,12113,12553,13014,13434,13857,14291,14712,15127,15560,15986,16467,16917,17345,17762,18175,18595,19004,19434,19859,20283,20743,21181,21634,22067,22502,22954,23415,23903,24377,24822,25264,25705,26152,26615,27061,27495,27914,28357,28818],"shot":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],"firstChangeMs":7701,"correctMs":7701,"endMs":28862,"outcome":"landed","toolCalls":1,"rechecked":"The brief's check read only background-color, and this header is blue through a linear-gradient, so it reported NEVER LANDED. Re-checked after the run with the corrected check (gradient colour stops count) against the run's final code: it passes. The page changed once after the prompt and held that state to the end of the window, so the edit landed at its first visible change."},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,53,526,970,1402,1850,2293,2751,3204,3667,4124],"shot":[4,4,4,4,4,4,4,4,4,4,5],"firstChangeMs":4124,"correctMs":4124,"endMs":4124,"outcome":"landed","toolCalls":2,"rechecked":null}],"steps":[{"t":23507,"v":1,"note":"After shows styled columns, cards, badges, and properly placed Add task button","flip":false},{"t":27053,"v":1,"note":"After matches brief: header 'Orbit' with 'Sprint 14' subtitle correctly placed","flip":false}]},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.9557979166666667,"finalScore":1,"ttfnbrMs":21217,"ttfrrMs":21217,"runEndMs":40868,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/frames/f00000.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/frames/f00018.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/frames/f00022.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/frames/f00052.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/frames/f00084.png"],"t":[1271,2541,3624,4705,5793,6923,8020,9126,10218,11337,12422,13508,14617,15739,16826,17935,19006,20118,21217,22373,23471,24564,25667,26825,27915,29006,30089,31205,32289,33406,34508,35594,36681,37770,38856,39936],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1271,0],[2541,0],[3624,0],[4705,0],[5793,0],[6923,0],[8020,0],[9126,0],[10218,0],[11337,0],[12422,0],[13508,0],[14617,0],[15739,0],[16826,0],[17935,0],[19006,0],[20118,0],[21217,100],[22373,100],[23471,100],[24564,100],[25667,100],[26825,100],[27915,100],[29006,100],[30089,100],[31205,100],[32289,100],[33406,100],[34508,100],[35594,100],[36681,100],[37770,100],[38856,100],[39936,100]],"reportHref":"runs/todo-app-scaffolded-cc-opus-5.5-muy9g0vi-r3/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,237,589,937,1309,1644,1982,2333,2690,3052,3410,3748,4097,4449,4790],"shot":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"firstChangeMs":4790,"correctMs":4790,"endMs":4790,"outcome":"landed","toolCalls":0,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,191,550,899,1243,1587,1938,2291,2663,3019,3379,3750,4129,4467,4818,5166,5515,5870,6203,6554,6899,7249,7606,7947,8292,8654,9006],"shot":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],"firstChangeMs":9006,"correctMs":9006,"endMs":9006,"outcome":"landed","toolCalls":2,"rechecked":null}],"steps":[{"t":25667,"v":0,"note":"Nearly identical; only minor size/padding differences, both fully satisfy the brief","flip":false}]},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9551541666666666,"finalScore":1,"ttfnbrMs":21526,"ttfrrMs":21526,"runEndMs":39372,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/frames/f00000.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/frames/f00018.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/frames/f00051.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/frames/f00106.png"],"t":[1278,2606,3706,4798,5888,7082,8233,9330,10413,11554,12639,13748,14860,16021,17138,18248,19329,20446,21526,22869,24081,25293,26520,27727,28956,30164,31378,32559,33794,35031,36281,37514,38735],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1278,0],[2606,0],[3706,0],[4798,0],[5888,0],[7082,0],[8233,0],[9330,0],[10413,0],[11554,0],[12639,0],[13748,0],[14860,0],[16021,0],[17138,0],[18248,0],[19329,0],[20446,0],[21526,100],[22869,100],[24081,100],[25293,100],[26520,100],[27727,100],[28956,100],[30164,100],[31378,100],[32559,100],[33794,100],[35031,100],[36281,100],[37514,100],[38735,100]],"reportHref":"runs/todo-app-scaffolded-pi-gpt-5.5-muy8pli5-r1/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,143,578,1023,1501,1964,2440,2880,3352,3851,4290,4733,5184,5626,6106,6547,7017,7472,8012,8461,8929,9385,9853,10313,10764,11242,11724,12192,12641,13097,13564,14032,14500,14945,15425,16025,16592,17097,17585,18093,18568,19018,19508,19961,20444,20913,21381,21833,22289,22749,23205,23684,24153,24600,25060,25532,26020,26510,26972,27433,27894],"shot":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"firstChangeMs":7472,"correctMs":7472,"endMs":28233,"outcome":"landed","toolCalls":1,"rechecked":"The brief's check read only background-color, and this header is blue through a linear-gradient, so it reported NEVER LANDED. Re-checked after the run with the corrected check (gradient colour stops count) against the run's final code: it passes. The page changed once after the prompt and held that state to the end of the window, so the edit landed at its first visible change."},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,193,663,1167,1659,2154,2647,3146,3606,4083,4550],"shot":[2,2,2,2,2,2,2,2,2,2,3],"firstChangeMs":4550,"correctMs":4550,"endMs":4550,"outcome":"landed","toolCalls":1,"rechecked":null}],"steps":[]},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.9508208333333333,"finalScore":1,"ttfnbrMs":23606,"ttfrrMs":23606,"runEndMs":44451,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/frames/f00000.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/frames/f00020.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/frames/f00026.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/frames/f00062.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/frames/f00065.png"],"t":[1336,2604,3746,4835,5911,7092,8204,9286,10398,11518,12616,13703,14792,15929,17008,18108,19197,20331,21416,22510,23606,24775,25859,26945,28027,29120,30199,31391,32484,33566,34659,35760,36861,37951,39032,40122,41218,42333,43431],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1336,0],[2604,0],[3746,0],[4835,0],[5911,0],[7092,0],[8204,0],[9286,0],[10398,0],[11518,0],[12616,0],[13703,0],[14792,0],[15929,0],[17008,0],[18108,0],[19197,0],[20331,0],[21416,0],[22510,0],[23606,100],[24775,100],[25859,100],[26945,100],[28027,100],[29120,100],[30199,100],[31391,100],[32484,100],[33566,100],[34659,100],[35760,100],[36861,100],[37951,100],[39032,100],[40122,100],[41218,100],[42333,100],[43431,100]],"reportHref":"runs/todo-app-scaffolded-cc-opus-5.5-muy9ecs3-r2/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,145,490,831,1180,1542,1910,2258,2603,2950,3299,3654,4003,4346,4694,5033,5418,5779,6167,6511,6843,7198,7594],"shot":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3],"firstChangeMs":7594,"correctMs":7594,"endMs":7594,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,425,808,1149,1495,1892,2243,2599,2949,3307,3657,4044,4399,4767],"shot":[4,4,4,4,4,4,4,4,4,4,4,4,4,4],"firstChangeMs":4767,"correctMs":4767,"endMs":4767,"outcome":"landed","toolCalls":0,"rechecked":null}],"steps":[{"t":30199,"v":0,"note":"Nearly identical; only minor spacing/logo icon differences","flip":false}]},{"label":"pi-gpt-5.5","adapter":"pi","auc":0.9471395833333334,"finalScore":1,"ttfnbrMs":25373,"ttfrrMs":25373,"runEndMs":40013,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gpt-5.5-muy8ren3-r2/frames/f00000.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8ren3-r2/frames/f00021.png","runs/todo-app-scaffolded-pi-gpt-5.5-muy8ren3-r2/frames/f00049.png"],"t":[1352,2670,3831,4959,6073,7319,8408,9557,10637,11806,12957,14068,15216,16419,17531,18670,19751,20921,22010,23118,24216,25373,26558,27725,28891,30007,31128,32273,33408,34553,35681,36811,37957,39122],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1352,0],[2670,0],[3831,0],[4959,0],[6073,0],[7319,0],[8408,0],[9557,0],[10637,0],[11806,0],[12957,0],[14068,0],[15216,0],[16419,0],[17531,0],[18670,0],[19751,0],[20921,0],[22010,0],[23118,0],[24216,0],[25373,100],[26558,100],[27725,100],[28891,100],[30007,100],[31128,100],[32273,100],[33408,100],[34553,100],[35681,100],[36811,100],[37957,100],[39122,100]],"reportHref":"runs/todo-app-scaffolded-pi-gpt-5.5-muy8ren3-r2/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,246,680,1043,1422,1826,2225,2590,2976,3368,3732,4110,4489,4857,5219,5723,6162,6551,6947,7358,7788,8198,8583,8971,9360,9765,10147,10542,10949,11352,11781,12209,12614,13018,13425,13836,14234,14653,15053,15444,15839,16235,16655,17067,17474,17898,18309,18711,19107,19517,19952,20382,20782,21196,21624,22056,22489,22912,23327,23748,24169,24579,24978,25380,25799,26223,26629,27024],"shot":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"firstChangeMs":5219,"correctMs":5219,"endMs":27291,"outcome":"landed","toolCalls":1,"rechecked":"The brief's check read only background-color, and this header is blue through a linear-gradient, so it reported NEVER LANDED. Re-checked after the run with the corrected check (gradient colour stops count) against the run's final code: it passes. The page changed once after the prompt and held that state to the end of the window, so the edit landed at its first visible change."},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,80,472,914,1310,1704,2120,2539,2963,3360,3777,4193,4608],"shot":[2,2,2,2,2,2,2,2,2,2,2,2,2],"firstChangeMs":4608,"correctMs":4608,"endMs":4608,"outcome":"landed","toolCalls":0,"rechecked":null}],"steps":[]},{"label":"cc-sonnet-5.5","adapter":"claude-code","auc":0.9449854166666667,"finalScore":1,"ttfnbrMs":26407,"ttfrrMs":26407,"runEndMs":41719,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ma3z-r1/frames/f00000.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ma3z-r1/frames/f00019.png","runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ma3z-r1/frames/f00044.png"],"t":[1296,4338,6424,7644,8817,10091,11457,12649,13826,15125,16302,17471,18564,19708,20820,21941,23037,24179,25286,26407,27576,28701,29806,30924,32036,33123,34204,35295,36401,37508,38614,39690,40799],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1296,0],[4338,0],[6424,0],[7644,0],[8817,0],[10091,0],[11457,0],[12649,0],[13826,0],[15125,0],[16302,0],[17471,0],[18564,0],[19708,0],[20820,0],[21941,0],[23037,0],[24179,0],[25286,0],[26407,100],[27576,100],[28701,100],[29806,100],[30924,100],[32036,100],[33123,100],[34204,100],[35295,100],[36401,100],[37508,100],[38614,100],[39690,100],[40799,100]],"reportHref":"runs/todo-app-scaffolded-cc-sonnet-5.5-muy8ma3z-r1/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,247,589,949,1291,1635,1984,2343],"shot":[1,1,1,1,1,1,1,1],"firstChangeMs":2343,"correctMs":2343,"endMs":2343,"outcome":"landed","toolCalls":0,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,94,435,761,1093,1466],"shot":[2,2,2,2,2,2],"firstChangeMs":1466,"correctMs":1466,"endMs":1466,"outcome":"landed","toolCalls":0,"rechecked":null}],"steps":[]},{"label":"cc-opus-5.5","adapter":"claude-code","auc":0.9440416666666667,"finalScore":1,"ttfnbrMs":26860,"ttfrrMs":26860,"runEndMs":53876,"endReason":"signal","srcs":["runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00000.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00023.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00034.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00066.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00071.png","runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/frames/f00091.png"],"t":[1273,2626,3769,4865,5941,7072,8175,9282,10375,11591,12679,13768,14849,15964,17050,18131,19219,20337,21430,22507,23580,24699,25781,26860,28016,29105,30187,31272,32359,33441,34527,35619,36701,37788,38866,40023,41108,42194,43284,44380,45465,46554,47652,48752,49829,50907,51992,53077],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1273,0],[2626,0],[3769,0],[4865,0],[5941,0],[7072,0],[8175,0],[9282,0],[10375,0],[11591,0],[12679,0],[13768,0],[14849,0],[15964,0],[17050,0],[18131,0],[19219,0],[20337,0],[21430,0],[22507,0],[23580,0],[24699,0],[25781,0],[26860,100],[28016,100],[29105,100],[30187,100],[31272,100],[32359,100],[33441,100],[34527,100],[35619,100],[36701,100],[37788,100],[38866,100],[40023,100],[41108,100],[42194,100],[43284,100],[44380,100],[45465,100],[46554,100],[47652,100],[48752,100],[49829,100],[50907,100],[51992,100],[53077,100]],"reportHref":"runs/todo-app-scaffolded-cc-opus-5.5-muy9cgui-r1/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,109,467,822,1203,1543,1895,2238,2596,2971,3355,3697,4062,4409,4789,5142,5506,5884],"shot":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3],"firstChangeMs":5884,"correctMs":5884,"endMs":5884,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,518,882,1237,1589,1937,2293,2646,2990,3366,3742,4110,4461,4809,5157,5529],"shot":[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,5],"firstChangeMs":5529,"correctMs":5529,"endMs":5529,"outcome":"landed","toolCalls":1,"rechecked":null}],"steps":[{"t":38866,"v":0,"note":"Nearly identical; only minor spacing/icon differences, no functional improvement","flip":false}]},{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.939875,"finalScore":1,"ttfnbrMs":28860,"ttfrrMs":28860,"runEndMs":43361,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/frames/f00000.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/frames/f00025.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/frames/f00052.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/frames/f00067.png"],"t":[1272,2591,3682,4788,5861,6999,8073,9150,10227,11341,12456,13536,14617,15736,16819,17897,18981,20099,21186,22260,23338,24456,25547,26641,27741,28860,29990,31081,32197,33277,34356,35441,36532,37630,38738,39831,40912,41992,43072],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1272,0],[2591,0],[3682,0],[4788,0],[5861,0],[6999,0],[8073,0],[9150,0],[10227,0],[11341,0],[12456,0],[13536,0],[14617,0],[15736,0],[16819,0],[17897,0],[18981,0],[20099,0],[21186,0],[22260,0],[23338,0],[24456,0],[25547,0],[26641,0],[27741,0],[28860,100],[29990,100],[31081,100],[32197,100],[33277,100],[34356,100],[35441,100],[36532,100],[37630,100],[38738,100],[39831,100],[40912,100],[41992,100],[43072,100]],"reportHref":"runs/todo-app-scaffolded-pi-sonnet-5.5-muy9azc6-r3/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,589,941,1294,1639,1990,2334,2690,3038,3395,3811,4171],"shot":[1,1,1,1,1,1,1,1,1,1,1,1],"firstChangeMs":4171,"correctMs":4171,"endMs":4171,"outcome":"landed","toolCalls":0,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,609,951,1310,1656,2026,2371,2722,3076],"shot":[2,2,2,2,2,2,2,2,3],"firstChangeMs":3076,"correctMs":3076,"endMs":3076,"outcome":"landed","toolCalls":2,"rechecked":null}],"steps":[]},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.87833125,"finalScore":1,"ttfnbrMs":58401,"ttfrrMs":58401,"runEndMs":128595,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/frames/f00000.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/frames/f00017.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/frames/f00052.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/frames/f00097.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/frames/f00170.png"],"t":[1255,2521,3606,4678,5755,6874,7948,9038,10114,11226,12310,13397,14478,15626,16719,17829,18937,20049,21173,22270,23359,24451,25596,26679,27761,28847,29957,31061,32149,33242,34372,35447,36519,37588,38725,39806,40882,41955,43091,44201,45276,46349,47456,48530,49606,50674,51809,52903,53981,55082,56223,57324,58401,59541,60636,61727,62836,63928,65041,66208,67301,68387,69473,70562,71677,72758,73848,74940,76034,77183,78268,79364,80463,81560,82652,83739,84843,85932,87012,88100,89187,90264,91379,92476,93577,94673,95760,96843,97939,99021,100102,101191,102277,103367,104478,105578,106705,107791,108932,110012,111091,112185,113283,114370,115459,116554,117659,118755,119871,120968,122067,123176,124282,125371,126467,127568],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1255,0],[2521,0],[3606,0],[4678,0],[5755,0],[6874,0],[7948,0],[9038,0],[10114,0],[11226,0],[12310,0],[13397,0],[14478,0],[15626,0],[16719,0],[17829,0],[18937,0],[20049,0],[21173,0],[22270,0],[23359,0],[24451,0],[25596,0],[26679,0],[27761,0],[28847,0],[29957,0],[31061,0],[32149,0],[33242,0],[34372,0],[35447,0],[36519,0],[37588,0],[38725,0],[39806,0],[40882,0],[41955,0],[43091,0],[44201,0],[45276,0],[46349,0],[47456,0],[48530,0],[49606,0],[50674,0],[51809,0],[52903,0],[53981,0],[55082,0],[56223,0],[57324,0],[58401,100],[59541,100],[60636,100],[61727,100],[62836,100],[63928,100],[65041,100],[66208,100],[67301,100],[68387,100],[69473,100],[70562,100],[71677,100],[72758,100],[73848,100],[74940,100],[76034,100],[77183,100],[78268,100],[79364,100],[80463,100],[81560,100],[82652,100],[83739,100],[84843,100],[85932,100],[87012,100],[88100,100],[89187,100],[90264,100],[91379,100],[92476,100],[93577,100],[94673,100],[95760,100],[96843,100],[97939,100],[99021,100],[100102,100],[101191,100],[102277,100],[103367,100],[104478,100],[105578,100],[106705,100],[107791,100],[108932,100],[110012,100],[111091,100],[112185,100],[113283,100],[114370,100],[115459,100],[116554,100],[117659,100],[118755,100],[119871,100],[120968,100],[122067,100],[123176,100],[124282,100],[125371,100],[126467,100],[127568,100]],"reportHref":"runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy93cbe-r3/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,83,467,871,1255,1610,1966,2347,2738,3090,3446,3791,4151,4507,4869,5231,5591,5958,6327,6711,7099,7465,7829,8187,8546,8900,9240,9587,9946,10307,10675,11023,11379,11727,12083,12441,12780,13119,13467,13819,14168,14515,14853,15198,15558,15906,16251,16602,16947,17319,17675,18023,18402,18751],"shot":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],"firstChangeMs":18751,"correctMs":18751,"endMs":18751,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,360,709,1053,1402,1750,2090,2462,2837,3206,3570,3941,4350,4741,5146,5526,5885,6254,6658,7029,7414,7778,8155,8524,8886],"shot":[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],"firstChangeMs":8886,"correctMs":8886,"endMs":8886,"outcome":"landed","toolCalls":0,"rechecked":null}],"steps":[{"t":107791,"v":1,"note":"After adds task counter badge and cleaner move-action labels with arrows","flip":false}]},{"label":"pi-sonnet-5.5","adapter":"pi","auc":0.8744145833333333,"finalScore":1,"ttfnbrMs":60281,"ttfrrMs":60281,"runEndMs":75215,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-sonnet-5.5-muy97ir4-r1/frames/f00000.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy97ir4-r1/frames/f00053.png","runs/todo-app-scaffolded-pi-sonnet-5.5-muy97ir4-r1/frames/f00080.png"],"t":[1414,2848,3978,5104,6205,7371,8502,9628,10743,11878,12961,14049,15138,16270,17358,18439,19545,20691,21772,22877,23960,25096,26195,27276,28356,29468,30614,31703,32788,33912,35006,36124,37202,38379,39490,40592,41670,42787,43866,44962,46048,47187,48267,49340,50420,51543,52630,53708,54809,55922,57001,58078,59177,60281,61474,62573,63713,64809,65903,67000,68102,69211,70331,71477,72577,73669,74767],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1414,0],[2848,0],[3978,0],[5104,0],[6205,0],[7371,0],[8502,0],[9628,0],[10743,0],[11878,0],[12961,0],[14049,0],[15138,0],[16270,0],[17358,0],[18439,0],[19545,0],[20691,0],[21772,0],[22877,0],[23960,0],[25096,0],[26195,0],[27276,0],[28356,0],[29468,0],[30614,0],[31703,0],[32788,0],[33912,0],[35006,0],[36124,0],[37202,0],[38379,0],[39490,0],[40592,0],[41670,0],[42787,0],[43866,0],[44962,0],[46048,0],[47187,0],[48267,0],[49340,0],[50420,0],[51543,0],[52630,0],[53708,0],[54809,0],[55922,0],[57001,0],[58078,0],[59177,0],[60281,100],[61474,100],[62573,100],[63713,100],[64809,100],[65903,100],[67000,100],[68102,100],[69211,100],[70331,100],[71477,100],[72577,100],[73669,100],[74767,100]],"reportHref":"runs/todo-app-scaffolded-pi-sonnet-5.5-muy97ir4-r1/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,404,766,1121,1509,1861,2210,2557,2910,3278,3642,3986,4333],"shot":[1,1,1,1,1,1,1,1,1,1,1,1,2],"firstChangeMs":4333,"correctMs":4333,"endMs":4333,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,155,523,874,1238,1590,1942,2287],"shot":[2,2,2,2,2,2,2,2],"firstChangeMs":2287,"correctMs":2287,"endMs":2287,"outcome":"landed","toolCalls":0,"rechecked":null}],"steps":[]},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.8595208333333333,"finalScore":1,"ttfnbrMs":67430,"ttfrrMs":67430,"runEndMs":100030,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00000.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00014.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00060.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00070.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00148.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/frames/f00215.png"],"t":[1308,2623,3708,4814,5893,7047,8128,9223,10317,11442,12529,13622,14711,15871,16956,18091,19169,20267,21337,22469,23551,24637,25729,26886,27971,29070,30171,31293,32402,33505,34582,35722,36808,37884,38980,40097,41185,42261,43339,44450,45537,46644,47738,48848,49927,50997,52068,53199,54278,55366,56454,57595,58669,59749,60831,61974,63054,64128,65207,66336,67430,68605,69698,70852,71955,73042,74145,75268,76362,77459,78566,79735,80826,81934,83025,84144,85248,86350,87466,88578,89680,90806,91885,92998,94086,95178,96288,97393,98500,99605],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1308,0],[2623,0],[3708,0],[4814,0],[5893,0],[7047,0],[8128,0],[9223,0],[10317,0],[11442,0],[12529,0],[13622,0],[14711,0],[15871,0],[16956,0],[18091,0],[19169,0],[20267,0],[21337,0],[22469,0],[23551,0],[24637,0],[25729,0],[26886,0],[27971,0],[29070,0],[30171,0],[31293,0],[32402,0],[33505,0],[34582,0],[35722,0],[36808,0],[37884,0],[38980,0],[40097,0],[41185,0],[42261,0],[43339,0],[44450,0],[45537,0],[46644,0],[47738,0],[48848,0],[49927,0],[50997,0],[52068,0],[53199,0],[54278,0],[55366,0],[56454,0],[57595,0],[58669,0],[59749,0],[60831,0],[61974,0],[63054,0],[64128,0],[65207,0],[66336,0],[67430,100],[68605,100],[69698,100],[70852,100],[71955,100],[73042,100],[74145,100],[75268,100],[76362,100],[77459,100],[78566,100],[79735,100],[80826,100],[81934,100],[83025,100],[84144,100],[85248,100],[86350,100],[87466,100],[88578,100],[89680,100],[90806,100],[91885,100],[92998,100],[94086,100],[95178,100],[96288,100],[97393,100],[98500,100],[99605,100]],"reportHref":"runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8zvoa-r2/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,454,830,1188,1571,1930,2278,2634,3001,3366,3726,4103,4462,4810,5161,5518,5889,6253,6615,6979,7337,7714,8069,8458,8817,9193,9557,9915,10269,10633,10990,11368,11738,12134,12522,12901,13293,13676,14026,14377,14737,15097,15472,15826,16182,16548,16917,17282,17628,17988,18345,18689,19046,19390,19745,20090,20445,20799],"shot":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],"firstChangeMs":20799,"correctMs":20799,"endMs":20799,"outcome":"landed","toolCalls":1,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,57,413,786,1142,1510,1873,2225,2571,2922,3270,3629,3994,4374,4715,5078,5442,5794,6170,6533,6888,7242,7589,7942,8337,8701,9077,9445,9821,10196,10562,10922,11274,11617,11981,12334,12688,13049,13423,13774,14141,14507,14858,15205,15585,15938,16288,16630,16988,17334,17717,18073,18442,18814,19213,19600,19993,20425,20959,21340],"shot":[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,5],"firstChangeMs":21340,"correctMs":21340,"endMs":21340,"outcome":"landed","toolCalls":7,"rechecked":null}],"steps":[{"t":78566,"v":-1,"note":"Before shows 'Sprint 14' subtitle badge and project description; after lacks subtitle text","flip":false}]},{"label":"pi-gemini-3.8-flash","adapter":"pi","auc":0.85430625,"finalScore":1,"ttfnbrMs":68785,"ttfrrMs":68785,"runEndMs":127244,"endReason":"signal","srcs":["runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00000.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00028.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00061.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00072.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00078.png","runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/frames/f00180.png"],"t":[1329,2657,3776,4861,5973,7171,8263,9349,10427,11547,12626,13721,14820,15956,17041,18130,19220,20359,21473,22555,23669,24833,25924,27001,28077,29217,30308,31384,32461,33582,34666,35758,36844,37982,39074,40182,41258,42372,43458,44566,45643,46774,47867,48980,50064,51177,52260,53368,54466,55572,56674,57766,58854,60003,61091,62174,63263,64396,65472,66553,67664,68785,69958,71072,72220,73337,74420,75524,76611,77701,78789,79891,80982,82146,83234,84321,85487,86609,87728,88882,89984,91066,92164,93327,94422,95527,96619,97725,98844,99945,101031,102124,103218,104324,105423,106514,107623,108738,109844,110947,112033,113124,114217,115319,116424,117523,118625,119714,120808,121915,123005,124119,125221,126329],"shot":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],"score":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100,100,0,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100],"cls":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,0,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],"curve":[[0,0],[1329,0],[2657,0],[3776,0],[4861,0],[5973,0],[7171,0],[8263,0],[9349,0],[10427,0],[11547,0],[12626,0],[13721,0],[14820,0],[15956,0],[17041,0],[18130,0],[19220,0],[20359,0],[21473,0],[22555,0],[23669,0],[24833,0],[25924,0],[27001,0],[28077,0],[29217,0],[30308,0],[31384,0],[32461,0],[33582,0],[34666,0],[35758,0],[36844,0],[37982,0],[39074,0],[40182,0],[41258,0],[42372,0],[43458,0],[44566,0],[45643,0],[46774,0],[47867,0],[48980,0],[50064,0],[51177,0],[52260,0],[53368,0],[54466,0],[55572,0],[56674,0],[57766,0],[58854,0],[60003,0],[61091,0],[62174,0],[63263,0],[64396,0],[65472,0],[66553,0],[67664,0],[68785,100],[69958,100],[71072,0],[72220,100],[73337,100],[74420,100],[75524,100],[76611,100],[77701,100],[78789,100],[79891,100],[80982,100],[82146,100],[83234,100],[84321,100],[85487,100],[86609,100],[87728,100],[88882,100],[89984,100],[91066,100],[92164,100],[93327,100],[94422,100],[95527,100],[96619,100],[97725,100],[98844,100],[99945,100],[101031,100],[102124,100],[103218,100],[104324,100],[105423,100],[106514,100],[107623,100],[108738,100],[109844,100],[110947,100],[112033,100],[113124,100],[114217,100],[115319,100],[116424,100],[117523,100],[118625,100],[119714,100],[120808,100],[121915,100],[123005,100],[124119,100],[125221,100],[126329,100]],"reportHref":"runs/todo-app-scaffolded-pi-gemini-3.8-flash-muy8v6cb-r1/report.html","videoHref":null,"condition":"prompted","edits":[{"id":"header-blue","prompt":"Make the header background blue.","t":[0,235,627,1001,1375,1747,2102,2478,2834,3187,3547,3923,4309,4690,5050,5401,5751,6135,6526,6893,7247,7598,7946,8311,8685,9055,9443,9824,10171,10518,10862,11221,11578,11950,12306,12659,13035,13419,13803,14166,14521,14882,15253,15602,15950,16302,16655,17027,17368,17722,18080,18430,18787,19129,19479,19827,20169,20555,20903,21275,21623,21971,22358,22711,23054,23402],"shot":[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,5],"firstChangeMs":23402,"correctMs":23402,"endMs":23402,"outcome":"landed","toolCalls":3,"rechecked":null},{"id":"add-column","prompt":"Add a fourth column called \"Blocked\" after Done.","t":[0,303,707,1062,1426,1774,2111,2467,2839,3186,3540,3894,4246,4614,4977,5327,5671,6018,6365,6744,7094,7458,7814,8157,8502,8855,9202,9562,9911,10259,10609,10951,11319,11666,12022,12367,12722,13071,13418,13770,14115,14462,14838,15186,15523,15863,16222,16578,16966,17314,17659,18003,18371,18714,19066,19454,19846,20202,20551,20898,21246,21593,21932,22286,22631,22978,23364,23714,24087,24450,24799,25151,25504,25866,26234,26618,26974,27374,27739,28107,28459,28822,29186,29551,29910,30308,30663,31021,31392,31763,32134,32479,32842,33205,33551,33920,34279,34646,35035,35415,35798,36158,36543,36899,37250,37623,37978,38359,38719,39081,39459,39815,40177,40550,40909,41286,41652,42036,42389,42750,43103,43451,43810,44179,44538,44889,45242,45602,45963,46322,46666,47022,47364,47709,48050,48398,48727,49074,49434],"shot":[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5],"firstChangeMs":49434,"correctMs":49434,"endMs":49434,"outcome":"landed","toolCalls":5,"rechecked":null}],"steps":[{"t":80982,"v":-1,"note":"Before includes 'SPRINT 14' badge and task count subtitle detail","flip":false},{"t":87728,"v":0,"note":"Both screenshots appear identical in content, layout, and design.","flip":false}]}]</script>
+<script>
+(() => {
+  const tracks = JSON.parse(document.getElementById('tracks').textContent);
+  // The replay's clock runs to the end of the shown window, not the horizon:
+  // past it, no frame changes.
+  const HZ = 150000;
+  const CLASS = ['no server', 'error', 'blank', 'rendering'];
+  const players = [...document.querySelectorAll('.player')].map((el, i) => ({
+    el,
+    tr: tracks[i],
+    img: el.querySelector('img'),
+    badge: el.querySelector('.badge'),
+    score: el.querySelector('.pscore'),
+    play: el.querySelector('.splay'),
+    note: el.querySelector('.pnote'),
+    cursor: -1,
+    ended: false,
+    step: -1,
+  }));
+  const STEP_LABEL = { 1: '▲ better than before', 0: '● about the same as before', [-1]: '▼ worse than before' };
+
+  // Draw each panel's own curve once, in the sparkline's own coordinate space.
+  for (const p of players) {
+    const path = p.el.querySelector('.sline');
+    const pts = p.tr.curve;
+    let prev = pts.length ? pts[0][1] : 0;
+    let d = 'M 0 ' + (44 - prev * 0.42);
+    for (let k = 1; k < pts.length; k++) {
+      const px = Math.min(1, pts[k][0] / HZ) * 300;
+      d += ' L ' + px + ' ' + (44 - prev * 0.42) + ' L ' + px + ' ' + (44 - pts[k][1] * 0.42);
+      prev = pts[k][1];
+    }
+    d += ' L 300 ' + (44 - prev * 0.42);
+    path.setAttribute('d', d);
+  }
+
+  // Warm the cache in the background. Playback works without this; it just
+  // stutters on the first pass, which reads as the run being jerky when it was
+  // not. Progress is shown rather than blocking the controls.
+  const all = tracks.flatMap((t) => t.srcs);
+  let loaded = 0;
+  const bufferEl = document.getElementById('buffer');
+  const showBuffer = () => {
+    bufferEl.textContent = loaded >= all.length ? '' : 'buffering ' + Math.round((loaded / all.length) * 100) + '%';
+  };
+  showBuffer();
+  for (const src of all) {
+    const im = new Image();
+    im.onload = im.onerror = () => { loaded++; showBuffer(); };
+    im.src = src;
+  }
+
+  const chartPlay = document.getElementById('chartplay');
+  const CH = { l: 44, pw: 740 };
+  const scrub = document.getElementById('scrub');
+  const tnow = document.getElementById('tnow');
+  const btn = document.getElementById('playpause');
+  const mmss = (ms) => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  };
+
+  /** Last frame at or before t. Frames are in time order, so this walks. */
+  function seek(p, t) {
+    const times = p.tr.t;
+    let i = p.cursor;
+    if (i < 0 || times[i] > t) i = -1;
+    while (i + 1 < times.length && times[i + 1] <= t) i++;
+    return i;
+  }
+
+  let clock = 0, playing = false, speed = 10, last = 0;
+
+  function render() {
+    for (const p of players) {
+      const i = seek(p, clock);
+      // A run's last frame stays current long after the run stops, so the
+      // badge has to change on crossing runEndMs even when the frame does not.
+      const ended = clock > p.tr.runEndMs;
+      // The latest judged change at or before now, so its verdict reads as the
+      // replay passes it rather than all at once from the start.
+      let step = -1;
+      if (p.tr.steps) while (step + 1 < p.tr.steps.length && p.tr.steps[step + 1].t <= clock) step++;
+      if (p.note && step !== p.step) {
+        p.step = step;
+        const st = step >= 0 ? p.tr.steps[step] : null;
+        p.note.textContent = st ? STEP_LABEL[st.v] + ': ' + st.note : '';
+        p.note.className = 'pnote' + (st ? ' m' + st.v : '');
+      }
+      if (i === p.cursor && ended === p.ended) continue;
+      p.cursor = i;
+      p.ended = ended;
+      if (i < 0) {
+        p.img.dataset.empty = '1';
+        p.badge.textContent = 'not started';
+        p.score.textContent = '--';
+      } else {
+        const s = p.tr.shot[i];
+        if (s >= 0) { p.img.dataset.empty = '0'; p.img.src = p.tr.srcs[s]; }
+        else p.img.dataset.empty = '1';
+        p.badge.textContent = CLASS[p.tr.cls[i]] + (ended ? ' · run ended' : '');
+        p.score.textContent = (p.tr.score[i] / 100).toFixed(2);
+      }
+    }
+    for (const p of players) p.play.setAttribute('transform', 'translate(' + Math.min(1, clock / HZ) * 300 + ',0)');
+    const px = CH.l + Math.min(1, clock / HZ) * CH.pw;
+    chartPlay.setAttribute('x1', px); chartPlay.setAttribute('x2', px);
+    tnow.textContent = mmss(clock) + ' / ' + mmss(HZ);
+    scrub.value = String(Math.round(clock));
+  }
+
+  function frame(now) {
+    if (!playing) return;
+    const dt = last ? now - last : 0;
+    last = now;
+    clock = Math.min(HZ, clock + dt * speed);
+    render();
+    if (clock >= HZ) { setPlaying(false); return; }
+    requestAnimationFrame(frame);
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    btn.textContent = on ? '❚❚ Pause' : '▶ Play';
+    if (on) {
+      if (clock >= HZ) clock = 0;
+      last = 0;
+      requestAnimationFrame(frame);
+    }
+  }
+
+  btn.addEventListener('click', () => setPlaying(!playing));
+  scrub.addEventListener('input', () => { clock = Number(scrub.value); render(); });
+  for (const b of document.querySelectorAll('[data-speed]')) {
+    b.addEventListener('click', () => {
+      speed = Number(b.dataset.speed);
+      for (const o of document.querySelectorAll('[data-speed]')) o.setAttribute('aria-pressed', String(o === b));
+    });
+  }
+  addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+    if (e.key === 'ArrowRight') { clock = Math.min(HZ, clock + 1000); render(); }
+    if (e.key === 'ArrowLeft') { clock = Math.max(0, clock - 1000); render(); }
+  });
+
+  render();
+
+  // ---- follow-up edits: one clock per edit, starting at its prompt ----
+  const EDIT_PROMPTS = {"header-blue":"Make the header background blue.","add-column":"Add a fourth column called \"Blocked\" after Done."};
+  const eplayers = [...document.querySelectorAll('.eplayer')].map((el, i) => ({
+    tr: tracks[i],
+    img: el.querySelector('img'),
+    badge: el.querySelector('.badge'),
+    result: el.querySelector('.eresult'),
+    work: el.querySelector('.ework'),
+  }));
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  if (eplayers.length && tabs.length) {
+    const ebtn = document.getElementById('eplaypause');
+    const escrub = document.getElementById('escrub');
+    const etnow = document.getElementById('etnow');
+    let editId = tabs[0].dataset.edit, eclock = 0, eend = 0, eplaying = false, espeed = 1, elast = 0;
+    const editOf = (p) => p.tr.edits.find((e) => e.id === editId);
+    const s1 = (ms) => (ms / 1000).toFixed(1) + 's';
+
+    function erender() {
+      for (const p of eplayers) {
+        const e = editOf(p);
+        if (!e) { p.img.dataset.empty = '1'; p.badge.textContent = 'not measured'; p.badge.dataset.state = ''; continue; }
+        let i = -1;
+        while (i + 1 < e.t.length && e.t[i + 1] <= eclock) i++;
+        const s = i < 0 ? -1 : e.shot[i];
+        if (s >= 0) { p.img.dataset.empty = '0'; if (p.img.getAttribute('src') !== p.tr.srcs[s]) p.img.src = p.tr.srcs[s]; }
+        else p.img.dataset.empty = '1';
+        const state =
+          e.outcome === 'void' ? 'void'
+          : e.correctMs !== null && eclock >= e.correctMs ? 'landed'
+          : eclock >= e.endMs ? 'never'
+          : e.firstChangeMs !== null && eclock >= e.firstChangeMs ? 'changing'
+          : 'waiting';
+        p.badge.dataset.state = state;
+        p.badge.textContent = {
+          void: 'void · already true before the prompt',
+          landed: 'landed ✓',
+          never: 'never landed',
+          changing: 'changing…',
+          waiting: 'waiting for a change',
+        }[state];
+      }
+      etnow.textContent = s1(eclock) + ' / ' + s1(eend);
+      escrub.value = String(Math.round(eclock));
+    }
+
+    function selectEdit(id) {
+      editId = id;
+      for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.edit === id));
+      document.getElementById('eprompt').textContent = EDIT_PROMPTS[id] || '';
+      // An edit's window closes the moment it lands, so without a tail the
+      // clock -- and the scrubber, which snaps to its step -- can stop just
+      // short of the last landing and never show it.
+      eend = Math.ceil((Math.max(0, ...eplayers.map((p) => (editOf(p) || { endMs: 0 }).endMs)) + 2000) / 1000) * 1000;
+      escrub.max = String(eend);
+      for (const p of eplayers) {
+        const e = editOf(p);
+        p.result.textContent = !e ? '--' : e.outcome === 'void' ? 'void' : e.outcome === 'never' ? 'never landed' : s1(e.correctMs);
+        p.work.textContent = !e || e.outcome !== 'landed' ? ''
+          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'))
+            + (e.rechecked ? ' · re-checked' : '');
+        p.work.title = e && e.rechecked ? e.rechecked : '';
+      }
+      eclock = 0;
+      setEPlaying(false);
+      erender();
+    }
+
+    function eframe(now) {
+      if (!eplaying) return;
+      const dt = elast ? now - elast : 0;
+      elast = now;
+      eclock = Math.min(eend, eclock + dt * espeed);
+      erender();
+      if (eclock >= eend) { setEPlaying(false); return; }
+      requestAnimationFrame(eframe);
+    }
+    function setEPlaying(on) {
+      eplaying = on;
+      ebtn.textContent = on ? '❚❚ Pause' : '▶ Play';
+      if (on) { if (eclock >= eend) eclock = 0; elast = 0; requestAnimationFrame(eframe); }
+    }
+
+    ebtn.addEventListener('click', () => setEPlaying(!eplaying));
+    escrub.addEventListener('input', () => { eclock = Number(escrub.value); erender(); });
+    for (const t of tabs) t.addEventListener('click', () => selectEdit(t.dataset.edit));
+    for (const b of document.querySelectorAll('[data-espeed]')) {
+      b.addEventListener('click', () => {
+        espeed = Number(b.dataset.espeed);
+        for (const o of document.querySelectorAll('[data-espeed]')) o.setAttribute('aria-pressed', String(o === b));
+      });
+    }
+    selectEdit(editId);
+  }
+})();
+</script>
+</body></html>

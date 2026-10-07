@@ -211,6 +211,8 @@ export interface TrackEdit {
   outcome: 'landed' | 'never' | 'void';
   /** Null when the adapter's stream cannot show tool calls, which is not zero. */
   toolCalls: number | null;
+  /** Corrected after the run because the brief's check was wrong; says how. */
+  rechecked: string | null;
 }
 
 /**
@@ -314,6 +316,7 @@ function buildEdits(r: RunResult, shotOf: (path: string | null) => number): Trac
       endMs: close - sent,
       outcome: it.baselineAlreadyPassing || it.baselineUnstable ? 'void' : it.ok ? 'landed' : 'never',
       toolCalls: it.work?.toolCalls ?? null,
+      rechecked: it.rechecked ?? null,
     };
   });
 }
@@ -907,7 +910,9 @@ above are separate on purpose and must not be read as one table.</p>
         const e = editOf(p);
         p.result.textContent = !e ? '--' : e.outcome === 'void' ? 'void' : e.outcome === 'never' ? 'never landed' : s1(e.correctMs);
         p.work.textContent = !e || e.outcome !== 'landed' ? ''
-          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'));
+          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'))
+            + (e.rechecked ? ' · re-checked' : '');
+        p.work.title = e && e.rechecked ? e.rechecked : '';
       }
       eclock = 0;
       setEPlaying(false);

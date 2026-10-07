@@ -1,0 +1,15 @@
+body{margin:0;background:#f5f7fb;color:#1f2937;font-family:system-ui,sans-serif}
+.app{max-width:1100px;margin:0 auto;padding:32px 24px}
+header{background:#2563eb;color:#fff;padding:18px 24px;border-radius:12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
+h1{margin:0;font-size:28px}
+.sub{color:#dbeafe;margin:2px 0 0}
+.add{background:#fff;color:#2563eb;font-weight:600;border:0;border-radius:8px;padding:10px 16px;font-size:14px;cursor:pointer}
+.add:hover{background:#eff6ff}
+.board{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.col{background:#e9edf5;border-radius:12px;padding:14px;min-height:300px}
+.col h2{font-size:14px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.05em;color:#4b5563}
+.card{background:#fff;border-radius:8px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.title{font-weight:600;margin-bottom:8px}
+.meta{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#6b7280}
+.badge{padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600}
+.High{background:#fee2e2;color:#b91c1c}.Medium{background:#fef3c7;color:#b45309}.Low{background:#dcfce7;color:#15803d}

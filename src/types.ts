@@ -410,6 +410,13 @@ export interface IterationResult {
    */
   refreshedAtMs?: number | null;
   /**
+   * Set when this result was corrected after the run because the brief's check
+   * was wrong, saying how. Only ever for a check that missed an edit visibly on
+   * screen, and only when the page changed once and then held that state to the
+   * end of the window, so the landing time is the first visible change.
+   */
+  rechecked?: string;
+  /**
    * What the agent actually did for this edit.
    *
    * Time to correct change is wall clock, and wall clock says nothing about

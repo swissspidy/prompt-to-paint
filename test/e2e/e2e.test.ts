@@ -1106,6 +1106,37 @@ test('a scaffolded brief starts blank on a running dev server, and every save ho
   }
 });
 
+test('the bundled checks see a gradient header and a column name with a count glued on', { skip: needsBrowser, timeout: 60_000 }, async () => {
+  // Both from real runs on todo-app-scaffolded, each reported NEVER LANDED with
+  // the edit on screen. GPT-5.5 painted the header with linear-gradient, which
+  // leaves background-color transparent; a Sonnet run rendered
+  // <h2>Blocked<span>0</span></h2>, whose innerText "BLOCKED0" has no word
+  // boundary after the d.
+  const { chromium } = await import('playwright');
+  const brief = await loadBrief('briefs/todo-app-scaffolded.json');
+  const check = (id: string): string => brief.iterations!.find((i) => i.id === id)!.check;
+  const browser = await chromium.launch({ executablePath: findChromium(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const passes = async (html: string, id: string): Promise<boolean> => {
+      await page.setContent(html);
+      return page.evaluate(`Boolean(${check(id)})`) as Promise<boolean>;
+    };
+    const header = (style: string): string =>
+      `<body style="margin:0"><header style="height:80px;${style}"><h1>Orbit</h1></header></body>`;
+    assert.equal(await passes(header('background:linear-gradient(135deg,#2563eb,#1d4ed8)'), 'header-blue'), true);
+    assert.equal(await passes(header('background:#2563eb'), 'header-blue'), true);
+    assert.equal(await passes(header('background:linear-gradient(135deg,#f8fafc,#eef2f7)'), 'header-blue'), false,
+      'a grey gradient is not a blue header');
+
+    const col = (name: string): string => `<h2 style="text-transform:uppercase">${name}<span>0</span></h2>`;
+    assert.equal(await passes(col('Blocked'), 'add-column'), true);
+    assert.equal(await passes(col('Unblocked'), 'add-column'), false, 'still a word, not a substring');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('bundled briefs resolve from the package, not the working directory', async () => {
   // An installed CLI is run from somewhere else entirely.
   const elsewhere = await tmp('p2p-cwd-');

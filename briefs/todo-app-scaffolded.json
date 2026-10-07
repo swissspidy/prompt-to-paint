@@ -105,14 +105,14 @@
     {
       "id": "header-blue",
       "prompt": "Make the header background blue.",
-      "description": "The canonical small visual edit.",
-      "check": "(() => { for (const el of document.querySelectorAll('header,nav,div,section')) { const r = el.getBoundingClientRect(); if (r.width < 400 || r.height < 40 || r.height > 320 || r.top > 260) continue; const m = getComputedStyle(el).backgroundColor.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } return false; })()"
+      "description": "The canonical small visual edit. Reads gradient colour stops as well as background-color: a header painted with linear-gradient has a transparent background-color, and a check that read only that reported a visibly blue header as NEVER LANDED.",
+      "check": "(() => { for (const el of document.querySelectorAll('header,nav,div,section')) { const r = el.getBoundingClientRect(); if (r.width < 400 || r.height < 40 || r.height > 320 || r.top > 260) continue; const cs = getComputedStyle(el); const colours = [cs.backgroundColor, ...(cs.backgroundImage.match(/rgba?\\([^)]*\\)/g) || [])]; for (const c of colours) { const m = c.match(/[\\d.]+/g); if (!m) continue; const [red,g,b,a] = m.map(Number); if ((a === undefined || a > 0.5) && b > 90 && b > red + 25 && b > g + 15) return true; } } return false; })()"
     },
     {
       "id": "add-column",
       "prompt": "Add a fourth column called \"Blocked\" after Done.",
-      "description": "A structural edit, not just a style token. Matched case-insensitively because innerText is the text as rendered: a column header styled text-transform: uppercase reads BLOCKED, and a case-sensitive check called a visibly landed edit NEVER LANDED.",
-      "check": "/\\bblocked\\b/i.test(document.body.innerText)"
+      "description": "A structural edit, not just a style token. Matched case-insensitively because innerText is the text as rendered: a column header styled text-transform: uppercase reads BLOCKED, and a case-sensitive check called a visibly landed edit NEVER LANDED. Not \\\\b: a header rendered as <h2>Blocked<span>0</span></h2> reads \"BLOCKED0\" in innerText, and there is no word boundary between a letter and a digit.",
+      "check": "/(^|[^a-z])blocked([^a-z]|$)/i.test(document.body.innerText)"
     }
   ]
 }
