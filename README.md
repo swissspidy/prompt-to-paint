@@ -824,6 +824,75 @@ Two practical consequences:
   agent aces measures nothing except how fast they ace it, which is a good
   reason to write harder ones before running a leaderboard on it.
 
+### Three vendors, one dense brief
+
+**[Replay every run side by side →](https://swissspidy.github.io/prompt-to-paint/2026-10-07-ops-dashboard/)**
+
+Every run above was a Claude model in Claude Code. Fifteen more, on
+[`ops-dashboard`](#write-briefs-that-are-not-saturated): five agent/model pairs
+across three vendors, three repeats each, all told to render early, all judged
+by `anthropic:claude-sonnet-5`. Two agents drive the models — Claude Code, and
+[Pi](#which-agents-this-works-with), which runs any provider's model — so the
+same model can be measured in two harnesses.
+
+| agent / model | first render, median [range] | AUC median | edit landed: heading blue / add a row |
+|---|---|---|---|
+| Claude Code / `claude-sonnet-5-5` | **18.9s** [18.0 – 20.0] | 0.955 | 2.3s / 2.4s |
+| Pi / `claude-sonnet-5-5` | 23.3s [16.1 – 29.6] | 0.945 | 3.0s / 3.0s |
+| Pi / `gpt-5.5` | 30.9s [30.0 – 35.7] | 0.926 | 2.8s / 2.6s |
+| Claude Code / `claude-opus-5-5` | 34.7s [33.4 – 36.1] | 0.917 | 3.1s / 3.0s |
+| Pi / `gemini-3.8-flash` | 38.6s [38.2 – 45.1] | 0.908 | 6.6s / 15.0s |
+
+These agents could edit files and nothing else: Claude Code in `acceptEdits`
+mode, Pi with `--tools read,write,edit`. No shell, so no toolchain, and over 99%
+of every wall clock was the model. The stored runs, their reports and the page
+each agent actually built are in
+[`site/2026-10-07-ops-dashboard/`](site/2026-10-07-ops-dashboard/).
+
+What they showed:
+
+- **Fifteen of fifteen curves were steps.** `p2p trajectory`: AUC equals
+  `finalScore x (1 - ttfr/horizon)` on every run, with a residual of zero. Over
+  the 42 runs this README now records, **one** has rendered progressively. With
+  other vendors in the table, that stops looking like a Claude habit.
+- **Every run scored 1.00, so the ranking is first render and nothing else.**
+  The ranges sort into three tiers that do not overlap: Sonnet 5.5 in either
+  harness, then GPT-5.5 and Opus 5.5, then Gemini 3.8 Flash. Within a tier the
+  ranges overlap, so the order inside one is unresolved.
+- **The harness moves the number, not only the model.** The same Sonnet 5.5 had
+  a 2.0s spread across repeats in Claude Code and 13.5s in Pi.
+- **Bigger was slower, for the same score.** Opus 5.5 took nearly twice as long
+  as Sonnet 5.5 to an identical 1.00.
+- **The edit loop is fast for almost everyone.** Follow-up edits landed in 2–3s
+  with a single tool call, an order of magnitude faster than cold start. Gemini
+  was the exception, at up to 19s and four tool calls.
+- **A void edit showed up on a live run.** One GPT-5.5 run had already made the
+  heading blue during cold start, so "make the heading blue" was reported as
+  unmeasurable rather than as a 0s success.
+
+**The judges agree, and the one dissent was a misread.** Re-scoring all fifteen
+runs with `openai:gpt-5.5` and `google:gemini-3.8-flash` reproduced the
+original AUC exactly in 29 of 30 re-scorings. The odd one out: GPT-5.5 docked a Gemini page's
+cost tile for showing "−$0.60" where the brief asks for "+$0.60". The page shows
+**+$0.60**, styled red because a rising cost is bad news; the judge read the
+colour as the sign. Judges disagree at the margin — here, in one re-scoring in
+thirty — which is why runs scored by different judges never share a table.
+
+**The scores cannot see work that a person would.** Gemini rendered a finished
+dashboard at about 40s in all three runs, then kept working and replaced it one
+to three more times. In the run checked frame by frame, it swapped a styled
+layout with a status badge, trend arrows and side-by-side panels for a plainer
+one. Every judge scored every version 1.00, so the curve is a flat line over
+seventy seconds of visible change. Part of "every curve is a step" is the
+agents. Part is a rubric that saturates: once each criterion is met, it cannot
+tell a better page from a worse one.
+
+**What these runs do not cover:** a stack with a build step. That needs an
+agent with a shell. The control alone is in: `p2p floor --template vite-react`
+first paints at **18.0s on a cold npm cache and 7.4s on a warm one** on the
+same machine. That is already as long as the fastest agent above took to write
+the whole dashboard.
+
 ## Writing a brief
 
 ```jsonc

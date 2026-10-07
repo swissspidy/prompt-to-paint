@@ -1,0 +1,54 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Two deployments racing each other could publish an older site/ last. Queue
+# them instead, and never cancel one halfway through publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Denied by default, as in ci.yml: each job names exactly what it needs.
+permissions: {}
+
+jobs:
+  build:
+    name: package site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      # site/ is published as committed: the leaderboards in it are generated
+      # by `p2p leaderboard` from the runs stored beside them, and there is no
+      # build step that could make the page and its screenshots disagree.
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write # publish the uploaded artifact to GitHub Pages
+      id-token: write # prove to Pages that this run is the one deploying
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
