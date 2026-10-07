@@ -591,7 +591,6 @@ same edit at the same moment however long each agent took over the first build.<
   .mark { position:absolute; transform:translateX(-50%); font-size:11px; line-height:14px; cursor:help; }
   .m1 { color:#1f8a4c; } .m0 { color:var(--text-muted); } .m-1 { color:#c0392b; }
   .pnote { margin:4px 0 0; font-size:12px; color:var(--text-secondary); min-height:1.4em; }
-  .etransport { position:static; box-shadow:none; background:var(--surface-0); }
   .eplayer { padding:12px; margin:0; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
   .tabs button { font:inherit; font-size:13px; font-weight:600; cursor:pointer; color:var(--text-secondary);
@@ -610,6 +609,11 @@ same edit at the same moment however long each agent took over the first build.<
     zoomed ? ` · showing the first ${viewMs / 1000}s, by when every run had ended` : ''
   }</p>
 
+<!-- Each replay's controls stick to the top only while that replay is on
+     screen: a sticky element is bounded by its parent, so the cold-start bar
+     lets go where the edits begin and the edits bar takes over, rather than
+     two bars stacking on top of the page. -->
+<div class="sticky-scope">
 <div class="transport">
   <button id="playpause" aria-label="Play or pause">▶ Play</button>
   <span class="t" id="tnow">00:00 / 00:00</span>
@@ -622,7 +626,6 @@ same edit at the same moment however long each agent took over the first build.<
 </div>
 
 <div class="grid-players">${panels}</div>
-${editsSection}
 
 <section class="panel" style="margin-top:18px"><h2>Correctness over time</h2>
 <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Correctness over time for ${runs.length} runs">
@@ -636,6 +639,8 @@ ${editsSection}
 holds its last value from there to the ${horizonMs / 1000}s horizon, and the AUC is integrated over all of it.</p>`
       : ''
   }</section>
+</div>
+${editsSection}
 
 <section class="panel"><h2>Ranking</h2>
 <table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
