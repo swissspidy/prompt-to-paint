@@ -172,6 +172,36 @@ export interface LeaderboardTrack {
   reportHref: string | null;
   videoHref: string | null;
   condition: Condition;
+  /** Follow-up edits, each on a clock that starts when its prompt was sent. */
+  edits: TrackEdit[];
+}
+
+/**
+ * One follow-up edit, ready to replay.
+ *
+ * Its times are measured from the moment the prompt was sent, not from t0. Two
+ * agents finish the cold start tens of seconds apart, so replaying edits on the
+ * run's own clock would show one agent's edit beside the other's idle page;
+ * lined up on the prompt, the panels show the same edit at the same moment.
+ */
+export interface TrackEdit {
+  id: string;
+  prompt: string;
+  /** Frame times, ms since the prompt; the first is the page the prompt was sent against. */
+  t: number[];
+  /** Index into the track's `srcs` per frame; -1 when that frame has no screenshot. */
+  shot: number[];
+  firstChangeMs: number | null;
+  correctMs: number | null;
+  /** When this edit's observation window closed, ms since the prompt. */
+  endMs: number;
+  /**
+   * `void` when the check already passed before the prompt, so the edit could
+   * not be measured -- shown as such rather than as a 0s success.
+   */
+  outcome: 'landed' | 'never' | 'void';
+  /** Null when the adapter's stream cannot show tool calls, which is not zero. */
+  toolCalls: number | null;
 }
 
 /**
@@ -190,22 +220,23 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
   const shot: number[] = [];
   const score: number[] = [];
   const cls: number[] = [];
+  const shotOf = (path: string | null): number => {
+    if (!path) return -1;
+    const rel = relative(pageDir, path).split(/[\\/]/).join('/');
+    let idx = byPath.get(rel) ?? -1;
+    if (idx < 0) {
+      idx = srcs.push(rel) - 1;
+      byPath.set(rel, idx);
+    }
+    return idx;
+  };
 
   // Cold-start only: the scrubber is a side-by-side replay of the measured
   // window, so an extra tail of iteration frames would desynchronise two runs
-  // that are otherwise directly comparable.
+  // that are otherwise directly comparable. Edits get their own replay below.
   for (const f of [...coldFrames(r)].sort((a, b) => a.tMs - b.tMs)) {
-    let idx = -1;
-    if (f.screenshotPath) {
-      const rel = relative(pageDir, f.screenshotPath).split(/[\\/]/).join('/');
-      idx = byPath.get(rel) ?? -1;
-      if (idx < 0) {
-        idx = srcs.push(rel) - 1;
-        byPath.set(rel, idx);
-      }
-    }
     t.push(f.tMs);
-    shot.push(idx);
+    shot.push(shotOf(f.screenshotPath));
     score.push(Math.round(f.score * 100));
     cls.push(CLASS_CODE[f.class]);
   }
@@ -235,7 +266,57 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
     reportHref: rel(join(runDir, 'report.html')),
     videoHref: rel(r.artifacts?.videoPath),
     condition: conditionOf(r),
+    edits: buildEdits(r, shotOf),
   };
+}
+
+/**
+ * Cut each follow-up edit's frames out of the run, re-timed from its prompt.
+ *
+ * Iteration frames are not tagged with the edit they belong to, so an edit owns
+ * the frames between its prompt and the close of its window. The frame current
+ * when the prompt went out leads, at 0s: it is what the agent was asked to
+ * change, and without it the replay would open on a blank panel.
+ */
+function buildEdits(r: RunResult, shotOf: (path: string | null) => number): TrackEdit[] {
+  const frames = [...r.frames].sort((a, b) => a.tMs - b.tMs);
+  const its = r.iterations ?? [];
+  return its.map((it, k) => {
+    const sent = it.promptSentMs;
+    const close = it.endedMs ?? its[k + 1]?.promptSentMs ?? frames.at(-1)?.tMs ?? sent;
+    const before = frames.filter((f) => f.tMs <= sent).at(-1);
+    const during = frames.filter((f) => f.phase === 'iteration' && f.tMs > sent && f.tMs <= close);
+    const picked = before ? [{ ...before, tMs: sent }, ...during] : during;
+    return {
+      id: it.id,
+      prompt: it.prompt,
+      t: picked.map((f) => f.tMs - sent),
+      shot: picked.map((f) => shotOf(f.screenshotPath)),
+      firstChangeMs: it.timeToFirstChangeMs,
+      correctMs: it.timeToCorrectChangeMs,
+      endMs: close - sent,
+      outcome: it.baselineAlreadyPassing || it.baselineUnstable ? 'void' : it.ok ? 'landed' : 'never',
+      toolCalls: it.work?.toolCalls ?? null,
+    };
+  });
+}
+
+/**
+ * How much of the horizon the replay shows by default: until every run has
+ * ended, with a little room after, on a round number.
+ *
+ * Runs that finish in forty seconds on a seven-minute horizon otherwise play
+ * as a few seconds of action and minutes of nothing, with every difference
+ * between them squeezed into the leftmost tenth of the chart. Nothing after the
+ * last run ended can change on screen -- each curve holds its last value -- so
+ * cropping there hides nothing. The AUC is still integrated to the horizon.
+ */
+export function activeWindowMs(runEndsMs: number[], horizonMs: number): number {
+  const last = Math.max(0, ...runEndsMs);
+  if (last <= 0) return horizonMs;
+  const padded = last * 1.1;
+  const step = padded <= 60_000 ? 5_000 : padded <= 300_000 ? 10_000 : 30_000;
+  return Math.min(horizonMs, Math.ceil(padded / step) * step);
 }
 
 /**
@@ -249,7 +330,7 @@ export function buildTrack(r: RunResult, pageDir: string, runDir: string): Leade
 export function renderLeaderboard(
   runs: RunResult[],
   outPath: string,
-  opts: { title?: string; runDirs?: string[] } = {},
+  opts: { title?: string; runDirs?: string[]; fullHorizon?: boolean } = {},
 ): string {
   assertComparable(runs, { allowMixedConditions: true });
   const pageDir = dirname(outPath);
@@ -262,6 +343,8 @@ export function renderLeaderboard(
   const effects = promptEffects(runs);
   const mixed = new Set(rows.map((row) => row.condition)).size > 1;
   const tracks = rows.map((row) => buildTrack(runs[row.index]!, pageDir, opts.runDirs?.[row.index] ?? pageDir));
+  const viewMs = opts.fullHorizon ? horizonMs : activeWindowMs(tracks.map((tr) => tr.runEndMs), horizonMs);
+  const zoomed = viewMs < horizonMs;
 
   const totalShots = tracks.reduce((n, t) => n + t.srcs.length, 0);
   const vars = (list: string[]): string => list.map((c, i) => `--series-${i + 1}: ${c};`).join(' ');
@@ -270,7 +353,7 @@ export function renderLeaderboard(
   // --- the overlaid curves, drawn server-side so the page needs no chart lib --
   const W = 900, H = 260, M = { l: 44, r: 116, t: 14, b: 30 };
   const PW = W - M.l - M.r, PH = H - M.t - M.b;
-  const x = (ms: number): number => M.l + (Math.min(ms, horizonMs) / Math.max(1, horizonMs)) * PW;
+  const x = (ms: number): number => M.l + (Math.min(ms, viewMs) / Math.max(1, viewMs)) * PW;
   const y = (s: number): number => M.t + (1 - s) * PH;
   const paths = tracks.map((tr, i) => {
     let prev = tr.curve[0]?.[1] ?? 0;
@@ -290,7 +373,7 @@ export function renderLeaderboard(
     )
     .join('');
   const gridX = Array.from({ length: 7 }, (_, i) => {
-    const ms = (horizonMs / 6) * i;
+    const ms = (viewMs / 6) * i;
     return `<text class="tick" x="${x(ms)}" y="${H - 8}" text-anchor="middle">${Math.round(ms / 1000)}s</text>`;
   }).join('');
 
@@ -338,6 +421,50 @@ export function renderLeaderboard(
     </figure>`,
     )
     .join('');
+
+  // Edits in the order the brief sends them; a run that skipped one shows a
+  // panel saying so rather than shifting every other panel along.
+  const editIds: string[] = [];
+  const editPrompts: Record<string, string> = {};
+  for (const tr of tracks) {
+    for (const e of tr.edits) {
+      if (!editIds.includes(e.id)) editIds.push(e.id);
+      editPrompts[e.id] ??= e.prompt;
+    }
+  }
+  const editPanels = tracks
+    .map(
+      (tr, i) => `<figure class="panel eplayer" data-i="${i}">
+      <figcaption class="phead">
+        <span class="rank">${i + 1}</span>
+        <span class="plabel" style="color:var(--series-${slot(i)})">${esc(tr.label)}</span>
+      </figcaption>
+      <div class="screen"><img alt="${esc(tr.label)} during the edit" decoding="async"/>
+        <span class="badge"></span></div>
+      <div class="pfoot"><span class="pscore eresult">--</span><span class="pmeta ework"></span></div>
+    </figure>`,
+    )
+    .join('');
+  const editsSection = editIds.length
+    ? `<section class="panel" id="edits" style="margin-top:18px"><h2>Follow-up edits</h2>
+<p class="note" style="margin:0 0 12px">Once the first build was on screen, every agent got the same follow-up
+prompts in its live session. Each edit is replayed from the moment its prompt was sent, so the panels show the
+same edit at the same moment however long each agent took over the first build.</p>
+<div class="tabs" role="tablist" aria-label="Edit">${editIds
+        .map((id, k) => `<button role="tab" data-edit="${esc(id)}" aria-selected="${k === 0}">${esc(id)}</button>`)
+        .join('')}</div>
+<p class="eprompt" id="eprompt"></p>
+<div class="transport etransport">
+  <button id="eplaypause" aria-label="Play or pause the edit">▶ Play</button>
+  <span class="t" id="etnow">0.0s</span>
+  <input id="escrub" type="range" min="0" max="1000" value="0" step="50" aria-label="Scrub the edit"/>
+  <span class="speeds" role="group" aria-label="Edit playback speed">
+    <button data-espeed="1" aria-pressed="true">1×</button><button data-espeed="2">2×</button><button data-espeed="5">5×</button>
+  </span>
+</div>
+<div class="grid-players">${editPanels}</div>
+</section>`
+    : '';
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -421,17 +548,29 @@ export function renderLeaderboard(
   .plinks { margin-left:auto; }
   .plinks a { color:var(--text-secondary); }
   .note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+  .etransport { position:static; box-shadow:none; background:var(--surface-0); }
+  .eplayer { padding:12px; margin:0; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
+  .tabs button { font:inherit; font-size:13px; font-weight:600; cursor:pointer; color:var(--text-secondary);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:99px; padding:4px 12px; }
+  .tabs button[aria-selected="true"] { background:var(--series-1); border-color:var(--series-1); color:#fff; }
+  .eprompt { margin:0 0 12px; font-size:14px; }
+  .eprompt::before { content:"Prompt: "; color:var(--text-muted); }
+  .badge[data-state="landed"] { background:var(--series-3); }
+  .badge[data-state="never"], .badge[data-state="void"] { background:#8a2a2a; }
   @media (max-width:560px) { .wrap { padding:18px 12px 48px; } .transport { position:static; } }
 </style></head><body><div class="wrap">
 
 <h1>${esc(opts.title ?? 'Prompt-to-paint leaderboard')}</h1>
 <p class="sub">${esc(runs[0]?.brief ?? '')} · ${runs.length} runs · horizon ${horizonMs / 1000}s ·
-  ${totalShots} distinct screenshots</p>
+  ${totalShots} distinct screenshots${
+    zoomed ? ` · showing the first ${viewMs / 1000}s, by when every run had ended` : ''
+  }</p>
 
 <div class="transport">
   <button id="playpause" aria-label="Play or pause">▶ Play</button>
   <span class="t" id="tnow">00:00 / 00:00</span>
-  <input id="scrub" type="range" min="0" max="${horizonMs}" value="0" step="100" aria-label="Scrub"/>
+  <input id="scrub" type="range" min="0" max="${viewMs}" value="0" step="100" aria-label="Scrub"/>
   <span class="speeds" role="group" aria-label="Playback speed">
     <button data-speed="1">1×</button><button data-speed="4">4×</button>
     <button data-speed="10" aria-pressed="true">10×</button><button data-speed="30">30×</button>
@@ -440,6 +579,7 @@ export function renderLeaderboard(
 </div>
 
 <div class="grid-players">${panels}</div>
+${editsSection}
 
 <section class="panel" style="margin-top:18px"><h2>Correctness over time</h2>
 <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Correctness over time for ${runs.length} runs">
@@ -447,7 +587,12 @@ export function renderLeaderboard(
   ${paths.map((p) => `<path class="s" d="${p.d}" stroke="var(--series-${p.slot})"/>`).join('')}
   ${labelRows(paths).join('')}
   <line id="chartplay" y1="${M.t}" y2="${M.t + PH}" x1="${M.l}" x2="${M.l}"/>
-</svg></section>
+</svg>${
+    zoomed
+      ? `<p class="note">The chart stops at ${viewMs / 1000}s because every run had ended by then. Each curve
+holds its last value from there to the ${horizonMs / 1000}s horizon, and the AUC is integrated over all of it.</p>`
+      : ''
+  }</section>
 
 <section class="panel"><h2>Ranking</h2>
 <table><thead><tr><th>Run</th><th class="num">AUC</th><th class="num">Final</th>
@@ -512,7 +657,9 @@ above are separate on purpose and must not be read as one table.</p>
 <script>
 (() => {
   const tracks = JSON.parse(document.getElementById('tracks').textContent);
-  const HZ = ${horizonMs};
+  // The replay's clock runs to the end of the shown window, not the horizon:
+  // past it, no frame changes.
+  const HZ = ${viewMs};
   const CLASS = ['no server', 'error', 'blank', 'rendering'];
   const players = [...document.querySelectorAll('.player')].map((el, i) => ({
     el,
@@ -627,10 +774,10 @@ above are separate on purpose and must not be read as one table.</p>
 
   btn.addEventListener('click', () => setPlaying(!playing));
   scrub.addEventListener('input', () => { clock = Number(scrub.value); render(); });
-  for (const b of document.querySelectorAll('.speeds button')) {
+  for (const b of document.querySelectorAll('[data-speed]')) {
     b.addEventListener('click', () => {
       speed = Number(b.dataset.speed);
-      for (const o of document.querySelectorAll('.speeds button')) o.setAttribute('aria-pressed', String(o === b));
+      for (const o of document.querySelectorAll('[data-speed]')) o.setAttribute('aria-pressed', String(o === b));
     });
   }
   addEventListener('keydown', (e) => {
@@ -641,6 +788,99 @@ above are separate on purpose and must not be read as one table.</p>
   });
 
   render();
+
+  // ---- follow-up edits: one clock per edit, starting at its prompt ----
+  const EDIT_PROMPTS = ${json(editPrompts)};
+  const eplayers = [...document.querySelectorAll('.eplayer')].map((el, i) => ({
+    tr: tracks[i],
+    img: el.querySelector('img'),
+    badge: el.querySelector('.badge'),
+    result: el.querySelector('.eresult'),
+    work: el.querySelector('.ework'),
+  }));
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  if (eplayers.length && tabs.length) {
+    const ebtn = document.getElementById('eplaypause');
+    const escrub = document.getElementById('escrub');
+    const etnow = document.getElementById('etnow');
+    let editId = tabs[0].dataset.edit, eclock = 0, eend = 0, eplaying = false, espeed = 1, elast = 0;
+    const editOf = (p) => p.tr.edits.find((e) => e.id === editId);
+    const s1 = (ms) => (ms / 1000).toFixed(1) + 's';
+
+    function erender() {
+      for (const p of eplayers) {
+        const e = editOf(p);
+        if (!e) { p.img.dataset.empty = '1'; p.badge.textContent = 'not measured'; p.badge.dataset.state = ''; continue; }
+        let i = -1;
+        while (i + 1 < e.t.length && e.t[i + 1] <= eclock) i++;
+        const s = i < 0 ? -1 : e.shot[i];
+        if (s >= 0) { p.img.dataset.empty = '0'; if (p.img.getAttribute('src') !== p.tr.srcs[s]) p.img.src = p.tr.srcs[s]; }
+        else p.img.dataset.empty = '1';
+        const state =
+          e.outcome === 'void' ? 'void'
+          : e.correctMs !== null && eclock >= e.correctMs ? 'landed'
+          : eclock >= e.endMs ? 'never'
+          : e.firstChangeMs !== null && eclock >= e.firstChangeMs ? 'changing'
+          : 'waiting';
+        p.badge.dataset.state = state;
+        p.badge.textContent = {
+          void: 'void · already true before the prompt',
+          landed: 'landed ✓',
+          never: 'never landed',
+          changing: 'changing…',
+          waiting: 'waiting for a change',
+        }[state];
+      }
+      etnow.textContent = s1(eclock) + ' / ' + s1(eend);
+      escrub.value = String(Math.round(eclock));
+    }
+
+    function selectEdit(id) {
+      editId = id;
+      for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.edit === id));
+      document.getElementById('eprompt').textContent = EDIT_PROMPTS[id] || '';
+      // An edit's window closes the moment it lands, so without a tail the
+      // clock -- and the scrubber, which snaps to its step -- can stop just
+      // short of the last landing and never show it.
+      eend = Math.ceil((Math.max(0, ...eplayers.map((p) => (editOf(p) || { endMs: 0 }).endMs)) + 2000) / 1000) * 1000;
+      escrub.max = String(eend);
+      for (const p of eplayers) {
+        const e = editOf(p);
+        p.result.textContent = !e ? '--' : e.outcome === 'void' ? 'void' : e.outcome === 'never' ? 'never landed' : s1(e.correctMs);
+        p.work.textContent = !e || e.outcome !== 'landed' ? ''
+          : 'to land' + (e.toolCalls === null ? '' : ' · ' + e.toolCalls + ' tool call' + (e.toolCalls === 1 ? '' : 's'));
+      }
+      eclock = 0;
+      setEPlaying(false);
+      erender();
+    }
+
+    function eframe(now) {
+      if (!eplaying) return;
+      const dt = elast ? now - elast : 0;
+      elast = now;
+      eclock = Math.min(eend, eclock + dt * espeed);
+      erender();
+      if (eclock >= eend) { setEPlaying(false); return; }
+      requestAnimationFrame(eframe);
+    }
+    function setEPlaying(on) {
+      eplaying = on;
+      ebtn.textContent = on ? '❚❚ Pause' : '▶ Play';
+      if (on) { if (eclock >= eend) eclock = 0; elast = 0; requestAnimationFrame(eframe); }
+    }
+
+    ebtn.addEventListener('click', () => setEPlaying(!eplaying));
+    escrub.addEventListener('input', () => { eclock = Number(escrub.value); erender(); });
+    for (const t of tabs) t.addEventListener('click', () => selectEdit(t.dataset.edit));
+    for (const b of document.querySelectorAll('[data-espeed]')) {
+      b.addEventListener('click', () => {
+        espeed = Number(b.dataset.espeed);
+        for (const o of document.querySelectorAll('[data-espeed]')) o.setAttribute('aria-pressed', String(o === b));
+      });
+    }
+    selectEdit(editId);
+  }
 })();
 </script>
 </body></html>`;

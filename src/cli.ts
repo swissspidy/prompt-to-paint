@@ -149,6 +149,8 @@ Options for video:
 Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
   --title      heading for the page
+  --full-horizon  replay and chart the whole horizon, not just the window
+               until every run had ended (the AUC covers the horizon either way)
 
 Options for aggregate:
   --out        directory the aggregate-<brief>-<label>.json files go in (default runs/)
@@ -394,7 +396,7 @@ async function main(): Promise<void> {
     const { values: flags, positionals: files } = parse({
       args: argv,
       allowPositionals: true,
-      options: { out: { type: 'string' }, title: { type: 'string' } },
+      options: { out: { type: 'string' }, title: { type: 'string' }, 'full-horizon': { type: 'boolean' } },
     });
     if (!files.length) fail('leaderboard needs at least one result.json');
     const runs: RunResult[] = [];
@@ -409,7 +411,7 @@ async function main(): Promise<void> {
     console.log(renderLeaderboardText(runs));
     const out = resolve(flags.out ?? join('runs', 'leaderboard.html'));
     await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs }));
+    await writeFile(out, renderLeaderboard(runs, out, { title: flags.title, runDirs, fullHorizon: flags['full-horizon'] }));
     console.log(`  leaderboard: ${out}\n`);
     return;
   }

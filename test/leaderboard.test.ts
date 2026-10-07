@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildTrack, renderLeaderboard, renderLeaderboardText,
+  buildTrack, renderLeaderboard, renderLeaderboardText, activeWindowMs,
   conditionOf, orderByCondition, promptEffects,
 } from '../src/report/leaderboard.ts';
 import { rank } from '../src/report/compare.ts';
-import type { RunResult, ScoredFrame } from '../src/types.ts';
+import type { IterationResult, RunResult, ScoredFrame } from '../src/types.ts';
 
 function frame(tMs: number, score: number, shot: string | null, over: Partial<ScoredFrame> = {}): ScoredFrame {
   return {
@@ -71,6 +71,72 @@ test('frames are emitted in time order whatever order they were stored in', () =
   const r = run({ frames: [frame(3000, 1, 'c.png'), frame(0, 0, 'a.png'), frame(1000, 0.5, 'b.png')] });
   const t = buildTrack(r, '/runs', '/runs/a');
   assert.deepEqual(t.t, [0, 1000, 3000]);
+});
+
+function edit(over: Partial<IterationResult> = {}): IterationResult {
+  return {
+    id: 'header-blue', mode: 'live-session', baselineAlreadyPassing: false, prompt: 'Make the header blue.',
+    promptSentMs: 10_000, timeToFirstChangeMs: 1500, timeToCorrectChangeMs: 2000, agentDoneMs: 12_500,
+    brokenMs: 0, ok: true, endedMs: 12_000, work: { toolCalls: 1, toolNames: ['Edit'], modelMs: 1800, toolMs: 10, phases: [] },
+    ...over,
+  } as IterationResult;
+}
+
+test('an edit replays from its prompt, opening on the page it was sent against', () => {
+  // Two agents finish the cold start at different times, so an edit only lines
+  // up across panels on a clock that starts at its own prompt. The frame current
+  // when the prompt went out leads at 0s; a replay that opened blank would show
+  // the app disappearing at the moment it was asked to change.
+  const r = run({
+    frames: [
+      frame(3000, 1, '/runs/a/frames/f00003.png', { phase: 'cold' }),
+      frame(10_500, 1, '/runs/a/frames/f00003.png', { phase: 'iteration' }),
+      frame(12_000, 1, '/runs/a/frames/f00012.png', { phase: 'iteration' }),
+      frame(14_000, 1, '/runs/a/frames/f00014.png', { phase: 'iteration' }),
+    ],
+    iterations: [edit()],
+  });
+  const [e] = buildTrack(r, '/runs', '/runs/a').edits;
+  assert.ok(e);
+  assert.deepEqual(e.t, [0, 500, 2000], 'times from the prompt; frames after the window closed are left out');
+  assert.equal(e.shot[0], e.shot[1], 'the opening frame and the unchanged one share a screenshot');
+  assert.notEqual(e.shot[2], e.shot[1]);
+  assert.equal(e.correctMs, 2000);
+  assert.equal(e.endMs, 2000);
+  assert.equal(e.outcome, 'landed');
+  assert.equal(e.toolCalls, 1);
+});
+
+test('an edit whose check was already true replays as void, never as a fast success', () => {
+  const r = run({ iterations: [edit({ baselineAlreadyPassing: true, ok: false, timeToCorrectChangeMs: null })] });
+  assert.equal(buildTrack(r, '/runs', '/runs/a').edits[0]?.outcome, 'void');
+  const never = run({ iterations: [edit({ ok: false, timeToCorrectChangeMs: null })] });
+  assert.equal(buildTrack(never, '/runs', '/runs/a').edits[0]?.outcome, 'never');
+});
+
+test('a run with no edits has nothing to replay and the page says nothing about edits', () => {
+  assert.deepEqual(buildTrack(run(), '/runs', '/runs/a').edits, []);
+  assert.doesNotMatch(renderLeaderboard([run()], '/runs/leaderboard.html'), /id="edits"/);
+});
+
+test('the replay crops to when every run had ended, never past the horizon', () => {
+  // Forty-second runs on a seven-minute horizon otherwise play as a few seconds
+  // of action and minutes of nothing.
+  assert.equal(activeWindowMs([38_000, 45_100], 420_000), 50_000);
+  assert.equal(activeWindowMs([183_000, 40_000], 420_000), 210_000);
+  assert.equal(activeWindowMs([410_000], 420_000), 420_000, 'capped at the horizon');
+  assert.equal(activeWindowMs([], 420_000), 420_000, 'nothing to crop to');
+});
+
+test('a cropped page says so, and --full-horizon puts the whole horizon back', () => {
+  // run() ends at 4s on a 10s horizon.
+  const cropped = renderLeaderboard([run()], '/runs/leaderboard.html');
+  assert.match(cropped, /showing the first 5s/);
+  assert.match(cropped, /id="scrub" type="range" min="0" max="5000"/);
+  assert.match(cropped, /AUC is integrated over all of it/);
+  const full = renderLeaderboard([run()], '/runs/leaderboard.html', { fullHorizon: true });
+  assert.doesNotMatch(full, /showing the first/);
+  assert.match(full, /id="scrub" type="range" min="0" max="10000"/);
 });
 
 test('tied scores share a rank instead of manufacturing a disagreement', () => {

@@ -390,6 +390,23 @@ table and the pictures cannot disagree: a run that wins on area under the curve
 is visibly ahead at the four-minute mark, and if it is not, the number is wrong
 and this is where you notice.
 
+**The replay stops when the last run does.** Runs that finish in forty seconds
+on a seven-minute horizon would otherwise play as a few seconds of action and
+minutes of nothing, with every difference between them squeezed into the
+leftmost tenth of the chart. So the clock and the chart run until every run had
+ended, plus a little room, and the page says where it stopped. Nothing after
+that point can change on screen, because each curve holds its last value. The
+AUC is still integrated to the horizon. `--full-horizon` shows the whole thing.
+
+**Follow-up edits get a replay of their own.** When the brief has iterations,
+each one is replayed beside the others from the moment its prompt was sent, not
+on the run's own clock: two agents finish the cold start tens of seconds apart,
+so the run's clock would put one agent's edit beside the other's idle page.
+Each panel opens on the page the prompt was sent against and is marked when the
+change appeared, when the check passed, or that it never did. An edit whose
+check was already true before the prompt is shown as **void**, not as an
+instant success.
+
 Runs must share a brief and a horizon; the command refuses to rank runs that do
 not, because AUC has the horizon in its denominator.
 
@@ -865,7 +882,9 @@ What they showed:
   as Sonnet 5.5 to an identical 1.00.
 - **The edit loop is fast for almost everyone.** Follow-up edits landed in 2–3s
   with a single tool call, an order of magnitude faster than cold start. Gemini
-  was the exception, at up to 19s and four tool calls.
+  was the exception, at up to 19s and four tool calls. The leaderboard replays
+  every edit side by side from its prompt, which is the most visibly different
+  thing about these agents.
 - **A void edit showed up on a live run.** One GPT-5.5 run had already made the
   heading blue during cold start, so "make the heading blue" was reported as
   unmeasurable rather than as a 0s success.
