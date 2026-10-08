@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Task board on a running Vite + React project: time to first render</title>
+<style>
+:root { color-scheme: light; --surface-0:#f6f5f2; --surface-1:#fcfcfb; --border:#e2e1dc;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77756f; --grid:#e8e7e2;
+  --track:#eeede9; --b1:#86b6ef; --b2:#3987e5; --b3:#184f95; --mark:#0b0b0b; --accent:#eb6834; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+  --surface-0:#111110; --surface-1:#1a1a19; --border:#302f2d; --text-primary:#fff;
+  --text-secondary:#c3c2b7; --text-muted:#8f8e86; --grid:#2a2a28; --track:#232321;
+  --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0:#111110; --surface-1:#1a1a19;
+  --border:#302f2d; --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e86;
+  --grid:#2a2a28; --track:#232321; --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--surface-0); color:var(--text-primary);
+  font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width:1100px; margin:0 auto; padding:28px 16px 64px; }
+h1 { font-size:24px; margin:0 0 4px; letter-spacing:-0.01em; }
+.sub { color:var(--text-secondary); margin:0 0 18px; }
+.panel { background:var(--surface-1); border:1px solid var(--border); border-radius:12px; padding:18px; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin:0 0 14px; font-size:13px; color:var(--text-secondary); }
+.key { display:inline-flex; align-items:center; gap:6px; }
+.sw { width:14px; height:10px; border-radius:3px; display:inline-block; }
+.sw.b0 { background:var(--track); outline:1px solid var(--border); }
+.frkey { width:2px; height:14px; background:var(--mark); display:inline-block; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead th { font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary);
+  font-weight:600; text-align:left; padding:4px 8px 8px; }
+.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; padding:3px 8px; }
+th.num { text-align:right; }
+.ghead th { text-align:left; font-size:14px; font-weight:600; padding:14px 8px 4px;
+  border-top:1px solid var(--border); }
+tbody:first-of-type .ghead th { border-top:0; }
+.rlabel { font-weight:400; color:var(--text-secondary); white-space:nowrap; padding:3px 8px; text-align:left; width:1%; }
+.rep { font-variant-numeric:tabular-nums; }
+.ctag { font-size:11px; padding:1px 7px; border-radius:99px; border:1px solid var(--border);
+  margin-right:6px; color:var(--text-secondary); }
+.ctag.c-staged { border-color:var(--accent); color:var(--text-primary); }
+.trackcell { width:100%; padding:3px 8px; }
+.track { position:relative; height:16px; }
+.seg { position:absolute; top:0; bottom:0; border-right:2px solid var(--surface-1); }
+.seg:first-child { border-radius:4px 0 0 4px; }
+.seg.b0 { background:var(--track); }
+.seg.b1, .sw.b1 { background:var(--b1); }
+.seg.b2, .sw.b2 { background:var(--b2); }
+.seg.b3, .sw.b3 { background:var(--b3); }
+.fr { position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px; background:var(--mark); pointer-events:none; }
+.staged { color:var(--text-primary); font-weight:700; }
+.axis { position:relative; height:18px; }
+.tick { position:absolute; transform:translateX(-50%); font-size:11px; color:var(--text-muted);
+  text-transform:none; letter-spacing:0; font-weight:400; }
+.tick:first-child { transform:none; }
+.tick:last-child { transform:translateX(-100%); }
+.note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+#tip { position:fixed; pointer-events:none; background:var(--surface-1); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.15); display:none; z-index:2; max-width:320px; }
+@media (max-width:640px) {
+  .hide-sm { display:none; }
+  .tick:not(:first-child):not(:last-child) { display:none; }
+  .num, .rlabel, .trackcell, thead th { padding-left:4px; padding-right:4px; }
+  .rlabel { width:auto; }
+}
+</style></head>
+<body><div class="wrap">
+<h1>Task board on a running Vite + React project: time to first render</h1>
+<p class="sub">15 runs. 1 of them put a partial page on screen before the finished one; the other 14 went from nothing to their final page in one step.</p>
+<section class="panel">
+<div class="legend"><span class="key"><span class="sw b0"></span>Nothing scoreable on screen</span><span class="key"><span class="sw b1"></span>Under half the brief</span><span class="key"><span class="sw b2"></span>Half or more</span><span class="key"><span class="sw b3"></span>The whole brief</span><span class="key"><span class="frkey"></span>First render</span></div>
+<table>
+<thead><tr><th></th><th><div class="axis"><span class="tick" style="left:0.000%">0s</span><span class="tick" style="left:20.000%">30s</span><span class="tick" style="left:40.000%">60s</span><span class="tick" style="left:60.000%">90s</span><span class="tick" style="left:80.000%">120s</span><span class="tick" style="left:100.000%">150s</span></div></th>
+<th class="num">First<span class="hide-sm"> render</span></th><th class="num hide-sm">Whole brief</th><th class="num">Stages</th></tr></thead>
+<tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-sonnet-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 1: first render 26.4s, whole brief 26.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:17.605%" data-tip="cc-sonnet-5.5, run 1: 0.0s–26.4s, score 0.00"></span><span class="seg b3" style="left:17.605%;width:10.208%" data-tip="cc-sonnet-5.5, run 1: 26.4s–41.7s, score 1.00"></span><span class="fr" style="left:17.605%" aria-hidden="true"></span></div></td>
+  <td class="num">26.4s</td><td class="num hide-sm">26.4s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 2: first render 13.8s, whole brief 13.8s, 1 stage"><span class="seg b0" style="left:0.000%;width:9.210%" data-tip="cc-sonnet-5.5, run 2: 0.0s–13.8s, score 0.00"></span><span class="seg b3" style="left:9.210%;width:10.359%" data-tip="cc-sonnet-5.5, run 2: 13.8s–29.4s, score 1.00"></span><span class="fr" style="left:9.210%" aria-hidden="true"></span></div></td>
+  <td class="num">13.8s</td><td class="num hide-sm">13.8s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 3: first render 12.9s, whole brief 12.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:8.608%" data-tip="cc-sonnet-5.5, run 3: 0.0s–12.9s, score 0.00"></span><span class="seg b3" style="left:8.608%;width:10.001%" data-tip="cc-sonnet-5.5, run 3: 12.9s–27.9s, score 1.00"></span><span class="fr" style="left:8.608%" aria-hidden="true"></span></div></td>
+  <td class="num">12.9s</td><td class="num hide-sm">12.9s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gpt-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 1: first render 21.5s, whole brief 21.5s, 1 stage"><span class="seg b0" style="left:0.000%;width:14.351%" data-tip="pi-gpt-5.5, run 1: 0.0s–21.5s, score 0.00"></span><span class="seg b3" style="left:14.351%;width:11.897%" data-tip="pi-gpt-5.5, run 1: 21.5s–39.4s, score 1.00"></span><span class="fr" style="left:14.351%" aria-hidden="true"></span></div></td>
+  <td class="num">21.5s</td><td class="num hide-sm">21.5s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 2: first render 25.4s, whole brief 25.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:16.915%" data-tip="pi-gpt-5.5, run 2: 0.0s–25.4s, score 0.00"></span><span class="seg b3" style="left:16.915%;width:9.760%" data-tip="pi-gpt-5.5, run 2: 25.4s–40.0s, score 1.00"></span><span class="fr" style="left:16.915%" aria-hidden="true"></span></div></td>
+  <td class="num">25.4s</td><td class="num hide-sm">25.4s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 3: first render 12.5s, whole brief 23.5s, 2 stages"><span class="seg b0" style="left:0.000%;width:8.360%" data-tip="pi-gpt-5.5, run 3: 0.0s–12.5s, score 0.00"></span><span class="seg b2" style="left:8.360%;width:7.311%" data-tip="pi-gpt-5.5, run 3: 12.5s–23.5s, score 0.56"></span><span class="seg b3" style="left:15.671%;width:13.338%" data-tip="pi-gpt-5.5, run 3: 23.5s–43.5s, score 1.00"></span><span class="fr" style="left:8.360%" aria-hidden="true"></span></div></td>
+  <td class="num">12.5s</td><td class="num hide-sm">23.5s</td>
+  <td class="num staged">2</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-opus-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 1: first render 26.9s, whole brief 26.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:17.907%" data-tip="cc-opus-5.5, run 1: 0.0s–26.9s, score 0.00"></span><span class="seg b3" style="left:17.907%;width:18.011%" data-tip="cc-opus-5.5, run 1: 26.9s–53.9s, score 1.00"></span><span class="fr" style="left:17.907%" aria-hidden="true"></span></div></td>
+  <td class="num">26.9s</td><td class="num hide-sm">26.9s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 2: first render 23.6s, whole brief 23.6s, 1 stage"><span class="seg b0" style="left:0.000%;width:15.737%" data-tip="cc-opus-5.5, run 2: 0.0s–23.6s, score 0.00"></span><span class="seg b3" style="left:15.737%;width:13.897%" data-tip="cc-opus-5.5, run 2: 23.6s–44.5s, score 1.00"></span><span class="fr" style="left:15.737%" aria-hidden="true"></span></div></td>
+  <td class="num">23.6s</td><td class="num hide-sm">23.6s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 3: first render 21.2s, whole brief 21.2s, 1 stage"><span class="seg b0" style="left:0.000%;width:14.145%" data-tip="cc-opus-5.5, run 3: 0.0s–21.2s, score 0.00"></span><span class="seg b3" style="left:14.145%;width:13.101%" data-tip="cc-opus-5.5, run 3: 21.2s–40.9s, score 1.00"></span><span class="fr" style="left:14.145%" aria-hidden="true"></span></div></td>
+  <td class="num">21.2s</td><td class="num hide-sm">21.2s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-sonnet-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 1: first render 60.3s, whole brief 60.3s, 1 stage"><span class="seg b0" style="left:0.000%;width:40.187%" data-tip="pi-sonnet-5.5, run 1: 0.0s–60.3s, score 0.00"></span><span class="seg b3" style="left:40.187%;width:9.956%" data-tip="pi-sonnet-5.5, run 1: 60.3s–75.2s, score 1.00"></span><span class="fr" style="left:40.187%" aria-hidden="true"></span></div></td>
+  <td class="num">60.3s</td><td class="num hide-sm">60.3s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 2: first render 15.8s, whole brief 15.8s, 1 stage"><span class="seg b0" style="left:0.000%;width:10.543%" data-tip="pi-sonnet-5.5, run 2: 0.0s–15.8s, score 0.00"></span><span class="seg b3" style="left:10.543%;width:9.700%" data-tip="pi-sonnet-5.5, run 2: 15.8s–30.4s, score 1.00"></span><span class="fr" style="left:10.543%" aria-hidden="true"></span></div></td>
+  <td class="num">15.8s</td><td class="num hide-sm">15.8s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 3: first render 28.9s, whole brief 28.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:19.240%" data-tip="pi-sonnet-5.5, run 3: 0.0s–28.9s, score 0.00"></span><span class="seg b3" style="left:19.240%;width:9.667%" data-tip="pi-sonnet-5.5, run 3: 28.9s–43.4s, score 1.00"></span><span class="fr" style="left:19.240%" aria-hidden="true"></span></div></td>
+  <td class="num">28.9s</td><td class="num hide-sm">28.9s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gemini-3.8-flash</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 1: first render 68.8s, whole brief 68.8s, 1 stage"><span class="seg b0" style="left:0.000%;width:45.857%" data-tip="pi-gemini-3.8-flash, run 1: 0.0s–68.8s, score 0.00"></span><span class="seg b3" style="left:45.857%;width:1.525%" data-tip="pi-gemini-3.8-flash, run 1: 68.8s–71.1s, score 1.00"></span><span class="seg b0" style="left:47.381%;width:0.765%" data-tip="pi-gemini-3.8-flash, run 1: 71.1s–72.2s, score 0.00"></span><span class="seg b3" style="left:48.147%;width:36.683%" data-tip="pi-gemini-3.8-flash, run 1: 72.2s–127.2s, score 1.00"></span><span class="fr" style="left:45.857%" aria-hidden="true"></span></div></td>
+  <td class="num">68.8s</td><td class="num hide-sm">68.8s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 2: first render 67.4s, whole brief 67.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:44.953%" data-tip="pi-gemini-3.8-flash, run 2: 0.0s–67.4s, score 0.00"></span><span class="seg b3" style="left:44.953%;width:21.733%" data-tip="pi-gemini-3.8-flash, run 2: 67.4s–100.0s, score 1.00"></span><span class="fr" style="left:44.953%" aria-hidden="true"></span></div></td>
+  <td class="num">67.4s</td><td class="num hide-sm">67.4s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 3: first render 58.4s, whole brief 58.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:38.934%" data-tip="pi-gemini-3.8-flash, run 3: 0.0s–58.4s, score 0.00"></span><span class="seg b3" style="left:38.934%;width:46.796%" data-tip="pi-gemini-3.8-flash, run 3: 58.4s–128.6s, score 1.00"></span><span class="fr" style="left:38.934%" aria-hidden="true"></span></div></td>
+  <td class="num">58.4s</td><td class="num hide-sm">58.4s</td>
+  <td class="num ">1</td></tr></tbody>
+</table>
+<p class="note">Each bar is one run, from the prompt to the moment the run ended (where the bar stops), shaded by how much of the
+brief the judge could see on screen. Agents are ordered by median first render. <b>Stages</b> counts the
+distinct scores the page passed through: 1 means it went from nothing to its final page in a single step.</p>
+</section>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+const tip = document.getElementById('tip');
+document.addEventListener('pointermove', (e) => {
+  const t = e.target.closest && e.target.closest('[data-tip]');
+  if (!t) { tip.style.display = 'none'; return; }
+  tip.textContent = t.dataset.tip;
+  tip.style.display = 'block';
+  const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px';
+  tip.style.top = (e.clientY + 14) + 'px';
+});
+</script>
+</body></html>
