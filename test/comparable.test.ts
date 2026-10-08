@@ -56,7 +56,7 @@ test('an unjudged run cannot be ranked against a judged one', () => {
 test('prompted and unprompted runs are one ranking only where that is the experiment', () => {
   const pair = [run(), run({ label: 'b', protocol: { renderEarly: false } })];
   // compare: a single ordering over two different questions.
-  assert.throws(() => assertComparable(pair), /prompted and unprompted/);
+  assert.throws(() => assertComparable(pair), /different protocols/);
   // leaderboard: ranks inside each condition, so it is allowed to hold both.
   assert.doesNotThrow(() => assertComparable(pair, { allowMixedConditions: true }));
 });

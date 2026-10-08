@@ -22,6 +22,7 @@ import { renderHtml } from './report/html.ts';
 import { renderText } from './report/text.ts';
 import { renderCompareText, renderCompareHtml, IncomparableRunsError } from './report/compare.ts';
 import { renderLeaderboard, renderLeaderboardText } from './report/leaderboard.ts';
+import { renderRace } from './report/race.ts';
 import { trajectory, renderTrajectory } from './report/trajectory.ts';
 import {
   buildSegments, inferIntervalMs, renderConcat, ffmpegArgs, resolveShot, writeBlankFrame, timelineSpanMs,
@@ -69,6 +70,7 @@ prompt-to-paint -- how long until an agent renders something you can react to
                                             by brief and label -- what --repeat prints,
                                             for runs made in separate invocations
   p2p leaderboard <result.json...>          ranking + every run replayed side by side
+  p2p race     <result.json...>             every run as one bar on a shared clock, shaded by score
   p2p video    <runDir> [--out <file>]      replay one run's frames as a real video
   p2p rescore  <runDir> [--judge <provider:model>] [--brief <file>]
                                             re-score saved frames without re-running
@@ -108,6 +110,7 @@ Options for run:
   --quiet-for  end the window after N seconds with nothing changing (default 120, 0 off)
   --stop-after-render  end the window N ms after the app first renders
   --no-render-early    drop the "render something early" clause from the protocol
+  --skeleton-first     tell the agent to save a skeleton first, then one section per save
   --headed     show the prober's browser window while the agent works
   --video      record the session to video.webm (Playwright screencast)
   --no-progress  no live status line
@@ -149,6 +152,11 @@ Options for video:
   --fps        output frame rate                 (default 30)
   --to-horizon hold the last frame to the brief's horizon, so two runs' videos
                are the same length and can be played side by side
+
+Options for race:
+  --out        page to write   (default runs/race.html)
+  --title      page heading
+  --subtitle   one sentence under the heading (default: how many runs were staged)
 
 Options for leaderboard:
   --out        page to write   (default runs/leaderboard.html)
@@ -420,6 +428,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'race') {
+    const { values: flags, positionals: files } = parse({
+      args: argv,
+      allowPositionals: true,
+      options: { out: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' } },
+    });
+    if (!files.length) fail('race needs at least one result.json');
+    const runs: RunResult[] = [];
+    for (const f of files) runs.push(JSON.parse(await readFile(f, 'utf8')) as RunResult);
+    const out = resolve(flags.out ?? join('runs', 'race.html'));
+    await mkdir(dirname(out), { recursive: true });
+    await writeFile(out, renderRace(runs, { title: flags.title, subtitle: flags.subtitle }));
+    console.log(`  race: ${out}\n`);
+    return;
+  }
+
   if (cmd === 'trajectory') {
     // The metric's self-check: a curve is only worth integrating if it has a
     // shape the endpoints do not already give you.
@@ -653,7 +677,7 @@ async function main(): Promise<void> {
       'no-add-dir': { type: 'boolean' }, 'agent-arg': { type: 'string', multiple: true },
       'max-judged': { type: 'string' }, 'judge-width': { type: 'string' },
       'quiet-for': { type: 'string' }, 'stop-after-render': { type: 'string' },
-      'no-render-early': { type: 'boolean' }, headed: { type: 'boolean' },
+      'no-render-early': { type: 'boolean' }, 'skeleton-first': { type: 'boolean' }, headed: { type: 'boolean' },
       video: { type: 'boolean' }, 'no-progress': { type: 'boolean' },
       title: { type: 'string' },
     },
@@ -781,6 +805,8 @@ async function main(): Promise<void> {
     floorTemplateId = t.id;
   } else if (cmd === 'run') {
     if (!values.brief) fail('run needs --brief <file>');
+    if (values['skeleton-first'] && values['no-render-early'])
+      fail('--skeleton-first already replaces the render-early clause; drop --no-render-early');
     brief = await loadBrief(values.brief);
     const kind = values.adapter ?? 'claude-code';
     if (kind === 'claude-code') {
@@ -943,6 +969,7 @@ async function main(): Promise<void> {
             : values['quiet-for'] !== undefined ? Number(values['quiet-for']) * 1000
             : undefined,
         noRenderEarly: values['no-render-early'],
+        skeletonFirst: values['skeleton-first'],
         headed: values.headed,
         videoPath: values.video ? join(runDir, 'video.webm') : undefined,
         keepServer: values['keep-server'],

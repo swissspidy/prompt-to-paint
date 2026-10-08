@@ -275,6 +275,15 @@ test('runs are ranked within their condition, never across it', () => {
   );
 });
 
+test('skeleton-first runs are a condition of their own', () => {
+  // Told how to stage the page, not just that it should be early: a different
+  // instruction, so a different experiment, ranked between the other two.
+  const staged = run({ protocol: { renderEarly: true, skeletonFirst: true }, label: 's' });
+  assert.equal(conditionOf(staged), 'staged');
+  const rows = orderByCondition([untold({ label: 'u' }), staged, told({ label: 't' })]);
+  assert.deepEqual(rows.map((r) => r.condition), ['prompted', 'staged', 'unprompted']);
+});
+
 test('orderByCondition keeps every row pointing at the run it came from', () => {
   const runs = [untold({ label: 'u' }), told({ label: 't' })];
   const rows = orderByCondition(runs);

@@ -70,6 +70,8 @@ export interface RunOptions {
   expectsToolchain?: boolean;
   /** Drop the "render something early" clause from the protocol suffix. */
   noRenderEarly?: boolean;
+  /** Ask for a skeleton first, then one section per save. See `ProtocolOptions.skeletonFirst`. */
+  skeletonFirst?: boolean;
   /** Cap on model calls in the scoring pass. */
   maxJudged?: number;
   /** Width screenshots are downscaled to before they are sent to the judge. */
@@ -252,6 +254,21 @@ export interface ProtocolOptions {
    */
   renderEarly?: boolean;
   /**
+   * Tell the agent how to render early, not just that it should: save a bare
+   * skeleton first, then fill in one section per save.
+   *
+   * The render-early clause alone asks for an outcome. On the published runs it
+   * produced one jump from blank to finished in 29 of 30, and the agent event
+   * streams show why: the whole page arrived in a single file write, after the
+   * model had composed all of it. A browser can only ever see the states a
+   * file passes through on disk, so one write is one step, whatever the agent
+   * intended. This clause asks for the mechanism instead, to find out whether
+   * the step is a habit or a limit. Replaces the render-early clause rather
+   * than adding to it, and is its own condition: never ranked beside runs that
+   * were not given it.
+   */
+  skeletonFirst?: boolean;
+  /**
    * The harness is already serving the working directory at this URL, which is
    * what `target.serveStatic` briefs do.
    *
@@ -300,7 +317,15 @@ export function protocolSuffix(url: string, opts: ProtocolOptions = {}): string 
       : '  now. Serve the app there, and leave the server running when you are done.',
   );
   if (opts.scaffold) L.push(opts.scaffold);
-  if (opts.renderEarly !== false)
+  if (opts.skeletonFirst)
+    L.push(
+      '- Build the page in stages, and save after each one. First save a bare skeleton',
+      '  on its own: the heading and an empty placeholder for every section the brief',
+      '  names, before writing any of their content. Then fill in the sections one at',
+      '  a time, each as a separate edit, so every save puts a little more on screen.',
+      '  Do not write the finished page in a single write.',
+    );
+  else if (opts.renderEarly !== false)
     L.push(
       '- Get something on screen as early as you can and then refine it in place. A',
       '  rough page that renders in the first minute counts for more here than a',
@@ -596,6 +621,7 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
       brief.prompt +
       protocolSuffix(url, {
         renderEarly: !opts.noRenderEarly,
+        skeletonFirst: opts.skeletonFirst,
         served: brief.target?.serveStatic === true,
         scaffold: scaffold?.protocol,
       });
@@ -1063,7 +1089,10 @@ export async function runBenchmark(opts: RunOptions): Promise<RunResult> {
     agentFailure,
     viewport,
     endReason,
-    protocol: { renderEarly: !opts.noRenderEarly },
+    protocol: {
+      renderEarly: !opts.noRenderEarly,
+      ...(opts.skeletonFirst ? { skeletonFirst: true } : {}),
+    },
     artifacts: {
       videoPath: prober.videoPath,
       promptPath: join(opts.runDir, 'prompt.txt'),

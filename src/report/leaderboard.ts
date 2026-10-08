@@ -33,11 +33,19 @@ const STEP_MARK: Record<-1 | 0 | 1, string> = { 1: '▲', 0: '●', [-1]: '▼' 
 const STEP_WORD: Record<-1 | 0 | 1, string> = { 1: 'better', 0: 'about the same', [-1]: 'worse' };
 
 /** Which experiment a run belongs to. */
-export type Condition = 'prompted' | 'unprompted';
+export type Condition = 'prompted' | 'staged' | 'unprompted';
 
 export const CONDITION_LABEL: Record<Condition, string> = {
   prompted: 'Told the clock is running',
+  staged: 'Told to save a skeleton first, then one section per save',
   unprompted: 'Not told (unprompted behaviour)',
+};
+
+/** The short form, for tags beside a run's name. */
+export const CONDITION_TAG: Record<Condition, string> = {
+  prompted: 'told',
+  staged: 'skeleton first',
+  unprompted: 'not told',
 };
 
 /**
@@ -47,6 +55,7 @@ export const CONDITION_LABEL: Record<Condition, string> = {
  * an absent field means prompted rather than unknown.
  */
 export function conditionOf(r: RunResult): Condition {
+  if (r.protocol?.skeletonFirst) return 'staged';
   return r.protocol?.renderEarly === false ? 'unprompted' : 'prompted';
 }
 
@@ -67,7 +76,7 @@ export interface OrderedRow {
  * meaningful, and the prompt effect below is where the two meet.
  */
 export function orderByCondition(runs: RunResult[]): OrderedRow[] {
-  const order: Condition[] = ['prompted', 'unprompted'];
+  const order: Condition[] = ['prompted', 'staged', 'unprompted'];
   const rows: OrderedRow[] = [];
   for (const condition of order) {
     const picked = runs
@@ -125,7 +134,7 @@ function pairingKey(r: RunResult): string {
 export function promptEffects(runs: RunResult[]): PromptEffect[] {
   const cells = new Map<string, Record<Condition, RunResult[]>>();
   for (const r of runs) {
-    const cell = cells.get(pairingKey(r)) ?? { prompted: [], unprompted: [] };
+    const cell = cells.get(pairingKey(r)) ?? { prompted: [], staged: [], unprompted: [] };
     cell[conditionOf(r)].push(r);
     cells.set(pairingKey(r), cell);
   }
@@ -429,7 +438,7 @@ export function renderLeaderboard(
         <span class="rank">${i + 1}</span>
         <span class="plabel" style="color:var(--series-${slot(i)})">${esc(tr.label)}</span>
         <span class="pauc">AUC ${tr.auc.toFixed(3)}</span>${
-        mixed ? `<span class="ctag">${tr.condition === 'prompted' ? 'told' : 'not told'}</span>` : ''
+        mixed ? `<span class="ctag">${CONDITION_TAG[tr.condition]}</span>` : ''
       }
       </figcaption>
       <div class="screen"><img alt="${esc(tr.label)} at the current time" decoding="async"/>
