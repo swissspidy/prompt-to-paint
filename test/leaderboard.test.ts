@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  COMPARISONS,
   buildTrack, renderLeaderboard, renderLeaderboardText, activeWindowMs,
   conditionOf, orderByCondition, promptEffects,
 } from '../src/report/leaderboard.ts';
@@ -372,4 +373,21 @@ test('both conditions present but nothing paired says so instead of going quiet'
   ]);
   assert.match(text, /none of them paired up/);
   assert.doesNotMatch(text, /What the instruction was worth/);
+});
+
+test('skeleton-first runs pair against told runs, not against unprompted ones', () => {
+  const staged = (over: Partial<RunResult> = {}): RunResult =>
+    run({ protocol: { renderEarly: true, skeletonFirst: true }, ...over });
+  const runs = [
+    withCurve(told({ label: 'agent' }), 0.95, 20_000),
+    withCurve(staged({ label: 'agent' }), 0.93, 8_000),
+  ];
+  const [e] = promptEffects(runs, COMPARISONS[1]);
+  assert.ok(e);
+  assert.equal(Number(e.aucDelta.toFixed(3)), -0.02, 'staging cost AUC');
+  assert.equal(e.ttfnbrDeltaMs, 12_000, 'and rendered 12s sooner');
+  assert.deepEqual(promptEffects(runs), [], 'no unprompted runs, so no told-vs-not-told row');
+  const text = renderLeaderboardText(runs);
+  assert.match(text, /What naming the stages was worth/);
+  assert.doesNotMatch(text, /none of them paired up/);
 });
