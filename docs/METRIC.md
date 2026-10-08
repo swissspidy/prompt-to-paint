@@ -572,8 +572,8 @@ deliberately the old one pointed at a new subject.
   profile.
 
 - **Nielsen's response-time limits** (0.1s, 1s, 10s) are why any of it matters.
-  Past ten seconds attention breaks and the user goes elsewhere. **Every run this
-  harness has recorded crosses that limit before the first pixel**, which is the
+  Past ten seconds attention breaks and the user goes elsewhere. **Almost every run
+  this harness has recorded crosses that limit before the first pixel**, which is the
   case for measuring the approach to it rather than the end of it.
 
 - **Time to first token**, in LLM serving, is the same instinct one layer down —

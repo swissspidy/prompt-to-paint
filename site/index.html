@@ -17,10 +17,13 @@
   h1 { font-size:28px; margin:0 0 6px; }
   .lede { color:var(--muted); margin:0 0 32px; }
   a { color:var(--accent); }
-  .card { display:block; background:var(--card); border:1px solid var(--line); border-radius:10px;
-          padding:18px 20px; text-decoration:none; color:inherit; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:18px 20px; margin-bottom:16px; }
   .card:hover { border-color:var(--accent); }
-  .card h2 { font-size:18px; margin:0 0 4px; color:var(--accent); }
+  .card h2 { font-size:18px; margin:0 0 4px; }
+  .card h2 a { text-decoration:none; }
+  .card h2 a:hover { text-decoration:underline; }
+  .links { margin:12px 0 0; font-size:14px; }
   .meta { color:var(--muted); font-size:14px; margin:0 0 10px; }
   ul { margin:0; padding-left:20px; }
   li { margin:2px 0; }
@@ -33,28 +36,42 @@
   <p class="lede">How long a coding agent takes to put something on screen that a human can react to,
     measured by screenshotting the page every second and scoring each frame against the brief.</p>
 
-  <a class="card" href="2026-10-07-ops-dashboard/">
-    <h2>Dense ops dashboard: five agent/model pairs, three vendors</h2>
+  <article class="card">
+    <h2><a href="2026-10-08-skeleton-first/">Skeleton first: telling agents how to render early</a></h2>
+    <p class="meta">8 October 2026 · <code>ops-dashboard</code> brief · 24 runs · four agent/model pairs, told vs told how</p>
+    <ul>
+      <li>Told to save a bare skeleton first, then one section per save, 12 of 12 runs built the page in four or five visible stages. Told only to render early, 0 of 12 did.</li>
+      <li>First render came 1.4–2.6x sooner for every agent, down to 7.5s for Sonnet 5.5 in Claude Code.</li>
+      <li>The finished page came about twice as late, so area under the curve improved for one agent of four.</li>
+    </ul>
+    <p class="links"><a href="2026-10-08-skeleton-first/">Replay every run</a> · <a href="2026-10-08-skeleton-first/race.html">Race chart</a></p>
+  </article>
+
+  <article class="card">
+    <h2><a href="2026-10-07-ops-dashboard/">Dense ops dashboard: five agent/model pairs, three vendors</a></h2>
     <p class="meta">7 October 2026 · <code>ops-dashboard</code> brief · 15 runs · every run replayed side by side</p>
     <ul>
       <li>15 of 15 runs went from a blank page to the finished dashboard in one step, despite being told to render early.</li>
       <li>Every run scored 1.00, so first render alone decided the ranking: 18.9s (Sonnet 5.5 in Claude Code) to 38.6s (Gemini 3.8 Flash in Pi), medians.</li>
       <li>Judges from OpenAI and Google re-scored every run; 29 of 30 re-scorings matched the original exactly.</li>
     </ul>
-  </a>
+    <p class="links"><a href="2026-10-07-ops-dashboard/">Replay every run</a> · <a href="2026-10-07-ops-dashboard/race.html">Race chart</a></p>
+  </article>
 
-  <a class="card" href="2026-10-07-todo-app-scaffolded/">
-    <h2>Task board on a running Vite + React project</h2>
+  <article class="card">
+    <h2><a href="2026-10-07-todo-app-scaffolded/">Task board on a running Vite + React project</a></h2>
     <p class="meta">7 October 2026 · <code>todo-app-scaffolded</code> brief · 15 runs · first and later changes judged</p>
     <ul>
       <li>The harness ran the toolchain and every save hot-reloaded, yet 13 of 15 runs still went from blank to finished in one step.</li>
       <li>One GPT-5.5 run built in stages: unstyled at 12.5s, styled at 23.5s, finished at 27.1s.</li>
       <li>Of nine changes after a first render, three were judged improvements. On the dashboard, none of eight was.</li>
     </ul>
-  </a>
+    <p class="links"><a href="2026-10-07-todo-app-scaffolded/">Replay every run</a> · <a href="2026-10-07-todo-app-scaffolded/race.html">Race chart</a></p>
+  </article>
 
-  <footer>Method, caveats and the full write-up:
-    <a href="https://github.com/swissspidy/prompt-to-paint#three-vendors-one-dense-brief">README</a>.</footer>
+  <footer>Every experiment in full, with caveats:
+    <a href="https://github.com/swissspidy/prompt-to-paint/blob/main/docs/FINDINGS.md">findings</a>.
+    How the metric works: the <a href="https://github.com/swissspidy/prompt-to-paint#readme">README</a>.</footer>
 </main>
 </body>
 </html>

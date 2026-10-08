@@ -9,7 +9,76 @@ The published runs, with their screenshots, reports and the page each agent
 built, are under [`site/`](../site/) and replayed at
 <https://swissspidy.github.io/prompt-to-paint/>.
 
-SKELETON_SECTION
+## Skeleton first turns the step into a curve
+
+**[Leaderboard →](https://swissspidy.github.io/prompt-to-paint/2026-10-08-skeleton-first/)** ·
+**[Race chart →](https://swissspidy.github.io/prompt-to-paint/2026-10-08-skeleton-first/race.html)**
+
+Every published run so far went from a blank page to the finished one in a
+single step, even when told to render early. The agent event streams suggested
+why: the model composed the whole page and saved it in one file write, so the
+browser only ever saw "nothing" and "done". If that's right, asking for an
+outcome ("render early") can't change the shape, but asking for the mechanism
+should.
+
+`--skeleton-first` tests that. It replaces the render-early clause with:
+
+> Build the page in stages, and save after each one. First save a bare skeleton
+> on its own: the heading and an empty placeholder for every section the brief
+> names, before writing any of their content. Then fill in the sections one at
+> a time, each as a separate edit, so every save puts a little more on screen.
+> Do not write the finished page in a single write.
+
+**Setup.** `ops-dashboard`, four agent/model pairs, both conditions, three
+repeats each: 24 runs, interleaved so a slow or fast patch at the provider hit
+both conditions alike. Claude Code ran in `acceptEdits` mode with the plugin
+configuration of the account it ran under, Pi with file tools only, so neither
+had a shell or a toolchain. All 24 runs were judged by **`openai:gpt-5.5`**, not
+by the Claude judge used in the sections below, so their scores and AUCs don't
+share a table with those. First render doesn't depend on the judge, and the
+"told" runs reproduce the earlier medians within seven seconds.
+
+| agent / model | stages, told → skeleton | first render | first reviewable | whole brief on screen | AUC |
+|---|---|---|---|---|---|
+| Claude Code / `claude-sonnet-5-5` | 1 → 4–5 | 19.9s → **7.5s** | 19.9s → 32.7s | 19.9s → 50.9s | 0.953 → 0.931 |
+| Claude Code / `claude-opus-5-5` | 1 → 4–5 | 33.0s → **13.7s** | 33.0s → 29.3s | 33.0s → 57.7s | 0.921 → **0.930** |
+| Pi / `gpt-5.5` | 1 → 4–5 | 28.4s → **20.9s** | 28.4s → 29.3s | 28.4s → 54.1s, 72.0s, never | 0.932 → 0.907 |
+| Pi / `gemini-3.8-flash` | 1 → 4–5 | 45.1s → **19.9s** | 45.1s → 57.1s | 45.1s → 89.7s | 0.893 → 0.881 |
+
+Medians of three. "First reviewable" is the first frame scoring 0.5 or more;
+"whole brief" is the first frame scoring 1.00.
+
+What it showed:
+
+- **The instruction works, completely.** 12 of 12 skeleton-first runs built the
+  page in four or five visible stages. 0 of 12 told runs did. `p2p trajectory`
+  agrees: AUC matched `finalScore x (1 - ttfr/horizon)` on none of the twelve,
+  so for the first time the curve is carrying information the endpoints don't.
+  A typical run, Sonnet 5.5: heading and subtitle at 7.5s (0.14), KPI tiles at
+  19.7s (0.43), the depot table at 26.9s (0.79), bars and footer at 37.8s
+  (1.00).
+- **First render came 1.4–2.6x sooner for every agent.** Sonnet 5.5 in Claude
+  Code got under Nielsen's ten-second limit, the first runs on this brief to do
+  so.
+- **The finished page came about twice as late.** Every extra save is another
+  model turn: model time roughly doubled for Sonnet 5.5 and GPT-5.5. One GPT-5.5
+  run never got to 1.00; it ended at 0.86.
+- **So AUC mostly went down.** Only Opus 5.5 gained (+0.008), because its
+  skeleton runs reached a reviewable page sooner than its single write did. For
+  the other three, the early stages score too little to pay for the later
+  finish. A skeleton with a heading in it is something on screen, but it is
+  not much to react to.
+
+The headline for this harness: **the blank-then-finished step is a habit, not a
+limit.** The agents can build progressively when told how. Whether they
+should is a trade-off: something on screen two to three times sooner, a
+finished page about twice as late. AUC, as currently weighted, prefers the
+finished page sooner. A person waiting to give feedback might not.
+
+**What this doesn't cover.** One brief, three repeats, one judge. A single-file
+static page is the case where staging costs most, since every stage rewrites
+part of one file. A multi-file app on a running dev server
+(`todo-app-scaffolded`) is the obvious next test.
 
 ## Three vendors, one dense brief
 

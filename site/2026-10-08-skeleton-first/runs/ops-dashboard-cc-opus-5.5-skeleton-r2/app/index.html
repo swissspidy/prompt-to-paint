@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Logistics</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --ink: #14181f;
+    --ink-2: #4a5260;
+    --ink-3: #7a8291;
+    --rule: #e3e6eb;
+    --accent: #1f5fbf;
+    --good: #1a7f4b;
+    --bad: #b4462a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 48px 32px 40px; }
+  header { margin-bottom: 36px; }
+  h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 0; line-height: 1.1; color: var(--accent); }
+  .subtitle { margin: 8px 0 0; font-size: 16px; color: var(--ink-2); }
+  section { margin-bottom: 32px; }
+  .label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 12px;
+  }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; }
+  .placeholder { padding: 24px; color: var(--ink-3); }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .kpi { padding: 20px 22px 18px; }
+  .kpi-name { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+  .kpi-value {
+    font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1;
+    margin: 14px 0 12px; font-variant-numeric: tabular-nums;
+  }
+  .kpi-value .unit { font-size: 22px; font-weight: 600; color: var(--ink-2); letter-spacing: 0; }
+  .kpi-delta { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi-delta .arrow { font-size: 10px; margin-right: 2px; }
+  .kpi-delta .vs { font-weight: 400; color: var(--ink-3); margin-left: 4px; }
+  .good { color: var(--good); }
+  .bad { color: var(--bad); }
+  .table-card { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 11px 22px; text-align: left; white-space: nowrap; }
+  th {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--ink-3); border-bottom: 1px solid var(--rule); padding-top: 14px; padding-bottom: 10px;
+  }
+  td { border-bottom: 1px solid #eef0f3; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; }
+  .num { text-align: right; }
+  th.num { width: 18%; }
+  .bars { padding: 20px 22px; display: grid; gap: 14px; }
+  .bar-row { display: grid; grid-template-columns: 110px 1fr 70px; align-items: center; gap: 16px; }
+  .bar-name { font-weight: 600; }
+  .bar-track { display: block; height: 14px; }
+  .bar { display: block; height: 100%; background: var(--accent); border-radius: 0 3px 3px 0; }
+  .bar-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  footer { border-top: 1px solid var(--rule); padding-top: 16px; font-size: 13px; color: var(--ink-3); }
+  @media (max-width: 640px) { .wrap { padding: 32px 16px; } h1 { font-size: 28px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Northwind Logistics</h1>
+    <p class="subtitle">Q3 2026 Operations Review</p>
+  </header>
+
+  <section id="kpis">
+    <h2 class="label">Key indicators</h2>
+    <div class="kpis">
+      <div class="card kpi">
+        <div class="kpi-name">On-time delivery</div>
+        <div class="kpi-value">94.2<span class="unit">%</span></div>
+        <div class="kpi-delta good"><span class="arrow">▲</span> +1.8 pts <span class="vs">vs Q2</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="kpi-name">Average transit</div>
+        <div class="kpi-value">3.4<span class="unit"> days</span></div>
+        <div class="kpi-delta good"><span class="arrow">▼</span> −0.2 days <span class="vs">vs Q2</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="kpi-name">Cost per shipment</div>
+        <div class="kpi-value"><span class="unit">$</span>18.40</div>
+        <div class="kpi-delta bad"><span class="arrow">▲</span> +$0.60 <span class="vs">vs Q2</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="kpi-name">Damage rate</div>
+        <div class="kpi-value">0.7<span class="unit">%</span></div>
+        <div class="kpi-delta good"><span class="arrow">▼</span> −0.1 pts <span class="vs">vs Q2</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="depots">
+    <h2 class="label">Depot performance</h2>
+    <div class="card table-card">
+      <table>
+        <thead>
+          <tr><th>Depot</th><th class="num">Shipments</th><th class="num">On-time</th><th class="num">Cost/shipment</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Rotterdam</td><td class="num">48,210</td><td class="num">96.1%</td><td class="num">$16.20</td></tr>
+          <tr><td>Hamburg</td><td class="num">41,930</td><td class="num">95.4%</td><td class="num">$17.05</td></tr>
+          <tr><td>Antwerp</td><td class="num">37,480</td><td class="num">93.8%</td><td class="num">$17.80</td></tr>
+          <tr><td>Gdansk</td><td class="num">22,150</td><td class="num">92.2%</td><td class="num">$19.40</td></tr>
+          <tr><td>Lyon</td><td class="num">19,870</td><td class="num">94.7%</td><td class="num">$18.10</td></tr>
+          <tr><td>Milan</td><td class="num">18,640</td><td class="num">91.5%</td><td class="num">$20.30</td></tr>
+          <tr><td>Valencia</td><td class="num">16,220</td><td class="num">90.8%</td><td class="num">$21.15</td></tr>
+          <tr><td>Bristol</td><td class="num">14,090</td><td class="num">95.9%</td><td class="num">$17.60</td></tr>
+          <tr><td>Gothenburg</td><td class="num">11,360</td><td class="num">97.3%</td><td class="num">$16.85</td></tr>
+          <tr><td>Tallinn</td><td class="num">8,740</td><td class="num">89.4%</td><td class="num">$22.40</td></tr>
+          <tr><td>Porto</td><td class="num">6,480</td><td class="num">93.1%</td><td class="num">$19.95</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="top5">
+    <h2 class="label">Top five by volume</h2>
+    <div class="card bars">
+      <div class="bar-row"><span class="bar-name">Rotterdam</span><span class="bar-track"><span class="bar" style="width:100%"></span></span><span class="bar-val">48,210</span></div>
+      <div class="bar-row"><span class="bar-name">Hamburg</span><span class="bar-track"><span class="bar" style="width:86.97%"></span></span><span class="bar-val">41,930</span></div>
+      <div class="bar-row"><span class="bar-name">Antwerp</span><span class="bar-track"><span class="bar" style="width:77.74%"></span></span><span class="bar-val">37,480</span></div>
+      <div class="bar-row"><span class="bar-name">Gdansk</span><span class="bar-track"><span class="bar" style="width:45.94%"></span></span><span class="bar-val">22,150</span></div>
+      <div class="bar-row"><span class="bar-name">Lyon</span><span class="bar-track"><span class="bar" style="width:41.22%"></span></span><span class="bar-val">19,870</span></div>
+    </div>
+  </section>
+
+  <footer>Prepared by the Operations Desk</footer>
+</div>
+</body>
+</html>

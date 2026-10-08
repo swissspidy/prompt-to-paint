@@ -52,24 +52,28 @@ The precise definitions are in [docs/METRIC.md](docs/METRIC.md).
 
 ## What it has found so far
 
-Fifty-four runs on two briefs, across Claude Code and Pi
+Fifty-four published runs on two briefs, across Claude Code and Pi
 driving Claude, GPT and Gemini models. Full write-ups are in
 [docs/FINDINGS.md](docs/FINDINGS.md).
 
 - **Agents don't render progressively, even when told to.** Every agent is
   told that a browser is watching and that a rough early page counts for more
-  than a perfect late one. In 29 of the 30 published runs the page still went
-  from blank to finished in one step. The agent event logs show why: the model
+  than a perfect late one. In 41 of the 42 published runs given that
+  instruction, the page still went from blank to finished in one step. The agent event logs show why: the model
   composes the whole page and saves it in a single file write, so the browser
   only ever sees "nothing" and "done".
-- **Telling them that does nothing measurable.** Dropping the instruction
+- **The instruction to render early does nothing measurable.** Dropping it
   changed AUC by less than ±0.01, well inside run-to-run noise.
-- **Telling them *how* does.** SKELETON_FIRST_SUMMARY
+- **Telling them *how* does, at a price.** Told to save a bare skeleton first
+  and then one section per save, 12 of 12 runs built the page in four or five
+  visible stages, and first render came 1.4–2.6x sooner. The finished page
+  came about twice as late, though, so area under the curve went up for one
+  agent of four. The step was a habit, not a limit.
 - **Model generation is the whole wait.** With the toolchain taken out of the
   agent's hands, model time was over 99% of every run.
 - **Follow-up edits are an order of magnitude faster than the first render.**
   Most landed in 2–3s with a single tool call.
-- **The rubric saturates.** Every run on both published briefs scored 1.00. Once
+- **The rubric saturates.** Every run told to render early scored 1.00. Once
   each criterion is met, the score can't tell a better page from a worse one.
   `p2p pairwise` compares consecutive states directly. On the dashboard, none
   of the eight changes agents made after their first render was judged an
