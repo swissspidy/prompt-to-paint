@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Skeleton first vs told to render early: time to first render</title>
+<style>
+:root { color-scheme: light; --surface-0:#f6f5f2; --surface-1:#fcfcfb; --border:#e2e1dc;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77756f; --grid:#e8e7e2;
+  --track:#eeede9; --b1:#86b6ef; --b2:#3987e5; --b3:#184f95; --mark:#0b0b0b; --accent:#eb6834; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+  --surface-0:#111110; --surface-1:#1a1a19; --border:#302f2d; --text-primary:#fff;
+  --text-secondary:#c3c2b7; --text-muted:#8f8e86; --grid:#2a2a28; --track:#232321;
+  --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0:#111110; --surface-1:#1a1a19;
+  --border:#302f2d; --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e86;
+  --grid:#2a2a28; --track:#232321; --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--surface-0); color:var(--text-primary);
+  font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width:1100px; margin:0 auto; padding:28px 16px 64px; }
+h1 { font-size:24px; margin:0 0 4px; letter-spacing:-0.01em; }
+.sub { color:var(--text-secondary); margin:0 0 18px; }
+.panel { background:var(--surface-1); border:1px solid var(--border); border-radius:12px; padding:18px; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin:0 0 14px; font-size:13px; color:var(--text-secondary); }
+.key { display:inline-flex; align-items:center; gap:6px; }
+.sw { width:14px; height:10px; border-radius:3px; display:inline-block; }
+.sw.b0 { background:var(--track); outline:1px solid var(--border); }
+.frkey { width:2px; height:14px; background:var(--mark); display:inline-block; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead th { font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary);
+  font-weight:600; text-align:left; padding:4px 8px 8px; }
+.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; padding:3px 8px; }
+th.num { text-align:right; }
+.ghead th { text-align:left; font-size:14px; font-weight:600; padding:14px 8px 4px;
+  border-top:1px solid var(--border); }
+tbody:first-of-type .ghead th { border-top:0; }
+.rlabel { font-weight:400; color:var(--text-secondary); white-space:nowrap; padding:3px 8px; text-align:left; width:1%; }
+.rep { font-variant-numeric:tabular-nums; }
+.ctag { font-size:11px; padding:1px 7px; border-radius:99px; border:1px solid var(--border);
+  margin-right:6px; color:var(--text-secondary); }
+.ctag.c-staged { border-color:var(--accent); color:var(--text-primary); }
+.trackcell { width:100%; padding:3px 8px; }
+.track { position:relative; height:16px; }
+.seg { position:absolute; top:0; bottom:0; border-right:2px solid var(--surface-1); }
+.seg:first-child { border-radius:4px 0 0 4px; }
+.seg.b0 { background:var(--track); }
+.seg.b1, .sw.b1 { background:var(--b1); }
+.seg.b2, .sw.b2 { background:var(--b2); }
+.seg.b3, .sw.b3 { background:var(--b3); }
+.fr { position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px; background:var(--mark); pointer-events:none; }
+.staged { color:var(--text-primary); font-weight:700; }
+.axis { position:relative; height:18px; }
+.tick { position:absolute; transform:translateX(-50%); font-size:11px; color:var(--text-muted);
+  text-transform:none; letter-spacing:0; font-weight:400; }
+.tick:first-child { transform:none; }
+.tick:last-child { transform:translateX(-100%); }
+.note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+#tip { position:fixed; pointer-events:none; background:var(--surface-1); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.15); display:none; z-index:2; max-width:320px; }
+@media (max-width:640px) {
+  .hide-sm { display:none; }
+  .tick:not(:first-child):not(:last-child) { display:none; }
+  .num, .rlabel, .trackcell, thead th { padding-left:4px; padding-right:4px; }
+  .rlabel { width:auto; }
+}
+</style></head>
+<body><div class="wrap">
+<h1>Skeleton first vs told to render early: time to first render</h1>
+<p class="sub">24 runs. 12 of them put a partial page on screen before the finished one; the other 12 went from nothing to their final page in one step.</p>
+<section class="panel">
+<div class="legend"><span class="key"><span class="sw b0"></span>Nothing scoreable on screen</span><span class="key"><span class="sw b1"></span>Under half the brief</span><span class="key"><span class="sw b2"></span>Half or more</span><span class="key"><span class="sw b3"></span>The whole brief</span><span class="key"><span class="frkey"></span>First render</span></div>
+<table>
+<thead><tr><th></th><th><div class="axis"><span class="tick" style="left:0.000%">0s</span><span class="tick" style="left:12.500%">30s</span><span class="tick" style="left:25.000%">60s</span><span class="tick" style="left:37.500%">90s</span><span class="tick" style="left:50.000%">120s</span><span class="tick" style="left:62.500%">150s</span><span class="tick" style="left:75.000%">180s</span><span class="tick" style="left:87.500%">210s</span><span class="tick" style="left:100.000%">240s</span></div></th>
+<th class="num">First<span class="hide-sm"> render</span></th><th class="num hide-sm">Whole brief</th><th class="num">Stages</th></tr></thead>
+<tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-sonnet-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 1: first render 19.9s, whole brief 19.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:8.299%" data-tip="cc-sonnet-5.5 (told), run 1: 0.0s–19.9s, score 0.00"></span><span class="seg b3" style="left:8.299%;width:6.507%" data-tip="cc-sonnet-5.5 (told), run 1: 19.9s–35.5s, score 1.00"></span><span class="fr" style="left:8.299%" aria-hidden="true"></span></div></td>
+  <td class="num">19.9s</td><td class="num hide-sm">19.9s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 2: first render 24.9s, whole brief 24.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:10.374%" data-tip="cc-sonnet-5.5 (told), run 2: 0.0s–24.9s, score 0.00"></span><span class="seg b3" style="left:10.374%;width:6.208%" data-tip="cc-sonnet-5.5 (told), run 2: 24.9s–39.8s, score 1.00"></span><span class="fr" style="left:10.374%" aria-hidden="true"></span></div></td>
+  <td class="num">24.9s</td><td class="num hide-sm">24.9s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 3: first render 19.6s, whole brief 19.6s, 1 stage"><span class="seg b0" style="left:0.000%;width:8.151%" data-tip="cc-sonnet-5.5 (told), run 3: 0.0s–19.6s, score 0.00"></span><span class="seg b3" style="left:8.151%;width:6.295%" data-tip="cc-sonnet-5.5 (told), run 3: 19.6s–34.7s, score 1.00"></span><span class="fr" style="left:8.151%" aria-hidden="true"></span></div></td>
+  <td class="num">19.6s</td><td class="num hide-sm">19.6s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 1: first render 7.5s, whole brief 37.8s, 4 stages"><span class="seg b0" style="left:0.000%;width:3.107%" data-tip="cc-sonnet-5.5 (skeleton first), run 1: 0.0s–7.5s, score 0.00"></span><span class="seg b1" style="left:3.107%;width:5.103%" data-tip="cc-sonnet-5.5 (skeleton first), run 1: 7.5s–19.7s, score 0.14"></span><span class="seg b1" style="left:8.211%;width:2.986%" data-tip="cc-sonnet-5.5 (skeleton first), run 1: 19.7s–26.9s, score 0.43"></span><span class="seg b2" style="left:11.197%;width:4.538%" data-tip="cc-sonnet-5.5 (skeleton first), run 1: 26.9s–37.8s, score 0.79"></span><span class="seg b3" style="left:15.735%;width:6.413%" data-tip="cc-sonnet-5.5 (skeleton first), run 1: 37.8s–53.2s, score 1.00"></span><span class="fr" style="left:3.107%" aria-hidden="true"></span></div></td>
+  <td class="num">7.5s</td><td class="num hide-sm">37.8s</td>
+  <td class="num staged">4</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 2: first render 7.5s, whole brief 55.8s, 5 stages"><span class="seg b0" style="left:0.000%;width:3.130%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 0.0s–7.5s, score 0.00"></span><span class="seg b1" style="left:3.130%;width:6.060%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 7.5s–22.1s, score 0.14"></span><span class="seg b1" style="left:9.190%;width:4.955%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 22.1s–34.0s, score 0.43"></span><span class="seg b2" style="left:14.146%;width:2.009%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 34.0s–38.8s, score 0.79"></span><span class="seg b2" style="left:16.155%;width:7.106%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 38.8s–55.8s, score 0.93"></span><span class="seg b3" style="left:23.261%;width:0.400%" data-tip="cc-sonnet-5.5 (skeleton first), run 2: 55.8s–56.8s, score 1.00"></span><span class="fr" style="left:3.130%" aria-hidden="true"></span></div></td>
+  <td class="num">7.5s</td><td class="num hide-sm">55.8s</td>
+  <td class="num staged">5</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 3: first render 8.7s, whole brief 50.9s, 5 stages"><span class="seg b0" style="left:0.000%;width:3.637%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 0.0s–8.7s, score 0.00"></span><span class="seg b1" style="left:3.637%;width:7.464%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 8.7s–26.6s, score 0.14"></span><span class="seg b1" style="left:11.102%;width:2.510%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 26.6s–32.7s, score 0.43"></span><span class="seg b2" style="left:13.612%;width:1.002%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 32.7s–35.1s, score 0.79"></span><span class="seg b2" style="left:14.614%;width:6.611%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 35.1s–50.9s, score 0.93"></span><span class="seg b3" style="left:21.225%;width:0.097%" data-tip="cc-sonnet-5.5 (skeleton first), run 3: 50.9s–51.2s, score 1.00"></span><span class="fr" style="left:3.637%" aria-hidden="true"></span></div></td>
+  <td class="num">8.7s</td><td class="num hide-sm">50.9s</td>
+  <td class="num staged">5</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-opus-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 1: first render 31.1s, whole brief 31.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:12.939%" data-tip="cc-opus-5.5 (told), run 1: 0.0s–31.1s, score 0.00"></span><span class="seg b3" style="left:12.939%;width:6.542%" data-tip="cc-opus-5.5 (told), run 1: 31.1s–46.8s, score 1.00"></span><span class="fr" style="left:12.939%" aria-hidden="true"></span></div></td>
+  <td class="num">31.1s</td><td class="num hide-sm">31.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 2: first render 36.9s, whole brief 36.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:15.391%" data-tip="cc-opus-5.5 (told), run 2: 0.0s–36.9s, score 0.00"></span><span class="seg b3" style="left:15.391%;width:6.921%" data-tip="cc-opus-5.5 (told), run 2: 36.9s–53.5s, score 1.00"></span><span class="fr" style="left:15.391%" aria-hidden="true"></span></div></td>
+  <td class="num">36.9s</td><td class="num hide-sm">36.9s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 3: first render 33.0s, whole brief 33.0s, 1 stage"><span class="seg b0" style="left:0.000%;width:13.745%" data-tip="cc-opus-5.5 (told), run 3: 0.0s–33.0s, score 0.00"></span><span class="seg b3" style="left:13.745%;width:6.797%" data-tip="cc-opus-5.5 (told), run 3: 33.0s–49.3s, score 1.00"></span><span class="fr" style="left:13.745%" aria-hidden="true"></span></div></td>
+  <td class="num">33.0s</td><td class="num hide-sm">33.0s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 1: first render 16.6s, whole brief 62.6s, 5 stages"><span class="seg b0" style="left:0.000%;width:6.923%" data-tip="cc-opus-5.5 (skeleton first), run 1: 0.0s–16.6s, score 0.00"></span><span class="seg b1" style="left:6.923%;width:3.530%" data-tip="cc-opus-5.5 (skeleton first), run 1: 16.6s–25.1s, score 0.29"></span><span class="seg b1" style="left:10.453%;width:2.532%" data-tip="cc-opus-5.5 (skeleton first), run 1: 25.1s–31.2s, score 0.43"></span><span class="seg b2" style="left:12.985%;width:5.593%" data-tip="cc-opus-5.5 (skeleton first), run 1: 31.2s–44.6s, score 0.79"></span><span class="seg b2" style="left:18.579%;width:7.518%" data-tip="cc-opus-5.5 (skeleton first), run 1: 44.6s–62.6s, score 0.93"></span><span class="seg b3" style="left:26.097%;width:0.003%" data-tip="cc-opus-5.5 (skeleton first), run 1: 62.6s–62.6s, score 1.00"></span><span class="fr" style="left:6.923%" aria-hidden="true"></span></div></td>
+  <td class="num">16.6s</td><td class="num hide-sm">62.6s</td>
+  <td class="num staged">5</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 2: first render 13.7s, whole brief 40.1s, 4 stages"><span class="seg b0" style="left:0.000%;width:5.701%" data-tip="cc-opus-5.5 (skeleton first), run 2: 0.0s–13.7s, score 0.00"></span><span class="seg b1" style="left:5.701%;width:3.995%" data-tip="cc-opus-5.5 (skeleton first), run 2: 13.7s–23.3s, score 0.36"></span><span class="seg b2" style="left:9.696%;width:2.505%" data-tip="cc-opus-5.5 (skeleton first), run 2: 23.3s–29.3s, score 0.50"></span><span class="seg b2" style="left:12.201%;width:4.516%" data-tip="cc-opus-5.5 (skeleton first), run 2: 29.3s–40.1s, score 0.86"></span><span class="seg b3" style="left:16.717%;width:7.336%" data-tip="cc-opus-5.5 (skeleton first), run 2: 40.1s–57.7s, score 1.00"></span><span class="fr" style="left:5.701%" aria-hidden="true"></span></div></td>
+  <td class="num">13.7s</td><td class="num hide-sm">40.1s</td>
+  <td class="num staged">4</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 3: first render 12.7s, whole brief 57.7s, 5 stages"><span class="seg b0" style="left:0.000%;width:5.298%" data-tip="cc-opus-5.5 (skeleton first), run 3: 0.0s–12.7s, score 0.00"></span><span class="seg b1" style="left:5.298%;width:4.040%" data-tip="cc-opus-5.5 (skeleton first), run 3: 12.7s–22.4s, score 0.14"></span><span class="seg b1" style="left:9.338%;width:4.088%" data-tip="cc-opus-5.5 (skeleton first), run 3: 22.4s–32.2s, score 0.43"></span><span class="seg b2" style="left:13.426%;width:3.068%" data-tip="cc-opus-5.5 (skeleton first), run 3: 32.2s–39.6s, score 0.79"></span><span class="seg b2" style="left:16.494%;width:7.552%" data-tip="cc-opus-5.5 (skeleton first), run 3: 39.6s–57.7s, score 0.93"></span><span class="seg b3" style="left:24.046%;width:0.137%" data-tip="cc-opus-5.5 (skeleton first), run 3: 57.7s–58.0s, score 1.00"></span><span class="fr" style="left:5.298%" aria-hidden="true"></span></div></td>
+  <td class="num">12.7s</td><td class="num hide-sm">57.7s</td>
+  <td class="num staged">5</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gpt-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 1: first render 28.4s, whole brief 28.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:11.816%" data-tip="pi-gpt-5.5 (told), run 1: 0.0s–28.4s, score 0.00"></span><span class="seg b3" style="left:11.816%;width:7.009%" data-tip="pi-gpt-5.5 (told), run 1: 28.4s–45.2s, score 1.00"></span><span class="fr" style="left:11.816%" aria-hidden="true"></span></div></td>
+  <td class="num">28.4s</td><td class="num hide-sm">28.4s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 2: first render 27.1s, whole brief 27.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:11.285%" data-tip="pi-gpt-5.5 (told), run 2: 0.0s–27.1s, score 0.00"></span><span class="seg b3" style="left:11.285%;width:6.698%" data-tip="pi-gpt-5.5 (told), run 2: 27.1s–43.2s, score 1.00"></span><span class="fr" style="left:11.285%" aria-hidden="true"></span></div></td>
+  <td class="num">27.1s</td><td class="num hide-sm">27.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 3: first render 30.6s, whole brief 30.6s, 1 stage"><span class="seg b0" style="left:0.000%;width:12.769%" data-tip="pi-gpt-5.5 (told), run 3: 0.0s–30.6s, score 0.00"></span><span class="seg b3" style="left:12.769%;width:6.725%" data-tip="pi-gpt-5.5 (told), run 3: 30.6s–46.8s, score 1.00"></span><span class="fr" style="left:12.769%" aria-hidden="true"></span></div></td>
+  <td class="num">30.6s</td><td class="num hide-sm">30.6s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 1: first render 27.5s, whole brief 54.1s, 4 stages"><span class="seg b0" style="left:0.000%;width:11.461%" data-tip="pi-gpt-5.5 (skeleton first), run 1: 0.0s–27.5s, score 0.00"></span><span class="seg b1" style="left:11.461%;width:1.298%" data-tip="pi-gpt-5.5 (skeleton first), run 1: 27.5s–30.6s, score 0.29"></span><span class="seg b1" style="left:12.759%;width:4.980%" data-tip="pi-gpt-5.5 (skeleton first), run 1: 30.6s–42.6s, score 0.43"></span><span class="seg b2" style="left:17.739%;width:4.808%" data-tip="pi-gpt-5.5 (skeleton first), run 1: 42.6s–54.1s, score 0.79"></span><span class="seg b3" style="left:22.547%;width:7.397%" data-tip="pi-gpt-5.5 (skeleton first), run 1: 54.1s–71.9s, score 1.00"></span><span class="fr" style="left:11.461%" aria-hidden="true"></span></div></td>
+  <td class="num">27.5s</td><td class="num hide-sm">54.1s</td>
+  <td class="num staged">4</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 2: first render 20.9s, whole brief 72.0s, 5 stages"><span class="seg b0" style="left:0.000%;width:8.709%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 0.0s–20.9s, score 0.00"></span><span class="seg b1" style="left:8.709%;width:1.189%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 20.9s–23.8s, score 0.29"></span><span class="seg b1" style="left:9.898%;width:2.305%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 23.8s–29.3s, score 0.43"></span><span class="seg b2" style="left:12.202%;width:1.720%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 29.3s–33.4s, score 0.79"></span><span class="seg b2" style="left:13.922%;width:16.082%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 33.4s–72.0s, score 0.93"></span><span class="seg b3" style="left:30.005%;width:0.422%" data-tip="pi-gpt-5.5 (skeleton first), run 2: 72.0s–73.0s, score 1.00"></span><span class="fr" style="left:8.709%" aria-hidden="true"></span></div></td>
+  <td class="num">20.9s</td><td class="num hide-sm">72.0s</td>
+  <td class="num staged">5</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 3: first render 12.5s, whole brief --, 4 stages"><span class="seg b0" style="left:0.000%;width:5.192%" data-tip="pi-gpt-5.5 (skeleton first), run 3: 0.0s–12.5s, score 0.00"></span><span class="seg b1" style="left:5.192%;width:2.938%" data-tip="pi-gpt-5.5 (skeleton first), run 3: 12.5s–19.5s, score 0.14"></span><span class="seg b1" style="left:8.130%;width:3.440%" data-tip="pi-gpt-5.5 (skeleton first), run 3: 19.5s–27.8s, score 0.43"></span><span class="seg b2" style="left:11.571%;width:12.682%" data-tip="pi-gpt-5.5 (skeleton first), run 3: 27.8s–58.2s, score 0.79"></span><span class="seg b2" style="left:24.253%;width:0.436%" data-tip="pi-gpt-5.5 (skeleton first), run 3: 58.2s–59.3s, score 0.86"></span><span class="fr" style="left:5.192%" aria-hidden="true"></span></div></td>
+  <td class="num">12.5s</td><td class="num hide-sm">--</td>
+  <td class="num staged">4</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gemini-3.8-flash</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 1: first render 44.0s, whole brief 44.0s, 1 stage"><span class="seg b0" style="left:0.000%;width:18.332%" data-tip="pi-gemini-3.8-flash (told), run 1: 0.0s–44.0s, score 0.00"></span><span class="seg b3" style="left:18.332%;width:69.802%" data-tip="pi-gemini-3.8-flash (told), run 1: 44.0s–211.5s, score 1.00"></span><span class="fr" style="left:18.332%" aria-hidden="true"></span></div></td>
+  <td class="num">44.0s</td><td class="num hide-sm">44.0s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 2: first render 45.1s, whole brief 45.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:18.775%" data-tip="pi-gemini-3.8-flash (told), run 2: 0.0s–45.1s, score 0.00"></span><span class="seg b3" style="left:18.775%;width:32.128%" data-tip="pi-gemini-3.8-flash (told), run 2: 45.1s–122.2s, score 1.00"></span><span class="fr" style="left:18.775%" aria-hidden="true"></span></div></td>
+  <td class="num">45.1s</td><td class="num hide-sm">45.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-prompted">told</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 3: first render 45.3s, whole brief 45.3s, 1 stage"><span class="seg b0" style="left:0.000%;width:18.891%" data-tip="pi-gemini-3.8-flash (told), run 3: 0.0s–45.3s, score 0.00"></span><span class="seg b3" style="left:18.891%;width:29.448%" data-tip="pi-gemini-3.8-flash (told), run 3: 45.3s–116.0s, score 1.00"></span><span class="fr" style="left:18.891%" aria-hidden="true"></span></div></td>
+  <td class="num">45.3s</td><td class="num hide-sm">45.3s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 1: first render 19.9s, whole brief 112.2s, 5 stages"><span class="seg b0" style="left:0.000%;width:8.292%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 0.0s–19.9s, score 0.00"></span><span class="seg b1" style="left:8.292%;width:11.970%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 19.9s–48.6s, score 0.29"></span><span class="seg b1" style="left:20.262%;width:5.460%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 48.6s–61.7s, score 0.43"></span><span class="seg b2" style="left:25.722%;width:4.062%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 61.7s–71.5s, score 0.79"></span><span class="seg b2" style="left:29.784%;width:16.954%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 71.5s–112.2s, score 0.93"></span><span class="seg b3" style="left:46.737%;width:0.231%" data-tip="pi-gemini-3.8-flash (skeleton first), run 1: 112.2s–112.7s, score 1.00"></span><span class="fr" style="left:8.292%" aria-hidden="true"></span></div></td>
+  <td class="num">19.9s</td><td class="num hide-sm">112.2s</td>
+  <td class="num staged">5</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 2: first render 28.3s, whole brief 89.7s, 4 stages"><span class="seg b0" style="left:0.000%;width:11.797%" data-tip="pi-gemini-3.8-flash (skeleton first), run 2: 0.0s–28.3s, score 0.00"></span><span class="seg b1" style="left:11.797%;width:5.028%" data-tip="pi-gemini-3.8-flash (skeleton first), run 2: 28.3s–40.4s, score 0.29"></span><span class="seg b2" style="left:16.825%;width:6.947%" data-tip="pi-gemini-3.8-flash (skeleton first), run 2: 40.4s–57.1s, score 0.50"></span><span class="seg b2" style="left:23.772%;width:13.590%" data-tip="pi-gemini-3.8-flash (skeleton first), run 2: 57.1s–89.7s, score 0.86"></span><span class="seg b3" style="left:37.361%;width:20.973%" data-tip="pi-gemini-3.8-flash (skeleton first), run 2: 89.7s–140.0s, score 1.00"></span><span class="fr" style="left:11.797%" aria-hidden="true"></span></div></td>
+  <td class="num">28.3s</td><td class="num hide-sm">89.7s</td>
+  <td class="num staged">4</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="ctag c-staged">skeleton first</span><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 3: first render 16.1s, whole brief 71.5s, 5 stages"><span class="seg b0" style="left:0.000%;width:6.717%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 0.0s–16.1s, score 0.00"></span><span class="seg b1" style="left:6.717%;width:4.002%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 16.1s–25.7s, score 0.07"></span><span class="seg b1" style="left:10.719%;width:4.915%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 25.7s–37.5s, score 0.43"></span><span class="seg b2" style="left:15.635%;width:3.516%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 37.5s–46.0s, score 0.79"></span><span class="seg b2" style="left:19.151%;width:10.653%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 46.0s–71.5s, score 0.93"></span><span class="seg b3" style="left:29.804%;width:0.492%" data-tip="pi-gemini-3.8-flash (skeleton first), run 3: 71.5s–72.7s, score 1.00"></span><span class="fr" style="left:6.717%" aria-hidden="true"></span></div></td>
+  <td class="num">16.1s</td><td class="num hide-sm">71.5s</td>
+  <td class="num staged">5</td></tr></tbody>
+</table>
+<p class="note">Each bar is one run, from the prompt to the moment the run ended (where the bar stops), shaded by how much of the
+brief the judge could see on screen. Agents are ordered by median first render. <b>Stages</b> counts the
+distinct scores the page passed through: 1 means it went from nothing to its final page in a single step.</p>
+</section>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+const tip = document.getElementById('tip');
+document.addEventListener('pointermove', (e) => {
+  const t = e.target.closest && e.target.closest('[data-tip]');
+  if (!t) { tip.style.display = 'none'; return; }
+  tip.textContent = t.dataset.tip;
+  tip.style.display = 'block';
+  const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px';
+  tip.style.top = (e.clientY + 14) + 'px';
+});
+</script>
+</body></html>

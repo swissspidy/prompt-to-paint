@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Logistics – Q3 2026 Operations Review</title>
+<style>
+:root{--bg:#0f1720;--panel:#17222f;--line:#263546;--text:#e8eef5;--mute:#8da0b4;--accent:#4aa3ff;--good:#3ecf8e;--bad:#ff7a6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:48px 32px 40px}
+header{margin-bottom:36px;border-bottom:1px solid var(--line);padding-bottom:24px}
+h1{margin:0;color:var(--accent);font-size:40px;line-height:1.1;letter-spacing:-.02em}
+.sub{margin:6px 0 0;color:var(--mute);font-size:18px}
+section{margin-bottom:40px}
+h2{margin:0 0 16px;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 22px}
+.tile .label{color:var(--mute);font-size:14px}
+.tile .val{font-size:40px;font-weight:700;margin:6px 0 4px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tile .val small{font-size:20px;font-weight:500;color:var(--mute);margin-left:4px}
+.tile .chg{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile .chg span{color:var(--mute);font-weight:400}
+.good{color:var(--good)}.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-variant-numeric:tabular-nums}
+th,td{padding:12px 22px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);font-weight:600;background:#1b2a3a}
+td{font-size:18px}
+td:first-child{font-weight:600}
+tr:last-child td{border-bottom:0}
+.bars{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 22px}
+.row{display:grid;grid-template-columns:120px 1fr 90px;align-items:center;gap:20px;padding:10px 0}
+.row .n{font-weight:600;font-size:18px}
+.row .v{text-align:right;font-variant-numeric:tabular-nums;font-size:18px}
+.track{height:18px;background:#101a24;border-radius:4px}
+.fill{height:100%;background:linear-gradient(90deg,#2b7fd6,var(--accent));border-radius:4px}
+footer{color:var(--mute);font-size:14px;border-top:1px solid var(--line);padding-top:20px}
+@media(max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.tiles{grid-template-columns:1fr}.wrap{padding:28px 16px}th,td{padding:10px 12px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>Northwind Logistics</h1>
+    <p class="sub">Q3 2026 Operations Review</p>
+  </header>
+  <section id="kpis"><div class="tiles">
+    <div class="tile"><div class="label">On-time delivery</div><div class="val">94.2%</div><div class="chg good">▲ +1.8 pts <span>vs Q2</span></div></div>
+    <div class="tile"><div class="label">Average transit</div><div class="val">3.4<small>days</small></div><div class="chg good">▼ −0.2 days <span>vs Q2</span></div></div>
+    <div class="tile"><div class="label">Cost per shipment</div><div class="val">$18.40</div><div class="chg bad">▲ +$0.60 <span>vs Q2</span></div></div>
+    <div class="tile"><div class="label">Damage rate</div><div class="val">0.7%</div><div class="chg good">▼ −0.1 pts <span>vs Q2</span></div></div>
+  </div></section>
+  <section id="depots"><h2>Depots</h2>
+  <table>
+    <thead><tr><th>Depot</th><th>Shipments</th><th>On-time</th><th>Cost/shipment</th></tr></thead>
+    <tbody>
+      <tr><td>Rotterdam</td><td>48,210</td><td>96.1%</td><td>$16.20</td></tr>
+      <tr><td>Hamburg</td><td>41,930</td><td>95.4%</td><td>$17.05</td></tr>
+      <tr><td>Antwerp</td><td>37,480</td><td>93.8%</td><td>$17.80</td></tr>
+      <tr><td>Gdansk</td><td>22,150</td><td>92.2%</td><td>$19.40</td></tr>
+      <tr><td>Lyon</td><td>19,870</td><td>94.7%</td><td>$18.10</td></tr>
+      <tr><td>Milan</td><td>18,640</td><td>91.5%</td><td>$20.30</td></tr>
+      <tr><td>Valencia</td><td>16,220</td><td>90.8%</td><td>$21.15</td></tr>
+      <tr><td>Bristol</td><td>14,090</td><td>95.9%</td><td>$17.60</td></tr>
+      <tr><td>Gothenburg</td><td>11,360</td><td>97.3%</td><td>$16.85</td></tr>
+      <tr><td>Tallinn</td><td>8,740</td><td>89.4%</td><td>$22.40</td></tr>
+      <tr><td>Porto</td><td>6,480</td><td>93.1%</td><td>$19.95</td></tr>
+    </tbody>
+  </table></section>
+  <section id="top5"><h2>Top five by volume</h2>
+  <div class="bars">
+    <div class="row"><span class="n">Rotterdam</span><div class="track"><div class="fill" style="width:100%"></div></div><span class="v">48,210</span></div>
+    <div class="row"><span class="n">Hamburg</span><div class="track"><div class="fill" style="width:86.97%"></div></div><span class="v">41,930</span></div>
+    <div class="row"><span class="n">Antwerp</span><div class="track"><div class="fill" style="width:77.75%"></div></div><span class="v">37,480</span></div>
+    <div class="row"><span class="n">Gdansk</span><div class="track"><div class="fill" style="width:45.94%"></div></div><span class="v">22,150</span></div>
+    <div class="row"><span class="n">Lyon</span><div class="track"><div class="fill" style="width:41.22%"></div></div><span class="v">19,870</span></div>
+  </div></section>
+  <footer>Prepared by the Operations Desk</footer>
+</main>
+</body>
+</html>

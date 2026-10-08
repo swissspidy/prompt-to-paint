@@ -33,11 +33,19 @@ const STEP_MARK: Record<-1 | 0 | 1, string> = { 1: '▲', 0: '●', [-1]: '▼' 
 const STEP_WORD: Record<-1 | 0 | 1, string> = { 1: 'better', 0: 'about the same', [-1]: 'worse' };
 
 /** Which experiment a run belongs to. */
-export type Condition = 'prompted' | 'unprompted';
+export type Condition = 'prompted' | 'staged' | 'unprompted';
 
 export const CONDITION_LABEL: Record<Condition, string> = {
   prompted: 'Told the clock is running',
+  staged: 'Told to save a skeleton first, then one section per save',
   unprompted: 'Not told (unprompted behaviour)',
+};
+
+/** The short form, for tags beside a run's name. */
+export const CONDITION_TAG: Record<Condition, string> = {
+  prompted: 'told',
+  staged: 'skeleton first',
+  unprompted: 'not told',
 };
 
 /**
@@ -47,6 +55,7 @@ export const CONDITION_LABEL: Record<Condition, string> = {
  * an absent field means prompted rather than unknown.
  */
 export function conditionOf(r: RunResult): Condition {
+  if (r.protocol?.skeletonFirst) return 'staged';
   return r.protocol?.renderEarly === false ? 'unprompted' : 'prompted';
 }
 
@@ -67,7 +76,7 @@ export interface OrderedRow {
  * meaningful, and the prompt effect below is where the two meet.
  */
 export function orderByCondition(runs: RunResult[]): OrderedRow[] {
-  const order: Condition[] = ['prompted', 'unprompted'];
+  const order: Condition[] = ['prompted', 'staged', 'unprompted'];
   const rows: OrderedRow[] = [];
   for (const condition of order) {
     const picked = runs
@@ -80,6 +89,45 @@ export function orderByCondition(runs: RunResult[]): OrderedRow[] {
   }
   return rows;
 }
+
+/**
+ * A paired comparison between two conditions: the same agents measured with
+ * one instruction (`treatment`) and with another (`baseline`).
+ *
+ * `PromptEffect`'s fields keep the names of the first comparison this was
+ * built for -- told versus not told -- so "prompted" reads as the treatment
+ * and "unprompted" as the baseline in every comparison.
+ */
+export interface Comparison {
+  treatment: Condition;
+  baseline: Condition;
+  title: string;
+  /** What the two columns are called. */
+  withLabel: string;
+  withoutLabel: string;
+  note: string;
+}
+
+export const COMPARISONS: Comparison[] = [
+  {
+    treatment: 'prompted', baseline: 'unprompted',
+    title: 'What the instruction was worth', withLabel: 'told', withoutLabel: 'not told',
+    note: 'Paired: the same agent on the same brief, with one difference &mdash; whether the ' +
+      'protocol asked for an early rough render. Positive means the instruction helped. A delta near zero ' +
+      'is the more interesting result, because it says the ranking would look the same without the ' +
+      'instruction; a large one says the agent can render early but does not think to. The rankings ' +
+      'above are separate on purpose and must not be read as one table.',
+  },
+  {
+    treatment: 'staged', baseline: 'prompted',
+    title: 'What naming the stages was worth', withLabel: 'skeleton', withoutLabel: 'told',
+    note: 'Paired: the same agent on the same brief, told to render early either way, with one ' +
+      'difference &mdash; whether it was also told how: a skeleton save first, then one section per save. ' +
+      'Positive means the skeleton instruction helped. First render and area under the curve can move ' +
+      'in opposite directions here: an early skeleton scores little, and every extra save is another ' +
+      'model turn before the page is complete.',
+  },
+];
 
 export interface PromptEffect {
   label: string;
@@ -122,24 +170,24 @@ function pairingKey(r: RunResult): string {
  * one of the two underlying numbers is better when larger and the other when
  * smaller. Repeats collapse to their median -- one run is not a measurement.
  */
-export function promptEffects(runs: RunResult[]): PromptEffect[] {
+export function promptEffects(runs: RunResult[], cmp: Comparison = COMPARISONS[0]!): PromptEffect[] {
   const cells = new Map<string, Record<Condition, RunResult[]>>();
   for (const r of runs) {
-    const cell = cells.get(pairingKey(r)) ?? { prompted: [], unprompted: [] };
+    const cell = cells.get(pairingKey(r)) ?? { prompted: [], staged: [], unprompted: [] };
     cell[conditionOf(r)].push(r);
     cells.set(pairingKey(r), cell);
   }
 
   const effects: PromptEffect[] = [];
   for (const [label, cell] of cells) {
-    if (!cell.prompted.length || !cell.unprompted.length) continue;
-    const aucP = spread(cell.prompted.map((r) => r.curve.auc)).median ?? 0;
-    const aucU = spread(cell.unprompted.map((r) => r.curve.auc)).median ?? 0;
-    const tP = spread(cell.prompted.map((r) => r.curve.ttfnbrMs)).median;
-    const tU = spread(cell.unprompted.map((r) => r.curve.ttfnbrMs)).median;
+    if (!cell[cmp.treatment].length || !cell[cmp.baseline].length) continue;
+    const aucP = spread(cell[cmp.treatment].map((r) => r.curve.auc)).median ?? 0;
+    const aucU = spread(cell[cmp.baseline].map((r) => r.curve.auc)).median ?? 0;
+    const tP = spread(cell[cmp.treatment].map((r) => r.curve.ttfnbrMs)).median;
+    const tU = spread(cell[cmp.baseline].map((r) => r.curve.ttfnbrMs)).median;
     effects.push({
       label,
-      runs: { prompted: cell.prompted.length, unprompted: cell.unprompted.length },
+      runs: { prompted: cell[cmp.treatment].length, unprompted: cell[cmp.baseline].length },
       aucPrompted: aucP,
       aucUnprompted: aucU,
       aucDelta: aucP - aucU,
@@ -149,6 +197,11 @@ export function promptEffects(runs: RunResult[]): PromptEffect[] {
     });
   }
   return effects.sort((a, b) => b.aucDelta - a.aucDelta);
+}
+
+/** Every comparison this set of runs can make, with its paired rows. */
+export function effectsByComparison(runs: RunResult[]): Array<{ cmp: Comparison; effects: PromptEffect[] }> {
+  return COMPARISONS.map((cmp) => ({ cmp, effects: promptEffects(runs, cmp) })).filter((e) => e.effects.length);
 }
 
 export interface LeaderboardTrack {
@@ -360,7 +413,7 @@ export function renderLeaderboard(
   // when several runs share a label.
   const rows = orderByCondition(runs);
   const ranked = rows.map((row) => row.ranked);
-  const effects = promptEffects(runs);
+  const effectSets = effectsByComparison(runs);
   const mixed = new Set(rows.map((row) => row.condition)).size > 1;
   const tracks = rows.map((row) => buildTrack(runs[row.index]!, pageDir, opts.runDirs?.[row.index] ?? pageDir));
   const viewMs = opts.fullHorizon ? horizonMs : activeWindowMs(tracks.map((tr) => tr.runEndMs), horizonMs);
@@ -429,7 +482,7 @@ export function renderLeaderboard(
         <span class="rank">${i + 1}</span>
         <span class="plabel" style="color:var(--series-${slot(i)})">${esc(tr.label)}</span>
         <span class="pauc">AUC ${tr.auc.toFixed(3)}</span>${
-        mixed ? `<span class="ctag">${tr.condition === 'prompted' ? 'told' : 'not told'}</span>` : ''
+        mixed ? `<span class="ctag">${CONDITION_TAG[tr.condition]}</span>` : ''
       }
       </figcaption>
       <div class="screen"><img alt="${esc(tr.label)} at the current time" decoding="async"/>
@@ -676,12 +729,12 @@ ${rows
       : ''
   }</p>
 </section>
-${
-    effects.length
-      ? `<section class="panel"><h2>What the instruction was worth</h2>
-<table><thead><tr><th>Run</th><th class="num">AUC told</th><th class="num">AUC not told</th>
-<th class="num">&Delta; AUC</th><th class="num">First render told</th>
-<th class="num">not told</th><th>Effect on first render</th></tr></thead><tbody>
+${effectSets
+    .map(
+      ({ cmp, effects }) => `<section class="panel"><h2>${esc(cmp.title)}</h2>
+<table><thead><tr><th>Run</th><th class="num">AUC ${esc(cmp.withLabel)}</th><th class="num">AUC ${esc(cmp.withoutLabel)}</th>
+<th class="num">&Delta; AUC</th><th class="num">First render ${esc(cmp.withLabel)}</th>
+<th class="num">${esc(cmp.withoutLabel)}</th><th>Effect on first render</th></tr></thead><tbody>
 ${effects
   .map(
     (e) => `<tr>
@@ -697,14 +750,10 @@ ${effects
   )
   .join('')}
 </tbody></table>
-<p class="note">Paired: the same agent on the same brief, with one difference &mdash; whether the
-protocol asked for an early rough render. Positive means the instruction helped. A delta near zero
-is the more interesting result, because it says the ranking would look the same without the
-instruction; a large one says the agent can render early but does not think to. The two rankings
-above are separate on purpose and must not be read as one table.</p>
-</section>`
-      : ''
-  }
+<p class="note">${cmp.note}</p>
+</section>`,
+    )
+    .join('\n')}
 
 </div>
 <script id="tracks" type="application/json">${json(tracks)}</script>
@@ -964,7 +1013,6 @@ above are separate on purpose and must not be read as one table.</p>
 export function renderLeaderboardText(runs: RunResult[]): string {
   assertComparable(runs, { allowMixedConditions: true });
   const rows = orderByCondition(runs);
-  const effects = promptEffects(runs);
   const mixed = new Set(rows.map((row) => row.condition)).size > 1;
   const L: string[] = [''];
 
@@ -990,31 +1038,36 @@ export function renderLeaderboardText(runs: RunResult[]): string {
     );
   }
 
-  if (effects.length) {
+  const present = new Set(rows.map((row) => row.condition));
+  for (const cmp of COMPARISONS) {
+    if (!present.has(cmp.treatment) || !present.has(cmp.baseline)) continue;
+    const effects = promptEffects(runs, cmp);
+    if (!effects.length) {
+      // Both conditions are here and nothing paired. Saying nothing would let a
+      // reader conclude the instruction was worth nothing, when in fact the
+      // comparison was never made.
+      L.push('');
+      L.push(`  ! Runs ${cmp.withLabel} and ${cmp.withoutLabel} are both listed above, but none of them paired up,`);
+      L.push(`    so "${cmp.title.toLowerCase()}" could not be computed. Runs pair on`);
+      L.push('    adapter and model, or on an exact label match for runs that recorded no');
+      L.push('    model. Measure the same agent both ways to get that row.');
+      continue;
+    }
     L.push('');
-    L.push('  What the instruction was worth  (same agent, same brief, told vs not told)');
+    L.push(`  ${cmp.title}  (same agent, same brief, ${cmp.withLabel} vs ${cmp.withoutLabel})`);
     L.push(
-      '  ' + 'run'.padEnd(24) + 'AUC told'.padStart(10) + 'not told'.padStart(10) +
+      '  ' + 'run'.padEnd(24) + `AUC ${cmp.withLabel}`.padStart(13) + cmp.withoutLabel.padStart(10) +
         'delta'.padStart(9) + '  first render',
     );
     L.push('  ' + '-'.repeat(76));
     for (const e of effects) {
       L.push(
-        '  ' + e.label.slice(0, 23).padEnd(24) + e.aucPrompted.toFixed(3).padStart(10) +
+        '  ' + e.label.slice(0, 23).padEnd(24) + e.aucPrompted.toFixed(3).padStart(13) +
           e.aucUnprompted.toFixed(3).padStart(10) + signedAuc(e.aucDelta).padStart(9) +
           '  ' + sooner(e.ttfnbrDeltaMs),
       );
     }
-    L.push('  Positive means the instruction helped.');
-  } else if (mixed) {
-    // Both conditions are here and nothing paired. Saying nothing would let a
-    // reader conclude the instruction was worth nothing, when in fact the
-    // comparison was never made.
-    L.push('');
-    L.push('  ! Runs from both conditions are listed above, but none of them paired up,');
-    L.push('    so "what the instruction was worth" could not be computed. Runs pair on');
-    L.push('    adapter and model, or on an exact label match for runs that recorded no');
-    L.push('    model. Measure the same agent both ways to get that row.');
+    L.push(`  Positive means the ${cmp.withLabel} instruction helped.`);
   }
 
   L.push('');

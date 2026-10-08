@@ -546,6 +546,43 @@ machines pool the same way, subject to the same warnings: a mixed judge, a mixed
 temperature, a mixed viewport, a mixed horizon, or a mix of judged and unjudged
 runs is called out rather than averaged through.
 
+## Where this metric comes from
+
+Area under a quality-over-time curve is not a new idea, and the version here is
+deliberately the old one pointed at a new subject.
+
+- **[Speed Index](https://docs.webpagetest.org/metrics/speedindex/)** (WebPageTest,
+  2012) is the direct ancestor: the area above a *visual completeness* curve,
+  built by filming a page load and scoring each frame. The shape of the metric —
+  film it, score every frame, integrate — is the same one used here.
+
+  The difference is what completeness means. Speed Index scores each frame
+  against **the page's own final state**, so it measures only how quickly a page
+  converged on whatever it was going to be. It cannot tell a fast-rendering
+  correct page from a fast-rendering wrong one, because it has no notion of
+  right. Frames here are scored against **the brief** — an external target fixed
+  before the run — so an agent that paints something instantly and gets it wrong
+  scores badly, where Speed Index would reward it.
+
+- **Anytime algorithms** (Dean & Boddy, 1988; Zilberstein, 1996) are the formal
+  version of the same intuition: a procedure that always has an answer available
+  and improves it given more time is described by its *performance profile*,
+  quality as a function of computation. An agent told to render early and refine
+  is being asked to behave like an anytime algorithm, and this measures its
+  profile.
+
+- **Nielsen's response-time limits** (0.1s, 1s, 10s) are why any of it matters.
+  Past ten seconds attention breaks and the user goes elsewhere. **Almost every run
+  this harness has recorded crosses that limit before the first pixel**, which is the
+  case for measuring the approach to it rather than the end of it.
+
+- **Time to first token**, in LLM serving, is the same instinct one layer down —
+  and its widespread adoption is the argument that this layer deserves one too.
+
+The contribution here is not the integral. It is scoring frames against an
+external rubric rather than against the run's own endpoint, and reporting the
+decomposition of the latency beside the curve.
+
 ## Known limits
 
 - **Poll interval is the resolution floor.** Every latency number carries ±1

@@ -1,0 +1,44 @@
+Create a single self-contained index.html file (inline CSS, no build step, no dependencies, no JavaScript libraries) for an internal operations dashboard.
+
+Heading: "Northwind Logistics" with the subtitle "Q3 2026 Operations Review".
+
+A row of four KPI tiles, each showing the figure and its change against last quarter:
+  On-time delivery  94.2%  (+1.8 pts)
+  Average transit   3.4 days  (-0.2 days)
+  Cost per shipment $18.40  (+$0.60)
+  Damage rate       0.7%  (-0.1 pts)
+
+A depot table with one row per depot and four columns -- Depot, Shipments, On-time, Cost/shipment:
+  Rotterdam   48,210   96.1%   $16.20
+  Hamburg     41,930   95.4%   $17.05
+  Antwerp     37,480   93.8%   $17.80
+  Gdansk      22,150   92.2%   $19.40
+  Lyon        19,870   94.7%   $18.10
+  Milan       18,640   91.5%   $20.30
+  Valencia    16,220   90.8%   $21.15
+  Bristol     14,090   95.9%   $17.60
+  Gothenburg  11,360   97.3%   $16.85
+  Tallinn      8,740   89.4%   $22.40
+
+Below the table, a "Top five by volume" section listing Rotterdam, Hamburg, Antwerp, Gdansk and Lyon with a horizontal bar beside each, drawn in CSS, whose length is proportional to that depot's shipment count.
+
+A footer reading "Prepared by the Operations Desk".
+
+Make it look like a dashboard someone would actually put on a wall: aligned numeric columns, a clear type hierarchy, deliberate spacing.
+
+
+---
+How this run is observed:
+
+- A browser is already open at http://127.0.0.1:5173/ and screenshots it every second, starting
+  now. That URL already serves this directory, so a file you save here is on
+  screen at the next screenshot. Do not start a server: the port is already
+  taken, and every attempt will fail.
+- Build the page in stages, and save after each one. First save a bare skeleton
+  on its own: the heading and an empty placeholder for every section the brief
+  names, before writing any of their content. Then fill in the sections one at
+  a time, each as a separate edit, so every save puts a little more on screen.
+  Do not write the finished page in a single write.
+- When you consider the app done, create an empty file named `.p2p-done` in the
+  project root. That is what stops the clock. Do not create it before the app is
+  on screen.

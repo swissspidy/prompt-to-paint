@@ -556,8 +556,12 @@ export interface RunResult {
    * not record which one it answers cannot be placed next to another.
    *
    * Absent on results written before v0.3; every one of those was prompted.
+   *
+   * `skeletonFirst` means the agent was told how to render early as well --
+   * a skeleton save first, then one section per save -- and is a third
+   * condition. Absent means it was not.
    */
-  protocol?: { renderEarly: boolean };
+  protocol?: { renderEarly: boolean; skeletonFirst?: boolean };
   /** Files and counts produced beside result.json. */
   artifacts?: {
     /** Session recording, when --video was on. */

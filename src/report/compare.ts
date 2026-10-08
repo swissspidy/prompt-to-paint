@@ -206,10 +206,10 @@ export function assertComparable(runs: RunResult[], opts: ComparableOptions = {}
   }
 
   if (!opts.allowMixedConditions) {
-    const conditions = [...new Set(runs.map((r) => (r.protocol?.renderEarly === false ? 'unprompted' : 'prompted')))];
+    const conditions = [...new Set(runs.map((r) => (r.protocol?.skeletonFirst ? 'staged' : r.protocol?.renderEarly === false ? 'unprompted' : 'prompted')))];
     if (conditions.length > 1) {
       throw new IncomparableRunsError(
-        'cannot compare prompted and unprompted runs in one ranking: an agent told that a rough early ' +
+        'cannot compare runs given different protocols in one ranking: an agent told that a rough early ' +
           'page scores better is answering a different question from one that was not. ' +
           'Use `p2p leaderboard`, which ranks within each condition and reports the prompt effect between them.',
       );

@@ -1,21 +1,21 @@
 # prompt-to-paint
 
-Measures how long an agent takes to put something on screen that a human can
-react to — and where that time actually goes.
+Measures how long a coding agent takes to put something on screen that a human
+can react to, and how good it gets over time.
 
-This is not "can it build a working app". Plenty of benchmarks answer that, and
-they all answer it with a single number scored at the end. The question here is
-**first-meaningful-paint for agent output**: how long until there is something to
-look at, and how good it gets, over time.
+Most agent benchmarks score a run once, at the end: did it build a working app?
+This one asks a different question: **first meaningful paint for agent output.**
+How long until there is something to look at, and how does it improve while
+you wait? That is a different metric, and it can produce a different ranking.
 
-That is a different metric, and it produces a different ranking.
+**[Results, with every run replayed side by side →](https://swissspidy.github.io/prompt-to-paint/)**
 
-## The idea
+## How it works
 
-Don't score the run once at the end. Poll a headless browser every second
-during the run, screenshot every frame, and score each frame against the brief.
-What comes out is a **correctness-over-time curve**, and the area under it is the
-headline number.
+A headless browser screenshots the page every second while the agent works. A
+judge model scores each screenshot against the brief, using yes/no criteria
+that can be answered from a screenshot alone. The result is a
+**correctness-over-time curve**. The headline number is the area under it.
 
 ```
 score
@@ -28,255 +28,62 @@ score
         20s                             240s
 ```
 
-Both agents finish at 0.9. Agent A renders something crude at 20s and refines
-it; agent B shows a blank page for four minutes and then nails it. On final
-score they tie. On area under the curve it is **0.787 vs 0.540**, and A wins by
-a lot — because A gave a human something to react to three and a half minutes
-earlier.
+Both agents finish at 0.9. A renders something rough at 20s and refines it. B
+shows a blank page for four minutes and then nails it. On final score they tie.
+On area under the curve A wins, **0.787 to 0.540**, because it gave a person
+something to react to three and a half minutes earlier. That comparison is
+pinned as a test in `test/curve.test.ts`.
 
-That comparison is pinned as a test, not a claim: `test/curve.test.ts`.
+Alongside the curve, every run reports:
 
-### What a frame is scored on
+- **Time to first render**: the first frame that isn't an error page, an empty
+  body or a spinner.
+- **Time to first reviewable render**: the first frame showing enough of what
+  the brief asked for that a person could give useful feedback.
+- **Where the time went**: wall clock split into model thinking, tool calls,
+  dependency install, build, dev-server boot and first paint. Time it can't
+  attribute is reported as unaccounted rather than hidden. `p2p floor` runs the
+  same measurement with no model at all, as a control.
+- **Follow-up edits**: after the first render the harness sends a follow-up
+  ("make the header blue") into the same session and times how long the change
+  takes to appear. An in-page check decides whether it landed, not a judge.
 
-A frame is a **viewport screenshot** — 1280×800 by default, no scrolling — and
-the text inside that same rectangle. The judge is told to credit only what it
-can see, and entity coverage counts only what it could have seen, so "on screen"
-means one thing across the whole metric. `target.viewport` is how a brief says
-how much of the page it means to score.
+The precise definitions are in [docs/METRIC.md](docs/METRIC.md).
 
-### Two numbers fall out of the curve
+## What it has found so far
 
-- **Time to first render** — the first frame that is not an error page, an empty
-  body, or a loading spinner.
-- **Time to first *reviewable* render** — the first frame a human could give
-  useful feedback on. Operationalised as "enough of the things the brief named
-  are on screen", so it is judgeable rather than vibes.
+Fifty-four published runs on two briefs, across Claude Code and Pi
+driving Claude, GPT and Gemini models. Full write-ups are in
+[docs/FINDINGS.md](docs/FINDINGS.md).
 
-### And one that deliberately does not
-
-- **Time to tab title/icon** — the first frame where the browser chrome
-  identified the app, however empty the viewport still was. An app whose
-  `index.html` sets `<title>` and a favicon says "Orbit" in the tab while the
-  page is still a grey rectangle, and that is real evidence to the person
-  waiting that the right thing is starting.
-
-  It is reported beside the render times and **never folded into them**. A
-  titled blank page is still a blank page to someone waiting to react to it, so
-  letting this move a frame's class would change every AUC ever recorded. It is
-  also invisible to the judge by construction: browser chrome is not in the
-  screenshot. A title Chromium derived from the address — what a document with
-  no `<title>` gets — does not count, or every blank page would trip it.
-
-## Does the curve earn its keep?
-
-The headline number is the area under a curve, which is only worth integrating
-if the curve has a shape. An agent that shows a blank page and then the finished
-app draws a **step**, and the area under a step is fixed by two numbers already
-printed beside it:
-
-```
-AUC = finalScore x (1 - timeToFirstRender / horizon)
-```
-
-When that identity holds, ranking on AUC is ranking on those two numbers in a
-trenchcoat. `p2p trajectory` is the self-check:
-
-```bash
-npm run p2p -- trajectory runs/*/result.json
-```
-
-**On the first nine measured runs it held exactly on eight of them.** Three
-Claude models (haiku-4.5, sonnet-5, opus-5), three repeats each, on
-`briefs/static-page.json`, every one told to render early:
-
-```
-    AUC == finalScore x (1 - ttfr/horizon)     8 / 9 runs
-    ever scored at a partial state            1 / 9 runs
-    largest residual                          0.01144
-```
-
-The exception is the interesting one, and it is exactly what the protocol asks
-for: **opus-5 rendered a complete but unstyled page at 6.8s (0.833), then
-styled it in place at 27.4s (1.000).** That run is the only one whose curve has
-a shape, and the metric priced it correctly — it beat a run that first painted
-at 17.8s despite both finishing at 1.00.
-
-So the metric works. Agents just rarely give it anything to work on. **Eight
-times out of nine they went from nothing to finished in one step, having been
-explicitly told not to.**
-
-Two things follow, and they matter more than any ranking this harness has
-produced so far:
-
-- **Report `p2p trajectory` next to any AUC you publish.** A leaderboard whose
-  runs are all steps is a leaderboard of first-render times with extra arithmetic,
-  and should say so rather than let a reader assume otherwise.
-- **The headline finding available here is a negative one.** Not "agent X renders
-  sooner" but "agents do not render progressively, even when told to, and here is
-  the instrument that measures how often." That is a more interesting claim than
-  a ranking, and it is the one the data currently supports.
-
-**What nine runs cannot tell you:** this is one deliberately easy brief where
-eight of nine runs finished at a perfect score, so the ceiling is doing some of
-the work. A harder brief, a shorter horizon, or a stack with a real build step
-could all produce genuine trajectories. The check is cheap — run it on your own
-runs before trusting an AUC ranking.
-
-### Dropping the instruction changes nothing
-
-The same nine runs again with `--no-render-early`, paired by model:
-
-```
-  What the instruction was worth  (same agent, same brief, told vs not told)
-  run                       AUC told  not told    delta  first render
-  ----------------------------------------------------------------------------
-  claude-code:claude-haik      0.963     0.955   +0.008  same
-  claude-code:claude-sonn      0.955     0.952   +0.004  1.1s sooner
-  claude-code:claude-opus      0.941     0.944   −0.003  same
-```
-
-Deltas of ±0.008 against a within-model noise range of up to 0.167. **The
-instruction is worth nothing measurable** — which is the result this comparison
-exists to be able to report, because it means the headline number is measuring
-the agent rather than its instruction-following.
-
-With one caveat that the averages hide: **not told, zero of nine runs rendered
-progressively; told, one did.** The instruction almost never changes behaviour,
-and when it does, it changes it completely.
-
-### Whether the curve has a shape depends on the judge
-
-Re-scoring that one progressive run under a second judge:
-
-| judge | AUC | score levels | its verdict on the 6.8s frame |
-|---|---|---|---|
-| `claude-sonnet-5` | 0.966 | 0, **0.833**, 1.0 | "content complete but page looks like unstyled raw HTML" |
-| `claude-haiku-4-5` | 0.977 | 0, 1.0 | "all criteria met" |
-
-Haiku did not dock the unstyled page for the rubric's `styled` criterion, and
-scoring it 1.00 collapsed the only trajectory in eighteen runs back into a step.
-**Judge strictness decides whether the metric has anything to measure at all** —
-which is the strongest possible argument for the rule that runs scored by
-different judges may not share a table.
-
-Judge *self*-agreement, by contrast, was perfect. Pointing `P2P_CACHE_DIR` at a
-fresh directory defeats the verdict cache and forces real calls, so the same
-judge can be asked the same question twice:
-
-```bash
-P2P_CACHE_DIR=$(mktemp -d) npm run p2p -- rescore runs/some-run --judge anthropic:claude-sonnet-5
-```
-
-Three runs, asked twice each: **identical AUC to four decimal places every
-time**, with only cosmetic rewording between the two verdicts. `claude-sonnet-5`
-refuses a sampling temperature and the harness correctly warns that variance is
-therefore inside the AUC — but on this evidence that variance is theoretical
-rather than observed. The caveat is right to be there and should not be read as
-a measured effect.
-
-## Where this metric comes from
-
-Area under a quality-over-time curve is not a new idea, and the version here is
-deliberately the old one pointed at a new subject.
-
-- **[Speed Index](https://docs.webpagetest.org/metrics/speedindex/)** (WebPageTest,
-  2012) is the direct ancestor: the area above a *visual completeness* curve,
-  built by filming a page load and scoring each frame. The shape of the metric —
-  film it, score every frame, integrate — is the same one used here.
-
-  The difference is what completeness means. Speed Index scores each frame
-  against **the page's own final state**, so it measures only how quickly a page
-  converged on whatever it was going to be. It cannot tell a fast-rendering
-  correct page from a fast-rendering wrong one, because it has no notion of
-  right. Frames here are scored against **the brief** — an external target fixed
-  before the run — so an agent that paints something instantly and gets it wrong
-  scores badly, where Speed Index would reward it.
-
-- **Anytime algorithms** (Dean & Boddy, 1988; Zilberstein, 1996) are the formal
-  version of the same intuition: a procedure that always has an answer available
-  and improves it given more time is described by its *performance profile*,
-  quality as a function of computation. An agent told to render early and refine
-  is being asked to behave like an anytime algorithm, and this measures its
-  profile.
-
-- **Nielsen's response-time limits** (0.1s, 1s, 10s) are why any of it matters.
-  Past ten seconds attention breaks and the user goes elsewhere. **Every run this
-  harness has recorded crosses that limit before the first pixel**, which is the
-  case for measuring the approach to it rather than the end of it.
-
-- **Time to first token**, in LLM serving, is the same instinct one layer down —
-  and its widespread adoption is the argument that this layer deserves one too.
-
-The contribution here is not the integral. It is scoring frames against an
-external rubric rather than against the run's own endpoint, and reporting the
-decomposition of the latency beside the curve.
-
-## Where the time actually goes
-
-Wall clock is decomposed into model thinking, tool round trips, dependency
-install, build, dev-server boot, and first paint. Every millisecond lands in
-exactly one bucket, and whatever cannot be attributed is reported as
-**unaccounted** rather than quietly absorbed.
-
-The buckets come from two sources: PATH shims that wrap package managers and
-bundlers, and the agent's own event stream stamped on arrival. Where those
-overlap — `npm install` runs inside a tool call, which runs inside a turn — a
-documented priority order decides who is charged.
-
-The ordering that matters most is that **first paint is charged last**. The gap
-between "server answers" and "something renders" is usually the agent still
-writing the app; charging that to the toolchain would manufacture the exact
-result this harness exists to test. Ranked last, it collects only genuinely idle
-time.
-
-**There is a control.** `p2p floor` runs the same measurement with no model in
-the loop — scaffold, install, boot, paint. Without that denominator, "the
-toolchain dominates and model differences are noise" is not a finding, it is a
-vibe. With it, you can say how much of the latency was ever available to win.
-
-## Iteration is measured separately
-
-Cold start and the edit loop are different metrics and rank differently. Once
-something renders, the harness injects a follow-up prompt — "make the header
-blue" — into the **same live session** and times it:
-
-- **first change** — any visible movement, which is what makes an edit feel live
-- **correct change** — the edit actually landed, decided by an in-page predicate
-  shipped with the brief, not by a judge
-- **broken for** — how long the app was white-screened in between
-
-**Wall clock alone would misattribute this.** One tool call behind an
-eleven-second Vite rebuild and nine tool calls of flailing produce the same
-"correct change" number, so ranking on it charges the model for a slow dev
-server. Each edit therefore also records what the agent did — tool calls, their
-names, thinking time, and the toolchain phases that ran inside the window — plus
-**`afterAgentMs`**, the gap between the agent finishing and the change reaching
-the screen. That gap is the part the agent is not accountable for:
-
-```
-  Iteration (prompt -> visible change)   [live-session]
-    header-blue      first change    7.2s   correct    7.2s
-                     1 tool call  ·  thinking 7.0s  ·  0.2s waiting on the toolchain after the agent finished
-```
-
-Tool calls read `--` rather than `0` when the adapter's stream cannot show them:
-"it made none" and "we could not see" are opposite claims about an agent.
-
-**If the check was already true before the prompt**, the edit is void, not fast
-— an agent that happened to build a blue header during cold start makes
-`header-blue` unmeasurable, and the run says so instead of reporting a
-near-instant success for a change nobody made. See
-[docs/METRIC.md](docs/METRIC.md#a-check-that-was-already-true).
+- **Agents don't render progressively, even when told to.** Every agent is
+  told that a browser is watching and that a rough early page counts for more
+  than a perfect late one. In 41 of the 42 published runs given that
+  instruction, the page still went from blank to finished in one step. The agent event logs show why: the model
+  composes the whole page and saves it in a single file write, so the browser
+  only ever sees "nothing" and "done".
+- **The instruction to render early does nothing measurable.** Dropping it
+  changed AUC by less than ±0.01, well inside run-to-run noise.
+- **Telling them *how* does, at a price.** Told to save a bare skeleton first
+  and then one section per save, 12 of 12 runs built the page in four or five
+  visible stages, and first render came 1.4–2.6x sooner. The finished page
+  came about twice as late, though, so area under the curve went up for one
+  agent of four. The step was a habit, not a limit.
+- **Model generation is the whole wait.** With the toolchain taken out of the
+  agent's hands, model time was over 99% of every run.
+- **Follow-up edits are an order of magnitude faster than the first render.**
+  Most landed in 2–3s with a single tool call.
+- **The rubric saturates.** Every run told to render early scored 1.00. Once
+  each criterion is met, the score can't tell a better page from a worse one.
+  `p2p pairwise` compares consecutive states directly. On the dashboard, none
+  of the eight changes agents made after their first render was judged an
+  improvement.
 
 ## Quickstart
 
-Requires **Node 24 or newer**. `.nvmrc` pins `lts/*`, so `nvm use` picks up a
-supported release without this file having to be edited every six months.
-
-Node strips the TypeScript types itself, so there is no build step, no bundler
-and no loader: the CLI is run directly with `node src/cli.ts`, and
-`tsconfig.json` sets `erasableSyntaxOnly` so syntax Node cannot strip fails
-typechecking rather than only failing at runtime.
+Requires **Node 24 or newer**. `.nvmrc` pins `lts/*`. Node strips the
+TypeScript types itself, so there is no build step: the CLI runs directly as
+`node src/cli.ts`.
 
 ```bash
 nvm use                             # optional; reads .nvmrc
@@ -297,890 +104,76 @@ npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe
 npm run p2p -- run --brief briefs/todo-app.json --adapter exec \
   --command 'my-agent --prompt {{PROMPT}} --cwd {{WORKDIR}}'
 
-# rank runs by trajectory and by final score, side by side
-npm run p2p -- compare runs/*/result.json
-
-# the same ranking, with every run replayed side by side on one clock
-npm run p2p -- leaderboard runs/*/result.json
-
 # one run is not a measurement -- report a median and its range
 npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code --unsafe --repeat 5
 
-# the same median and range over runs made in separate sittings
-npm run p2p -- aggregate runs/todo-app-claude-code_claude-opus-5-*/result.json
+# rank runs, and replay them side by side on one clock
+npm run p2p -- compare runs/*/result.json
+npm run p2p -- leaderboard runs/*/result.json
+
+# every run as one bar on a shared clock, shaded by how much of the brief was on screen
+npm run p2p -- race runs/*/result.json
+
+# is the curve doing any work, or is every run a step?
+npm run p2p -- trajectory runs/*/result.json
 ```
 
-Each run writes a directory containing `result.json` (every frame, phase and
-event), `report.html` (curve, decomposition, filmstrip — screenshots are inlined
-rather than linked, so the page can be attached or archived on its own and still
-render), `frames/` (one
-screenshot per distinct visual state), `prompt.txt` (the exact text the agent
-was given), `run.json` and `frames.ndjson` (the timeline as it happens — see
-[Recovering an interrupted run](#recovering-an-interrupted-run)), `phases.jsonl`
-and `agent.log`. With `--video`, also `video.webm`.
+`--unsafe` passes `--dangerously-skip-permissions` to Claude Code, which
+refuses it when running as root. For briefs that only need file writes,
+`--permission-mode acceptEdits` works as root. **Sandboxes only.**
 
-`result.json` holds the whole run: cold-start frames and, when the brief has
-iterations, the frames captured while those edits landed. Each carries a
-`phase`. **Only `cold` frames are judged, charted or ranked** — an edit like
-"make the header blue" answers a different question from the brief, and scoring
-it against the brief's rubric would blend two measurements into one number. The
-iteration frames are kept so the run can be replayed in full.
+Each run writes `result.json` (every frame, phase and event), a self-contained
+`report.html`, the screenshots, and the exact prompt the agent was given. See
+[what a run writes](docs/USAGE.md#what-a-run-writes).
 
-**`frames/` is not the timeline and cannot be replayed as one.** Consecutive
-identical screenshots share a file, so a forty-observation run can hold four
-PNGs; stitching the directory listing gives a four-frame video in which a blank
-minute and a finished app get equal screen time. A long run whose page barely
-moved is the extreme case — 1300 observations of a page that changed three times
-is three PNGs, and that is deduplication working, not captures going missing.
-The timeline is in `result.json`, where every observation carries its own `tMs`:
+## Agents it can drive
 
-```bash
-npm run p2p -- video runs/todo-app-claude-code-abc123
-```
-
-`p2p video` rebuilds it — each image held until the next observation, and the
-stretch before the first one left blank rather than back-filled with the first
-frame, which would claim the app was on screen before anything had been looked
-at. It shells out to `ffmpeg`, and prints the command to run by hand if there
-isn't one. `--to-horizon` pads every video to the brief's horizon so two runs
-come out the same length and can be played side by side.
-
-`--unsafe` passes `--dangerously-skip-permissions` to Claude Code. Without it an
-agent that needs to run commands will stall waiting for approval. **Sandboxes
-only.**
-
-The CLI refuses to bypass permissions when running as **root**, so a
-containerised harness should run as a non-root user. For briefs that only need
-file writes (`static-page`), `--permission-mode acceptEdits` works as root. If
-an agent dies on startup the report says so in a banner rather than quietly
-reporting a 0.000 — a failed launch and an agent that built nothing produce
-identical numbers otherwise.
-
-## Watching a run happen
-
-A run is several minutes of an agent working somewhere else, so the CLI shows a
-live status line: elapsed time against the horizon, what is on screen right now,
-how much of the brief is visible, how many frames have been captured, and what
-the agent last did — with how long ago, which is the number that separates
-"working" from "wedged".
-
-```
-  02:14/08:00  ·  ● rendering  ·   71% of brief on screen  ·  134 frames / 19 distinct  ·  tool: Write (00:08 ago)
-```
-
-`--headed` shows the prober's browser window so you can watch the page being
-built. `--video` records the whole session to `video.webm` through Chromium's
-screencast — real video, no ffmpeg — at the cost of a little more browser work
-during the run, which is why it is opt-in.
-
-## The leaderboard
-
-```bash
-npm run p2p -- leaderboard runs/*/result.json --out runs/leaderboard.html \
-  --title "Greenfield task board, five agents"
-```
-
-One page with the ranking table, the overlaid curves, and **every run replayed
-side by side on a single shared clock** — play, pause, scrub, 1x to 30x. At any
-instant you see what each agent had on screen at that moment, its score, and
-whether it was still serving an error page.
-
-The players are driven by the same frames the scores were computed from, so the
-table and the pictures cannot disagree: a run that wins on area under the curve
-is visibly ahead at the four-minute mark, and if it is not, the number is wrong
-and this is where you notice.
-
-**The replay stops when the last run does.** Runs that finish in forty seconds
-on a seven-minute horizon would otherwise play as a few seconds of action and
-minutes of nothing, with every difference between them squeezed into the
-leftmost tenth of the chart. So the clock and the chart run until every run had
-ended, plus a little room, and the page says where it stopped. Nothing after
-that point can change on screen, because each curve holds its last value. The
-AUC is still integrated to the horizon. `--full-horizon` shows the whole thing.
-
-**Follow-up edits get a replay of their own.** When the brief has iterations,
-each one is replayed beside the others from the moment its prompt was sent, not
-on the run's own clock: two agents finish the cold start tens of seconds apart,
-so the run's clock would put one agent's edit beside the other's idle page.
-Each panel opens on the page the prompt was sent against and is marked when the
-change appeared, when the check passed, or that it never did. An edit whose
-check was already true before the prompt is shown as **void**, not as an
-instant success.
-
-Runs must share a brief and a horizon; the command refuses to rank runs that do
-not, because AUC has the horizon in its denominator.
-
-### Told versus not told
-
-A run measured with `--no-render-early` answers a different question from one
-measured without it: whether the agent renders early *unprompted*, rather than
-how fast it does so *when asked*. Feed both to `p2p leaderboard` and it ranks
-each condition separately — never as one table, which would be a ranking of two
-different experiments — and adds a paired row per agent showing what the
-instruction was worth:
-
-```
-  What the instruction was worth  (same agent, same brief, told vs not told)
-  run                       AUC told  not told    delta  first render
-  ----------------------------------------------------------------------------
-  demo-agent                   0.937     0.691   +0.247  9.9s sooner
-```
-
-A large delta says the agent can render early but does not think to. A delta
-near zero is the more interesting result: the ranking would look the same
-without the instruction, so the headline number is measuring the agent rather
-than its instruction-following.
-
-## What every agent is told, and how a run ends
-
-Every brief is handed to the agent with the same block appended, identically,
-for every agent. It is part of the measurement rather than a hint to one of
-them, and the exact text sent is saved as `prompt.txt` beside the result. It
-says: a browser is already watching this URL and screenshots it every second;
-get something on screen early and refine it in place; start the dev server in
-the background; and create an empty `.p2p-done` when you consider it finished.
-
-Each of those exists because leaving it out broke a run:
-
-- **"Render early"** replaced "when the app is ready to look at, serve it",
-  which asked for precisely the behaviour this metric is built to catch — a
-  blank page for the whole run, and a first frame that is already the finished
-  app. Telling every agent the clock is running is the fair version of that
-  instruction. `--no-render-early` drops the clause and measures unprompted
-  behaviour, which is a different experiment; the two are not comparable as one
-  ranking, but they are worth measuring together — see below.
-- **"Background the server"** because a dev server in the foreground never
-  returns, so the agent's turn never completes.
-- **`.p2p-done`** because a turn that never completes left the horizon as the
-  only way for a run to end. The sentinel works for every adapter, including
-  the ones whose event stream this harness can only partly read.
-
-The window closes on whichever comes first: the agent's turn completing
-(`turn`), the sentinel appearing (`signal`), **quiescence** (`quiet`), or the
-horizon (`horizon`). The reason is recorded with the result and printed by
-`p2p leaderboard`, because a run the agent finished and a run that was cut off
-are not the same measurement.
-
-**A run whose agent never started is not a measurement.** Two of nine runs in
-one sitting ended with the agent's API returning repeated 529s. Claude Code
-reports that as a result event carrying `is_error` and — confusingly —
-`subtype: "success"`, then exits 0. Matching on the subtype or on the exit code
-saw a healthy run that had built nothing, and recorded it as a clean `0.000`.
-Two of three repeats failing that way would have put a model's median AUC on
-the floor and ranked it by its provider's capacity that afternoon.
-
-Such a run is now recorded as a failure with no exit code, which is the truth —
-the process ended cleanly and did no work. `p2p compare` and `p2p leaderboard`
-refuse to rank it, and `--repeat` leaves it out of the median and says how many
-it left out.
-
-Quiescence is the backstop for an agent that ignores the sentinel: no visible
-change, no agent output, and no shimmed command running, all at once, for
-`--quiet-for` seconds (default 120, `0` to disable), with something already on
-screen. All three signals are required because each one alone has a false
-positive that would cut a working run short. Ending early cannot change the AUC
-— the curve holds its last value to the horizon regardless — but it can miss a
-late improvement, so a `quiet` run says so in its caveats.
-
-## Judging
-
-Frames are scored against per-brief rubrics of binary, screenshot-answerable
-criteria — "are three columns visible", not "rate this 0-10" — so scores are
-auditable and reasonably stable.
-
-Every judge reaches the model through the [AI SDK](https://ai-sdk.dev), so the
-provider is just part of the model name:
-
-```bash
-# the default judge
-npm run p2p -- run --brief briefs/todo-app.json
-
-# judge with Gemini instead -- needs GOOGLE_GENERATIVE_AI_API_KEY
-npm run p2p -- run --brief briefs/todo-app.json --judge google:gemini-2.5-flash
-```
-
-| provider | key |
-|---|---|
-| `anthropic` | `ANTHROPIC_API_KEY` (also honours `ANTHROPIC_BASE_URL`) |
-| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `openai` | `OPENAI_API_KEY` |
-
-`--judge` is the whole judging surface: a `<provider>:<model>` pair, defaulting
-to `anthropic:claude-sonnet-5`, or `none` to turn scoring off — scores then
-degrade to entity coverage, and every report says so. There is no backend to
-choose, because one transport for every provider is what makes two judges
-comparable: they differ in that one string and nowhere else in this code.
-
-A judge must name its provider. A bare `claude-sonnet-5` is an error rather
-than a guess, and a provider whose key is missing fails before the run starts
-rather than once per frame, after the minutes it takes to measure one. Adding a
-provider is a line in `AI_SDK_PROVIDERS`. `result.json` records the judge as
-`google:gemini-2.5-flash` rather than a bare model name — **different judges
-disagree at the margin, so a leaderboard should not mix them.** Two judges also
-get separate verdict caches, so re-scoring one run with a second judge measures
-their disagreement instead of replaying the first one's answers.
-
-This replaced an earlier pair of flags:
-
-| before | now |
-|---|---|
-| `--judge-model google:gemini-2.5-flash` | `--judge google:gemini-2.5-flash` |
-| `--judge-model claude-sonnet-5` | `--judge anthropic:claude-sonnet-5` |
-| `--judge api`, `--judge cli`, `--judge auto` | omit `--judge` |
-| `--judge none` | unchanged |
-
-Judging runs **after** the run finishes, from saved screenshots — scoring during
-the run would put model latency inside the window being measured. Only visually
-distinct frames cost a call; the rest inherit by forward-fill. `p2p rescore`
-re-scores a finished run without re-running any agent, which is also how you
-measure judge variance, and how you score a run whose judging was interrupted.
-
-Because judging happens after teardown, the browser closes minutes before the
-scores land. `result.json` is therefore written **twice**: once with the
-complete timeline and provisional scores (`judge.pending: true`), and again with
-the real scores when the judge returns. An interrupted or failed scoring pass
-leaves a run that still replays and still rescores, rather than no run at all.
-
-A judge is also checked **before** the run rather than after it. `--judge` names
-a provider and a model, and only the provider knows whether that model exists,
-so the harness sends it one 1×1 pixel and quotes whatever comes back:
-
-```
-error: the judge "google:gemini-3.5-flash-low" did not answer a test request.
-
-  models/gemini-3.5-flash-low is not found for API version v1beta
-
-  The provider was sent that model id exactly as written, so a typo, a model that has
-  been renamed, and one your key cannot reach all look like this.
-```
-
-Without that check a misspelled model is discovered at the end of a fifteen
-minute run, as one failure per frame. The scoring pass itself gives up after
-three failures with no successful call, for the same reason.
-
-Calls are made at **temperature 0**, and verdicts are cached in `.p2p-cache/`
-(override with `P2P_CACHE_DIR`) keyed by the brief, the rubric, the judge, and a
-SHA-256 of the screenshot's bytes. `--max-judged` caps model calls per run
-(default 60) and `--judge-width` sets the width screenshots are downscaled to
-before sending. See [docs/METRIC.md](docs/METRIC.md#the-verdict-cache) for why
-the key is the bytes and not a perceptual hash.
-
-Runs that are not on one scale refuse to be ranked together — different
-horizons, briefs, judges, judge temperatures, viewports, judged-vs-unjudged,
-prompted-vs-unprompted, or a run whose judging never finished. See
-[what may be ranked together](docs/METRIC.md#what-may-be-ranked-together).
-
-### Did each change help?
-
-The rubric asks yes/no questions of one screenshot at a time, so once a page
-meets every criterion it scores 1.00 whatever happens to it next. A page that
-gets rebuilt three times after that draws a flat line, however much better or
-worse each version was.
-
-`p2p pairwise` asks the question the rubric cannot. It takes each visible
-change after the first render and asks the judge which of the two states better
-satisfies the brief:
-
-```bash
-npm run p2p -- pairwise runs/ops-dashboard-*/
-```
-
-Each pair is asked **twice, in both orders**. A model shown two pictures leans
-towards one position, so a preference only counts when it survives the swap. One
-that flips with the order is recorded as "same" and flagged. The verdicts go into
-`result.json` as `pairwise`, and the leaderboard shows them as markers under
-each replay (▲ better, ● same, ▼ worse), the judge's note as the replay passes
-each one, and a **Later changes** column. They are reported beside the scores
-and never change them: no AUC moves because of this.
-
-## Recovering an interrupted run
-
-`result.json` is assembled once, after the browser and the agent are torn down.
-Until then the timeline lives only in the harness's memory, so anything that
-kills the process — a Ctrl-C, an OOM, the harness [killing its own
-port](#freeing-a-port) — used to leave a `frames/` directory full of screenshots
-with no record of when any of them were taken.
-
-Two files are now written *while* the run happens: `run.json` (which brief,
-which agent, which clock) and `frames.ndjson` (one line per observation, plus a
-marker for the end of the cold-start window and one per completed iteration).
-They cost one append per frame and they are on disk the moment each frame is:
-
-```bash
-npm run p2p -- salvage runs/todo-app-antigravity-abc123
-```
-
-That rebuilds `result.json` and `report.html` from the frame log, after which
-`p2p video` and `p2p rescore` work normally. A salvaged run is explicitly not a
-complete one and says so in its warnings: the agent's event stream and the
-toolchain phases were never on disk, so it has a timeline and no latency
-decomposition, and its scores are entity coverage until you follow up with
-`p2p rescore`.
-
-## Freeing a port
-
-A dev server the agent started is not reliably killed by killing the agent, and
-a survivor would corrupt the next run: the harness would find something already
-serving and report a near-zero first render for an app the agent never built. So
-the port is cleared at teardown, and `--kill-port` clears it at startup too.
-
-Clearing it means **listening sockets only**. `lsof -i tcp:5173` matches every
-socket with that number at either end, which includes every *client* of the port
-— and the harness polls the app under test once a second, so it is always one.
-Piping that list into `kill -9` made the harness SIGKILL itself during teardown:
-the run died immediately after its last measured frame, losing `result.json`,
-the judging pass and the report, and printing `Killed: 9` with no explanation.
-It only reproduced on macOS, which has no `fuser` and fell through to the `lsof`
-line; Linux has `fuser`, which matches local ports only, so CI never saw it.
-The lookup now filters to `LISTEN` state and refuses to signal this process or
-any of its parents, whatever a tool reports.
-
-## Antigravity and the scratch folder
-
-`agy` runs a conversation that is not in a **Project** in "an isolated local
-scratch folder", and a child-process cwd alone does not bind one. An unbound run
-looks almost right — the agent builds an app, its dev server serves it, the page
-renders and the curve is a curve — while the workdir the harness handed over
-stays empty and nothing in the run directory reproduces what was measured. It
-turns up as `~/.gemini/antigravity-cli/scratch/<name>/`.
-
-The adapter passes `--add-dir <workdir>` by default. That is the narrower of the
-two plausible mechanisms — it names a directory rather than creating persistent
-state — but Antigravity's published headless documentation describes neither it
-nor the Project flags, so it is a default, not a certainty. To try the other:
-
-```bash
-npm run p2p -- run --brief briefs/todo-app.json --adapter antigravity   --no-add-dir --agent-arg --new-project
-```
-
-**The run checks the outcome either way.** `agy` reports a `cwd` in its `init`
-event; the harness compares it to the directory it handed over and fails the run
-loudly when they differ, rather than leaving it to be discovered from an empty
-workdir afterwards:
-
-```
-! AGENT WORKED SOMEWHERE ELSE: it reported its working directory as
-  /Users/you/.gemini/antigravity-cli/scratch/orbit, not the runs/…/workdir it was
-  given. Whatever this run measured was built outside the run directory, so
-  nothing here reproduces it.
-```
-
-## Which agents this works with
-
-The harness talks to agents through adapters. The curve, both latency numbers,
-and every toolchain phase the shims catch are valid for any agent that can be
-started from a command line. What varies is how much of the agent's internals
-its event stream exposes, and whether a follow-up prompt continues a session or
-restarts the process.
-
-| adapter | curve + TTFR | toolchain phases | model vs tool split | iteration | verified |
-|---|---|---|---|---|---|
-| `claude-code` | yes | yes | inferred from messages | live session | full run |
-| `pi` | yes | yes | **exact** tool spans | live session | wire format + harness run |
-| `antigravity` | yes | yes | best-effort, self-reported | live session | docs only |
-| `exec` (any CLI) | yes | yes | none → residual | restart | full run |
-| `scripted` | yes | yes | synthetic | live session | full run |
-
-```bash
-npm run p2p -- run --brief briefs/todo-app.json --adapter pi \
-  --provider anthropic --model claude-sonnet-5
-
-npm run p2p -- run --brief briefs/todo-app.json --adapter antigravity \
-  --model gemini-3.8-flash-high --unsafe
-
-npm run p2p -- run --brief briefs/todo-app.json --adapter exec \
-  --command 'some-agent exec --cd {{WORKDIR}} {{PROMPT}}'
-```
-
-**Pi** runs through `--mode rpc`, which is bidirectional, so follow-up prompts
-go into the live session. Its `tool_execution_start`/`_end` events are keyed by
-call id, giving *exact* tool spans rather than the boundaries this harness has
-to infer for agents that only emit messages — the best decomposition of any
-adapter here. Note Pi defaults to the `google` provider; pass `--provider` and
-`--model` for a reproducible run.
-
-**Antigravity** runs through `agy --input-format stream-json --output-format
-stream-json`, so follow-ups reuse the warmed conversation. Its outer events
-(`init`, `step_update`, `result`) are documented but the contents of a step are
-not, so the adapter probes for tool boundaries and **reports what it actually
-found**: if it cannot identify them it declares `turns-only` fidelity and that
-time goes to the residual rather than being booked as thinking. The harness also
-raises `--print-timeout` to 30m, since `agy` defaults to 5m — well under a
-realistic greenfield build.
-
-### What "verified" means above
-
-Being specific, because this matters more than the table:
-
-- `claude-code`, `exec`, `scripted` — run end to end against real binaries.
-- `pi` — flags checked against `@earendil-works/pi-coding-agent@0.85.1`, the RPC
-  wire format captured from the running binary, and a full harness run
-  completed. That run had no provider credentials, so the model never did any
-  work; everything around it (spawn, prompt submission, turn completion,
-  error reporting) is exercised.
-- `antigravity` — written from the published headless docs. **Not run against a
-  binary**, because Antigravity ships through Google's installer rather than
-  npm. Treat the first run as a smoke test and read `agent.log` if the stream
-  looks empty.
-
-Capturing the Pi wire format immediately found two bugs that the docs alone
-would not have: `message_end` fires for the user's own prompt as well as the
-assistant's reply, and a failed turn still streams cleanly with
-`stopReason: "error"` — which without a check would have reported an auth
-failure as an agent that simply built nothing. Expect the Antigravity adapter
-to need the same treatment on first contact with a real binary.
-
-**An IDE-only agent with no headless mode cannot be driven by this harness at
-all.** That is a hard limit: the design assumes something startable from a
-command line and handed a prompt.
-
-## Validating "reviewable"
-
-**Time to first reviewable render is the metric this project leans on hardest,
-and it rests on a number somebody chose.** A frame counts as reviewable when its
-score crosses `reviewableThreshold` — `0.5` in every bundled brief. Nothing has
-ever checked that against a person, and "enough of the brief is on screen that a
-human could react to it" is a claim about humans.
-
-`p2p rate` builds the instrument that checks it:
-
-```bash
-# a blinded sheet, from any runs you already have
-npm run p2p -- rate runs/static-page-*/ --per-run 8
-
-# ...a person answers, sends ratings.json back...
-npm run p2p -- calibrate ratings.json runs/static-page-*/
-```
-
-The sheet is one self-contained HTML file — no server, no login, no build —
-because an instrument that needs hosting does not get filled in by the three
-people whose judgement the metric rests on. It shows one frame at a time and
-asks a single question: *could you give the agent useful feedback on what you
-see here?*
-
-**It is blinded, and that is the point.** The rater never sees the frame's
-score, its timestamp, which run or model it came from, or where it sat in the
-sequence — frames are shuffled across every run in the sheet. A rater who can
-see that the harness called a frame `0.85` is agreeing with a number rather than
-judging a picture, and the agreement rate that came back would be evidence of
-nothing. The shuffle seed is recorded so a sheet can be rebuilt exactly.
-
-`p2p calibrate` joins the answers back to the scores and reports three numbers:
-how often people called a frame reviewable, how often the brief's threshold made
-the same call, and **the threshold that would have agreed most**. That last one
-is what `reviewableThreshold` should be — fitted, rather than picked. Under
-thirty ratings it says so rather than pretending the fit means anything.
-
-## Running the actual experiment
-
-The interesting hypothesis is that on greenfield tasks the toolchain dominates
-and model differences are noise. Here is how to settle it rather than assert it.
-
-**1. Establish the floor.** Nothing here is an agent; this is what the toolchain
-costs on its own.
-
-```bash
-npm run p2p -- floor --template vite-react --port 5242 --kill-port
-npm run p2p -- floor --template static      --port 5242 --kill-port
-```
-
-On the machine this was developed on, `vite-react` first paints at **13.5s on a
-cold npm cache and 6.8s on a warm one** — scaffold, install, dev-server boot and
-first request, with no model involved at all. That is the budget no agent
-choosing that stack can beat.
-
-That 2x spread from cache state alone is worth noticing before ranking
-anything: if it exceeds the gap between two agents, you are measuring the
-machine, not the model. Run the floor on the same box, in the same cache state,
-in the same session as the agents you are comparing.
-
-**2. Measure agents on the same brief, repeatedly.**
-
-```bash
-for m in opus sonnet haiku; do
-  npm run p2p -- run --brief briefs/todo-app.json --adapter claude-code     --model "$m" --label "$m" --unsafe --repeat 5 --kill-port
-done
-```
-
-**3. Read the answer off three places.**
-
-- **Time to first render vs the floor.** If every agent lands within a second or
-  two of the floor, the toolchain set the pace and the model choice did not.
-- **The agent/toolchain split** in each report. If `install + build +
-  devserver_boot + first_paint` dwarfs `model + tool_overhead`, same conclusion —
-  provided attribution coverage is high enough to trust, which the report states.
-- **The range across repeats.** If the spread within one model overlaps the gap
-  between two models, there is no ranking yet, only noise. The aggregate output
-  says so explicitly when the AUC range exceeds 0.15.
-
-The repeats need not come from one sitting. `p2p aggregate` takes any set of
-`result.json` files, pools them by brief and label, and prints the same median
-and range `--repeat` does, with the same refusals to hide a mixed judge or a
-mixed viewport. Runs made on different days go into one number the same way;
-a run that failed to start is left out and counted. A `--repeat` batch in which
-one repeat throws before producing a result — the port was taken, the browser
-would not launch — carries on with the rest, aggregates the runs that finished,
-and says which repeats it is missing rather than exiting with the earlier results
-stranded on disk.
-
-A null result here is worth as much as a positive one: "the thing everyone is
-optimising is not the bottleneck" is only credible with the floor to compare
-against, which is why the control ships with the harness rather than as an
-afterthought.
-
-### What three repeats already showed
-
-Nine runs — three Claude models, three repeats each, `briefs/static-page.json`,
-all told to render early:
-
-| model | AUC median | AUC range | first render median | first render range |
-|---|---|---|---|---|
-| `claude-haiku-4-5` | 0.963 | **0.167** | 11.1s | 2.3s |
-| `claude-sonnet-5` | 0.955 | 0.007 | 13.4s | 2.0s |
-| `claude-opus-5` | 0.941 | 0.025 | 17.8s | **11.1s** |
-
-Read the medians as a ranking and haiku beats opus by 0.022. **Haiku's own
-spread across three identical runs is 0.167 — seven times that gap.** There is
-no ranking here, only noise, and the aggregate said so itself without being
-asked:
-
-```
-  ! AUC ranges over 0.167 across 3 runs. Treat any ranking against
-    another agent as unresolved unless the gap exceeds that.
-```
-
-Opus is the other warning: its first render ranged from 6.8s to 17.9s across
-three runs of the same prompt. A single run of either model would have
-supported a confident and wrong conclusion.
-
-Two practical consequences:
-
-- **Three repeats is a smoke test, not a measurement.** It was enough to show
-  the ranking is unresolved; it is nowhere near enough to resolve it. Budget
-  repeats until the within-model range is smaller than the between-model gap,
-  and report both numbers when you publish either.
-- **Final score could not rank these at all** — eight of nine runs finished at
-  1.00. `static-page` is saturated for current frontier models. A brief every
-  agent aces measures nothing except how fast they ace it, which is a good
-  reason to write harder ones before running a leaderboard on it.
-
-### Three vendors, one dense brief
-
-**[Replay every run side by side →](https://swissspidy.github.io/prompt-to-paint/2026-10-07-ops-dashboard/)**
-
-Every run above was a Claude model in Claude Code. Fifteen more, on
-[`ops-dashboard`](#write-briefs-that-are-not-saturated): five agent/model pairs
-across three vendors, three repeats each, all told to render early, all judged
-by `anthropic:claude-sonnet-5`. Two agents drive the models — Claude Code, and
-[Pi](#which-agents-this-works-with), which runs any provider's model — so the
-same model can be measured in two harnesses.
-
-| agent / model | first render, median [range] | AUC median | edit landed: heading blue / add a row |
+| adapter | follow-up edits | model vs tool time | verified |
 |---|---|---|---|
-| Claude Code / `claude-sonnet-5-5` | **18.9s** [18.0 – 20.0] | 0.955 | 2.3s / 2.4s |
-| Pi / `claude-sonnet-5-5` | 23.3s [16.1 – 29.6] | 0.945 | 3.0s / 3.0s |
-| Pi / `gpt-5.5` | 30.9s [30.0 – 35.7] | 0.926 | 2.8s / 2.6s |
-| Claude Code / `claude-opus-5-5` | 34.7s [33.4 – 36.1] | 0.917 | 3.1s / 3.0s |
-| Pi / `gemini-3.8-flash` | 38.6s [38.2 – 45.1] | 0.908 | 6.6s / 15.0s |
+| `claude-code` | live session | inferred from messages | full run |
+| `pi` | live session | exact tool spans | full run |
+| `antigravity` | live session | best effort | docs only |
+| `exec` (any CLI) | restarts the process | not available | full run |
 
-These agents could edit files and nothing else: Claude Code in `acceptEdits`
-mode, Pi with `--tools read,write,edit`. No shell, so no toolchain, and over 99%
-of every wall clock was the model. The stored runs, their reports and the page
-each agent actually built are in
-[`site/2026-10-07-ops-dashboard/`](site/2026-10-07-ops-dashboard/).
+Anything that can be started from a command line and handed a prompt works
+through `exec`. An IDE-only agent with no headless mode can't be driven at all.
+Details are in [docs/USAGE.md](docs/USAGE.md#which-agents-this-works-with).
 
-What they showed:
+## Documentation
 
-- **Fifteen of fifteen curves were steps.** `p2p trajectory`: AUC equals
-  `finalScore x (1 - ttfr/horizon)` on every run, with a residual of zero. Over
-  the 42 runs this README now records, **one** has rendered progressively. With
-  other vendors in the table, that stops looking like a Claude habit.
-- **Every run scored 1.00, so the ranking is first render and nothing else.**
-  The ranges sort into three tiers that do not overlap: Sonnet 5.5 in either
-  harness, then GPT-5.5 and Opus 5.5, then Gemini 3.8 Flash. Within a tier the
-  ranges overlap, so the order inside one is unresolved.
-- **The harness moves the number, not only the model.** The same Sonnet 5.5 had
-  a 2.0s spread across repeats in Claude Code and 13.5s in Pi.
-- **Bigger was slower, for the same score.** Opus 5.5 took nearly twice as long
-  as Sonnet 5.5 to an identical 1.00.
-- **The edit loop is fast for almost everyone.** Follow-up edits landed in 2–3s
-  with a single tool call, an order of magnitude faster than cold start. Gemini
-  was the exception, at up to 19s and four tool calls. The leaderboard replays
-  every edit side by side from its prompt, which is the most visibly different
-  thing about these agents.
-- **A void edit showed up on a live run.** One GPT-5.5 run had already made the
-  heading blue during cold start, so "make the heading blue" was reported as
-  unmeasurable rather than as a 0s success.
+- [docs/FINDINGS.md](docs/FINDINGS.md): every experiment run so far, with the
+  numbers and what they do and don't show.
+- [docs/USAGE.md](docs/USAGE.md): the leaderboard, judging, the protocol every
+  agent is told, recovering interrupted runs, writing briefs, and running your
+  own comparison.
+- [docs/METRIC.md](docs/METRIC.md): exact definitions, conventions and edge
+  cases, and where the metric comes from.
 
-**The judges agree, and the one dissent was a misread.** Re-scoring all fifteen
-runs with `openai:gpt-5.5` and `google:gemini-3.8-flash` reproduced the
-original AUC exactly in 29 of 30 re-scorings. The odd one out: GPT-5.5 docked a Gemini page's
-cost tile for showing "−$0.60" where the brief asks for "+$0.60". The page shows
-**+$0.60**, styled red because a rising cost is bad news; the judge read the
-colour as the sign. Judges disagree at the margin — here, in one re-scoring in
-thirty — which is why runs scored by different judges never share a table.
+## Caveats before you quote a number
 
-**The scores cannot see work that a person would.** Gemini rendered a finished
-dashboard at about 40s in all three runs, then kept working and replaced it one
-to three more times. In the run checked frame by frame, it swapped a styled
-layout with a status badge, trend arrows and side-by-side panels for a plainer
-one. Every judge scored every version 1.00, so the curve is a flat line over
-seventy seconds of visible change. Part of "every curve is a step" is the
-agents. Part is a rubric that saturates: once each criterion is met, it cannot
-tell a better page from a worse one.
+- **One run is not a measurement.** The same agent on the same brief has varied
+  by 0.17 AUC and by 45s of first render across three repeats. Report a median
+  and its range.
+- **Check the shape before trusting an AUC.** When every curve is a step, AUC
+  is just final score and first render in disguise. `p2p trajectory` says
+  whether that is the case.
+- **Judges differ at the margin**, and a stricter one can turn a step into a
+  curve. Runs scored by different judges are refused in one ranking.
+- **The protocol is part of the measurement.** Every agent gets the same
+  instructions appended to the brief, saved as `prompt.txt`. Runs given
+  different instructions are ranked separately.
+- **AUC only compares at equal horizon**, and **the poll interval is the
+  resolution floor** (±1s on cold start).
 
-[`p2p pairwise`](#did-each-change-help) puts a number on it. Across all fifteen
-runs there were eight visible changes after a first render, six of them
-Gemini's. **None was judged an improvement:** five were judged worse and three
-about the same, two of those because the judge's preference flipped when the
-order was swapped. On this brief, an agent that kept working after its first
-render only ever made the page worse or left it as it was.
-
-**What these runs do not cover:** a stack with a build step. An agent that has
-to set one up needs a shell. The control alone is in: `p2p floor --template
-vite-react` first paints at **18.0s on a cold npm cache and 7.4s on a warm one**
-on the same machine. That is already as long as the fastest agent above took to
-write the whole dashboard. The next section takes the toolchain off the agent
-instead.
-
-### The same agents on a running Vite + React project
-
-**[Replay every run side by side →](https://swissspidy.github.io/prompt-to-paint/2026-10-07-todo-app-scaffolded/)**
-
-A single-file static page can only appear in one step, so the runs above could
-never show an agent building in stages. These fifteen use
-[`todo-app-scaffolded`](#a-toolchain-the-agent-does-not-have-to-set-up): the
-`todo-app` task board, on a Vite + React project the harness had already
-installed and started. The agents still had file edits only, and every save
-hot-reloaded. Same five agent/model pairs, three repeats each.
-
-| agent / model | first render, median [range] | AUC median | edit landed: header blue / add a column |
-|---|---|---|---|
-| Claude Code / `claude-sonnet-5-5` | **13.8s** [12.9 – 26.4] | 0.971 | 3.3s / 1.5s |
-| Pi / `gpt-5.5` | 21.5s [12.5 – 25.4] | 0.955 | 7.5s / 4.5s |
-| Claude Code / `claude-opus-5-5` | 23.6s [21.2 – 26.9] | 0.951 | 5.9s / 5.5s |
-| Pi / `claude-sonnet-5-5` | 28.9s [15.8 – 60.3] | 0.940 | 4.2s / 2.7s |
-| Pi / `gemini-3.8-flash` | 67.4s [58.4 – 68.8] | 0.860 | 20.8s / 21.3s |
-
-What they showed:
-
-- **Hot reload made staged rendering possible, and almost nobody used it.** Both
-  Claude Code models wrote the whole app into `src/App.jsx` in a single write, in
-  all six runs. The Pi agents wrote `App.jsx` and then `index.css`, and the order
-  of those two saves is the only thing that ever produced a partial page. One
-  GPT-5.5 run put the unstyled app on screen at 12.5s (scored 0.56), the styled
-  board at 23.5s (1.00), and moved "Sprint 14" into place at 27.1s. That is the
-  first curve in these runs that is not a step: 2 of 15 runs scored at a partial
-  state here, against 0 of 15 on `ops-dashboard`.
-- **Later changes helped only when the page was being built, not rebuilt.**
-  Pairwise found nine changes after a first render. Three were judged better: two
-  are that GPT-5.5 run completing its page, and one is a Gemini run adding a
-  task counter. Of Gemini's other three, two were judged worse and one the same,
-  and all three of Opus's were judged nearly identical: spacing and icon size,
-  in the judge's words.
-- **The ranking holds across the two briefs.** Sonnet 5.5 in Claude Code was
-  fastest on both; Gemini 3.8 Flash was slowest on both, by a wider margin here.
-  Pi / Sonnet ranged from 15.8s to 60.3s across three identical runs, the widest
-  spread in either table and a reminder that three repeats is a smoke test.
-
-**Four of thirty edits were mis-scored by the brief, not the agent.** All four
-were visibly on screen and the brief's check said NEVER LANDED:
-
-- GPT-5.5 made the header blue with a `linear-gradient`, in all three runs. A
-  gradient leaves `background-color` transparent, and the check read nothing
-  else.
-- One Pi / Sonnet run rendered its column header as
-  `<h2>Blocked<span>0</span></h2>`. Its `innerText` is `BLOCKED0`, and `\b` sees
-  no word boundary between a letter and a digit.
-
-Both checks are fixed in `todo-app`, `todo-app-scaffolded` and the same gradient
-blind spot in `landing-page`. Re-run against every run's final code, the fixed
-checks pass exactly those four and agree with the old ones everywhere else; both
-fail on the blank scaffold. In each of the four, the page changed once after the
-prompt and then held that state to the end of the window. So their results were
-corrected to land at that first change, and each says so in a `rechecked` field
-and in the run's warnings. The replay marks them "re-checked".
-
-**The pairwise notes are a judge's words, so check them before quoting.** One
-note says a Gemini change "lacks subtitle text". The screenshots show "Sprint 14"
-is still there; it went from a badge to plain text, and the line under it was
-removed. The "worse" verdict is defensible. The note's reason is not.
-
-## Writing a brief
-
-```jsonc
-{
-  "id": "todo-app",
-  "prompt": "Build a task board called \"Orbit\"...",
-  "horizonSec": 480,
-  "reviewableThreshold": 0.5,
-  "entities": [                     // mechanical: is it on screen?
-    { "id": "app-name", "aliases": ["Orbit"], "weight": 2 }
-  ],
-  "rubric": [                       // judged: binary, from a screenshot alone
-    { "id": "three-columns",
-      "description": "Three distinct columns labelled Todo, In Progress and Done.",
-      "weight": 2 }
-  ],
-  "iterations": [
-    { "id": "header-blue",
-      "prompt": "Make the header background blue.",
-      "check": "/* JS evaluated in the page; truthy once it landed */" }
-  ]
-}
-```
-
-Briefs are validated strictly on load. A malformed rubric fails in the worst
-possible way — the run completes and produces a plausible number that means
-nothing — so an empty rubric is an error, not a default.
-
-### A toolchain the agent does not have to set up
-
-`"target": { "scaffold": "vite-react" }` has the harness prepare a Vite + React
-project, with pinned dependencies installed, and start its dev server before the
-clock starts. The agent is told the project and server exist, and that nothing
-can be installed. Every file it saves is on screen at the next screenshot through
-hot reload. `briefs/todo-app-scaffolded.json` is `todo-app` with exactly this
-change.
-
-That makes two questions separable:
-
-- **Without a scaffold**, an app brief measures whether the agent sets up a
-  toolchain and how long that takes. That needs an agent with a shell.
-- **With one**, it measures how the agent builds on a toolchain that is already
-  running. It needs only file edits. An agent that builds the app across several
-  saves renders in stages, so the curve can show a shape a single-file static
-  brief never could.
-
-The starting page is deliberately empty: no title, no favicon, an `App` that
-renders nothing. Anything the template showed by itself would be a first render
-at 0s for every agent. The project is installed once per machine into
-`.p2p-cache/scaffold/` and copied into each run before t0, so the agent is never
-charged for the install or the server boot.
-
-### Write briefs that are not saturated
-
-`briefs/static-page.json` put **eight of nine frontier-model runs at a final
-score of 1.00**, and eight of nine curves were steps. A brief every agent aces
-in one shot measures how fast they ace it and nothing else: final score cannot
-rank, and the AUC collapses to `finalScore x (1 - ttfr/horizon)` — see [does the
-curve earn its keep?](#does-the-curve-earn-its-keep). That is a property of the
-brief, not of the metric.
-
-Four levers, in rough order of how much they helped:
-
-- **Enough weighted criteria that partial work lands between 0 and 1.** Five
-  criteria give coarse steps; a run is nearly all-or-nothing. `ops-dashboard`
-  carries nine criteria totalling weight 14, so a page missing its chart and its
-  alignment scores distinctly from one missing only the chart.
-- **Include a criterion models actually fail.** Across eighteen runs, `styled`
-  was the *only* criterion that ever docked anyone. Content-presence criteria
-  ("is the footer there") are free marks for current models. Judgements about
-  visual design, numeric alignment and proportionality are not.
-- **Enough content that one write is real work.** Forty-odd figures to
-  transcribe means an agent either spends a long time before its first paint or
-  renders in stages — and which one it picks is exactly what this measures.
-- **A viewport tall enough to contain what you are scoring.** Entity coverage
-  and the judge both see only the viewport, so a table scored below the fold is
-  a criterion nobody can meet. `ops-dashboard` sets `1280x1800` for that reason.
-
-`briefs/ops-dashboard.json` is the worked example of all four, and is still a
-`serveStatic` brief — no toolchain, so it isolates the agent.
-
-**It only half worked, which is worth recording.** Nine runs of the same three
-models on `ops-dashboard`:
-
-| | `static-page` | `ops-dashboard` |
-|---|---|---|
-| first render | 10.1s – 17.9s | **20.2s – 64.4s** |
-| wall clock | 15s – 18s | **52s – 322s** |
-| final score | 1.00 on 8 of 9 | **1.00 on every run that rendered** |
-| curves with a shape | 1 of 9 | **0 of 9** |
-
-Density bought a much wider spread in the thing the metric is actually about —
-first render went from a 7.8s spread to a 44s one, which is real discrimination
-between models. It did **not** break the score ceiling and it did **not**
-produce trajectories. Every run that rendered still scored a perfect 1.00, and
-every curve was still a step.
-
-That leaves an open question this harness can now answer but has not: is the
-ceiling the models, or the judge? A rubric asking whether numeric columns are
-aligned and whether bar lengths are proportional to their figures, which never
-docks anyone across nine dense dashboards, is either describing things that are
-genuinely easy or being marked leniently. `p2p rate` and `p2p calibrate` exist
-to settle exactly that — put those frames in front of a person and find out.
-
-**An iteration check reads text the way the browser renders it.**
-`document.body.innerText` is the *rendered* text, so CSS decides its case: a
-column header styled `text-transform: uppercase` reads `BLOCKED`, and
-`.includes('Blocked')` is then false on a page that plainly shows the column.
-That is not a hypothetical — it is how the bundled `add-column` check reported
-`NEVER LANDED` for an edit visible in the screenshot beside it. Match
-case-insensitively (`/\bblocked\b/i.test(...)`), which is what entity coverage
-has always done, or read `textContent` if you mean the source text rather than
-what is on screen. A check that decides a headline number should fail only when
-the edit did.
+The full list is in [docs/METRIC.md](docs/METRIC.md#known-limits).
 
 ## Tests
 
 ```bash
-npm run typecheck    # also enforces that Node can strip every construct used
+npm run typecheck
 npm test             # unit tests, no browser needed
 npm run test:e2e     # real browser, real runs, real CLI invocations
-npm run test:all     # all of the above, the same order CI uses
 ```
-
-The end-to-end suite is the one that matters. It drives a real Chromium against
-real runs and asserts on the metric itself: the calibration recovers a curve
-whose AUC was integrated by hand, a stand-in third-party CLI agent is measured
-through `exec`, and the failure modes are checked for being *loud* — a crashed
-agent, a missing binary, and an iteration whose check was already satisfied all
-have to report themselves rather than return a tidy zero. It also runs the CLI
-the way a person does, as a subprocess.
-
-CI runs all of it on the version in `.nvmrc`, which is the same file `nvm use`
-reads — so it tests what a contributor is actually running, and the next LTS
-cutover needs no edit to the workflow. A second job audits the workflows
-themselves with [zizmor](https://docs.zizmor.sh), so the hash-pinned actions and
-least-privilege permissions stay that way rather than decaying at the next hand
-edit; Dependabot proposes the bumps weekly, grouped so a package and its type
-definitions arrive in one pull request.
-
-## Caveats worth knowing before you quote a number
-
-- **The poll interval is the resolution floor.** Every latency figure carries
-  ±1 interval of quantisation (1s cold start, 250ms iteration).
-- **One run is not a measurement.** Agent runs vary a lot. Repeat and report a
-  distribution; this harness gives you one run per invocation and does not
-  pretend otherwise.
-- **AUC only compares at equal horizon.** The horizon is in the denominator.
-  `compare` refuses runs that disagree on it.
-- **Low attribution coverage invalidates the split, not the curve.** If an agent
-  shells out through something the shims do not wrap, the report says the
-  decomposition is untrustworthy. The curve and wall clock stay valid.
-- **Entity coverage is text-only** — it cannot see text baked into images,
-  canvas, or shadow DOM.
-- **On screen means in the viewport.** The judge scores a 1280×800 screenshot
-  with no scrolling, and entity coverage counts only text inside that same
-  rectangle, so both halves of the metric agree. A brief that means to score
-  more of the page says so with `target.viewport`; `landing-page` runs at
-  1280×2400 because its rubric asks for a pricing section and a footer.
-- **Judges are scored at temperature 0 and cached by screenshot bytes.** Runs
-  scored by different judges refuse to be ranked together.
-- **The protocol suffix is part of the measurement.** These numbers describe
-  agents that were told a browser is watching and asked to render early. That
-  is a fair instruction because every agent gets it verbatim, but it is not the
-  same as measuring what an agent does unprompted.
-- **A run ended by quiescence could have missed a late improvement.** It never
-  changes the AUC, since the curve holds forward either way, and the report
-  names the runs it happened to.
-- **Ctrl-C tears down properly.** The browser, the agent and its dev server are
-  stopped on `SIGINT`/`SIGTERM`/`SIGHUP`, because a leaked dev server on the
-  target port is what gives the *next* run a near-zero first render for an app
-  nobody built. Playwright's own signal handlers are disabled so they cannot
-  pre-empt that; see [docs/METRIC.md](docs/METRIC.md#interrupting-a-run).
-
-Full definitions, conventions and edge cases: [`docs/METRIC.md`](docs/METRIC.md).
 
 ## License
 

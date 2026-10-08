@@ -101,6 +101,17 @@ test('the early-render clause can be dropped without losing the mechanics', () =
   assert.ok(s.includes(DONE_SENTINEL));
 });
 
+test('skeleton-first asks for the mechanism in place of the outcome', () => {
+  // "Render early" alone produced one write of the finished page in 29 of 30
+  // published runs. This clause names the stages instead, and replaces the
+  // early-render one so the agent is not handed two overlapping instructions.
+  const s = protocolSuffix('http://127.0.0.1:5173/', { skeletonFirst: true, served: true });
+  assert.match(s, /bare skeleton/);
+  assert.match(s, /separate edit/);
+  assert.doesNotMatch(s, /as early as you can/);
+  assert.ok(s.includes(DONE_SENTINEL));
+});
+
 test('a brief the harness serves itself does not ask the agent for a server', () => {
   // The port is held by the harness, so "serve the app there" is an instruction
   // that cannot be followed. A run against static-page spent four and three

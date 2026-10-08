@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Northwind Logistics — Q3 2026 Operations Review</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-subtle: #172033;
+      --border: #1f293d;
+      --border-subtle: #1a2336;
+      --text-bright: #f8fafc;
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.12);
+      --green: #10b981;
+      --green-bg: rgba(16, 185, 129, 0.14);
+      --green-border: rgba(16, 185, 129, 0.3);
+      --rose: #f43f5e;
+      --rose-bg: rgba(244, 63, 94, 0.14);
+      --rose-border: rgba(244, 63, 94, 0.3);
+      --amber: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+      padding: 36px 48px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .dashboard-container {
+      max-width: 1280px;
+      margin: 0 auto;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    /* ================= HEADER ================= */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-group h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: #38bdf8;
+      line-height: 1.15;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-group h1 .status-dot {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      background: var(--accent);
+      border-radius: 4px;
+      box-shadow: 0 0 14px var(--accent);
+    }
+
+    .brand-group .subtitle {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-top: 6px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+
+    .header-tag {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      padding: 7px 14px;
+      border-radius: 6px;
+    }
+
+    .header-tag .live-beacon {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    /* ================= KPI TILES ================= */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .kpi-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .kpi-tile::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.35), transparent);
+    }
+
+    .kpi-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .kpi-metric-group {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .kpi-number {
+      font-size: 2.35rem;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--text-bright);
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+      letter-spacing: -0.025em;
+    }
+
+    .kpi-delta {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+      white-space: nowrap;
+    }
+
+    .kpi-delta.improved {
+      color: #34d399;
+      background: var(--green-bg);
+      border: 1px solid var(--green-border);
+    }
+
+    .kpi-delta.changed {
+      color: #fb7185;
+      background: var(--rose-bg);
+      border: 1px solid var(--rose-border);
+    }
+
+    /* ================= CARDS / SECTIONS ================= */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px 28px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .card-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: -0.015em;
+    }
+
+    .card-meta {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ================= TABLE ================= */
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.95rem;
+    }
+
+    th {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      font-weight: 600;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.01);
+    }
+
+    td {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background-color: var(--surface-subtle);
+    }
+
+    th.num, td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+    }
+
+    .depot-name-cell {
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+
+    .perf-high {
+      color: #34d399;
+      font-weight: 600;
+    }
+
+    .perf-mid {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .perf-low {
+      color: #fbbf24;
+      font-weight: 600;
+    }
+
+    .currency-cell {
+      color: #f1f5f9;
+      font-weight: 500;
+    }
+
+    /* ================= TOP FIVE BY VOLUME ================= */
+    .top-five-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .top-five-item {
+      display: grid;
+      grid-template-columns: 140px 1fr 100px;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .depot-bar-label {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-bright);
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .depot-rank {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      width: 20px;
+      text-align: right;
+    }
+
+    .bar-track {
+      height: 18px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 9px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 9px;
+      background: linear-gradient(90deg, #0284c7, #38bdf8);
+      position: relative;
+    }
+
+    .top-five-item:first-child .bar-fill {
+      background: linear-gradient(90deg, #0369a1, #38bdf8);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+    }
+
+    .depot-bar-value {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-bright);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+    }
+
+    /* ================= FOOTER ================= */
+    footer {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      margin-top: 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+
+    .footer-primary {
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+
+    .footer-secondary {
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 900px) {
+      body {
+        padding: 24px 20px;
+      }
+      .kpi-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .top-five-item {
+        grid-template-columns: 110px 1fr 80px;
+        gap: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="dashboard-container">
+
+    <!-- Heading & Subtitle -->
+    <header>
+      <div class="brand-group">
+        <h1>
+          <span class="status-dot"></span>
+          Northwind Logistics
+        </h1>
+        <div class="subtitle">Q3 2026 Operations Review</div>
+      </div>
+      <div class="header-tag">
+        <span class="live-beacon"></span>
+        <span>Operations Monitoring Desk</span>
+      </div>
+    </header>
+
+    <!-- Row of four KPI tiles -->
+    <section class="kpi-row" aria-label="Key Performance Indicators">
+      <div class="kpi-tile">
+        <div class="kpi-title">On-time delivery</div>
+        <div class="kpi-metric-group">
+          <span class="kpi-number">94.2%</span>
+          <span class="kpi-delta improved">(+1.8 pts)</span>
+        </div>
+      </div>
+
+      <div class="kpi-tile">
+        <div class="kpi-title">Average transit</div>
+        <div class="kpi-metric-group">
+          <span class="kpi-number">3.4 days</span>
+          <span class="kpi-delta improved">(-0.2 days)</span>
+        </div>
+      </div>
+
+      <div class="kpi-tile">
+        <div class="kpi-title">Cost per shipment</div>
+        <div class="kpi-metric-group">
+          <span class="kpi-number">$18.40</span>
+          <span class="kpi-delta changed">(+$0.60)</span>
+        </div>
+      </div>
+
+      <div class="kpi-tile">
+        <div class="kpi-title">Damage rate</div>
+        <div class="kpi-metric-group">
+          <span class="kpi-number">0.7%</span>
+          <span class="kpi-delta improved">(-0.1 pts)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Depot Table -->
+    <section class="card" aria-label="Depot Summary Table">
+      <div class="card-header">
+        <h2 class="card-title">Network Depots</h2>
+        <span class="card-meta">11 active locations</span>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Depot</th>
+              <th class="num">Shipments</th>
+              <th class="num">On-time</th>
+              <th class="num">Cost/shipment</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="depot-name-cell">Rotterdam</td>
+              <td class="num">48,210</td>
+              <td class="num"><span class="perf-high">96.1%</span></td>
+              <td class="num"><span class="currency-cell">$16.20</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Hamburg</td>
+              <td class="num">41,930</td>
+              <td class="num"><span class="perf-high">95.4%</span></td>
+              <td class="num"><span class="currency-cell">$17.05</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Antwerp</td>
+              <td class="num">37,480</td>
+              <td class="num"><span class="perf-mid">93.8%</span></td>
+              <td class="num"><span class="currency-cell">$17.80</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Gdansk</td>
+              <td class="num">22,150</td>
+              <td class="num"><span class="perf-mid">92.2%</span></td>
+              <td class="num"><span class="currency-cell">$19.40</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Lyon</td>
+              <td class="num">19,870</td>
+              <td class="num"><span class="perf-mid">94.7%</span></td>
+              <td class="num"><span class="currency-cell">$18.10</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Milan</td>
+              <td class="num">18,640</td>
+              <td class="num"><span class="perf-low">91.5%</span></td>
+              <td class="num"><span class="currency-cell">$20.30</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Valencia</td>
+              <td class="num">16,220</td>
+              <td class="num"><span class="perf-low">90.8%</span></td>
+              <td class="num"><span class="currency-cell">$21.15</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Bristol</td>
+              <td class="num">14,090</td>
+              <td class="num"><span class="perf-high">95.9%</span></td>
+              <td class="num"><span class="currency-cell">$17.60</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Gothenburg</td>
+              <td class="num">11,360</td>
+              <td class="num"><span class="perf-high">97.3%</span></td>
+              <td class="num"><span class="currency-cell">$16.85</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Tallinn</td>
+              <td class="num">8,740</td>
+              <td class="num"><span class="perf-low">89.4%</span></td>
+              <td class="num"><span class="currency-cell">$22.40</span></td>
+            </tr>
+            <tr>
+              <td class="depot-name-cell">Porto</td>
+              <td class="num">6,480</td>
+              <td class="num"><span class="perf-mid">93.1%</span></td>
+              <td class="num"><span class="currency-cell">$19.95</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Top five by volume -->
+    <section class="card" aria-label="Top five by volume">
+      <div class="card-header">
+        <h2 class="card-title">Top five by volume</h2>
+        <span class="card-meta">Shipments proportional share</span>
+      </div>
+      <div class="top-five-list">
+        <div class="top-five-item">
+          <div class="depot-bar-label">
+            <span class="depot-rank">1.</span>
+            <span>Rotterdam</span>
+          </div>
+          <div class="bar-track">
+            <!-- 48,210 / 48,210 = 100% -->
+            <div class="bar-fill" style="width: 100%;"></div>
+          </div>
+          <div class="depot-bar-value">48,210</div>
+        </div>
+
+        <div class="top-five-item">
+          <div class="depot-bar-label">
+            <span class="depot-rank">2.</span>
+            <span>Hamburg</span>
+          </div>
+          <div class="bar-track">
+            <!-- 41,930 / 48,210 = 86.97% -->
+            <div class="bar-fill" style="width: 86.97%;"></div>
+          </div>
+          <div class="depot-bar-value">41,930</div>
+        </div>
+
+        <div class="top-five-item">
+          <div class="depot-bar-label">
+            <span class="depot-rank">3.</span>
+            <span>Antwerp</span>
+          </div>
+          <div class="bar-track">
+            <!-- 37,480 / 48,210 = 77.74% -->
+            <div class="bar-fill" style="width: 77.74%;"></div>
+          </div>
+          <div class="depot-bar-value">37,480</div>
+        </div>
+
+        <div class="top-five-item">
+          <div class="depot-bar-label">
+            <span class="depot-rank">4.</span>
+            <span>Gdansk</span>
+          </div>
+          <div class="bar-track">
+            <!-- 22,150 / 48,210 = 45.94% -->
+            <div class="bar-fill" style="width: 45.94%;"></div>
+          </div>
+          <div class="depot-bar-value">22,150</div>
+        </div>
+
+        <div class="top-five-item">
+          <div class="depot-bar-label">
+            <span class="depot-rank">5.</span>
+            <span>Lyon</span>
+          </div>
+          <div class="bar-track">
+            <!-- 19,870 / 48,210 = 41.22% -->
+            <div class="bar-fill" style="width: 41.22%;"></div>
+          </div>
+          <div class="depot-bar-value">19,870</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-primary">Prepared by the Operations Desk</div>
+    <div class="footer-secondary">Executive Ops Telemetry &bull; Confidential</div>
+  </footer>
+
+</body>
+</html>

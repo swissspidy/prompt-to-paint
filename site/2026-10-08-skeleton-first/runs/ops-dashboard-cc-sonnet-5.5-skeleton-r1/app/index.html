@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Logistics — Q3 2026 Operations Review</title>
+<style>
+:root{--bg:#0f1720;--panel:#17212c;--line:#263444;--text:#e8eef5;--muted:#8fa1b3;--accent:#4cc2b0;--good:#58d68d;--bad:#f0866b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:48px 32px 32px}
+header{margin-bottom:36px;border-left:4px solid var(--accent);padding-left:18px}
+h1{color:#5aa9ff;margin:0;font-size:40px;letter-spacing:-.02em;font-weight:700}
+.sub{margin:4px 0 0;font-size:18px;color:var(--muted)}
+section{margin-bottom:40px}
+h2{margin:0 0 16px;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.num{font-variant-numeric:tabular-nums}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px 22px 20px}
+.label{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.val{font-size:42px;font-weight:700;letter-spacing:-.02em;margin:10px 0 8px;white-space:nowrap}
+.delta{font-size:15px;font-weight:600}
+.delta span{color:var(--muted);font-weight:400;margin-left:4px}
+.good{color:var(--good)}.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:17px}
+th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;text-align:left;padding:14px 22px;border-bottom:1px solid var(--line)}
+td{padding:11px 22px;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:nth-child(even){background:rgba(255,255,255,.025)}
+td:first-child{font-weight:600}
+.r{text-align:right}
+.bars{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 22px}
+.row{display:grid;grid-template-columns:120px 1fr 80px;align-items:center;gap:18px;padding:9px 0}
+.name{font-weight:600;font-size:17px}
+.track{height:18px;background:rgba(255,255,255,.05);border-radius:4px;overflow:hidden;display:block}
+.track i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.n{text-align:right;font-size:17px}
+footer{border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:14px}
+@media(max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.tiles{grid-template-columns:1fr}.wrap{padding:28px 16px}th,td{padding-left:12px;padding-right:12px}.row{grid-template-columns:90px 1fr 64px;gap:10px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1>Northwind Logistics</h1>
+    <p class="sub">Q3 2026 Operations Review</p>
+  </header>
+  <section id="kpis">
+    <div class="tiles">
+      <div class="tile"><div class="label">On-time delivery</div><div class="val num">94.2%</div><div class="delta good num">▲ +1.8 pts <span>vs Q2</span></div></div>
+      <div class="tile"><div class="label">Average transit</div><div class="val num">3.4 days</div><div class="delta good num">▼ −0.2 days <span>vs Q2</span></div></div>
+      <div class="tile"><div class="label">Cost per shipment</div><div class="val num">$18.40</div><div class="delta bad num">▲ +$0.60 <span>vs Q2</span></div></div>
+      <div class="tile"><div class="label">Damage rate</div><div class="val num">0.7%</div><div class="delta good num">▼ −0.1 pts <span>vs Q2</span></div></div>
+    </div>
+  </section>
+  <section id="depots">
+    <h2>Depot performance</h2>
+    <table>
+      <thead><tr><th>Depot</th><th class="r">Shipments</th><th class="r">On-time</th><th class="r">Cost/shipment</th></tr></thead>
+      <tbody>
+        <tr><td>Rotterdam</td><td class="r num">48,210</td><td class="r num">96.1%</td><td class="r num">$16.20</td></tr>
+        <tr><td>Hamburg</td><td class="r num">41,930</td><td class="r num">95.4%</td><td class="r num">$17.05</td></tr>
+        <tr><td>Antwerp</td><td class="r num">37,480</td><td class="r num">93.8%</td><td class="r num">$17.80</td></tr>
+        <tr><td>Gdansk</td><td class="r num">22,150</td><td class="r num">92.2%</td><td class="r num">$19.40</td></tr>
+        <tr><td>Lyon</td><td class="r num">19,870</td><td class="r num">94.7%</td><td class="r num">$18.10</td></tr>
+        <tr><td>Milan</td><td class="r num">18,640</td><td class="r num">91.5%</td><td class="r num">$20.30</td></tr>
+        <tr><td>Valencia</td><td class="r num">16,220</td><td class="r num">90.8%</td><td class="r num">$21.15</td></tr>
+        <tr><td>Bristol</td><td class="r num">14,090</td><td class="r num">95.9%</td><td class="r num">$17.60</td></tr>
+        <tr><td>Gothenburg</td><td class="r num">11,360</td><td class="r num">97.3%</td><td class="r num">$16.85</td></tr>
+        <tr><td>Tallinn</td><td class="r num">8,740</td><td class="r num">89.4%</td><td class="r num">$22.40</td></tr>
+        <tr><td>Porto</td><td class="r num">6,480</td><td class="r num">93.1%</td><td class="r num">$19.95</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section id="top5">
+    <h2>Top five by volume</h2>
+    <div class="bars">
+      <div class="row"><span class="name">Rotterdam</span><span class="track"><i style="width:100%"></i></span><span class="n num">48,210</span></div>
+      <div class="row"><span class="name">Hamburg</span><span class="track"><i style="width:86.97%"></i></span><span class="n num">41,930</span></div>
+      <div class="row"><span class="name">Antwerp</span><span class="track"><i style="width:77.75%"></i></span><span class="n num">37,480</span></div>
+      <div class="row"><span class="name">Gdansk</span><span class="track"><i style="width:45.94%"></i></span><span class="n num">22,150</span></div>
+      <div class="row"><span class="name">Lyon</span><span class="track"><i style="width:41.22%"></i></span><span class="n num">19,870</span></div>
+    </div>
+  </section>
+  <footer>Prepared by the Operations Desk</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Dense ops dashboard: time to first render</title>
+<style>
+:root { color-scheme: light; --surface-0:#f6f5f2; --surface-1:#fcfcfb; --border:#e2e1dc;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#77756f; --grid:#e8e7e2;
+  --track:#eeede9; --b1:#86b6ef; --b2:#3987e5; --b3:#184f95; --mark:#0b0b0b; --accent:#eb6834; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+  --surface-0:#111110; --surface-1:#1a1a19; --border:#302f2d; --text-primary:#fff;
+  --text-secondary:#c3c2b7; --text-muted:#8f8e86; --grid:#2a2a28; --track:#232321;
+  --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; } }
+:root[data-theme="dark"] { color-scheme: dark; --surface-0:#111110; --surface-1:#1a1a19;
+  --border:#302f2d; --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8f8e86;
+  --grid:#2a2a28; --track:#232321; --b1:#1c5cab; --b2:#3987e5; --b3:#86b6ef; --mark:#fff; --accent:#d95926; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--surface-0); color:var(--text-primary);
+  font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width:1100px; margin:0 auto; padding:28px 16px 64px; }
+h1 { font-size:24px; margin:0 0 4px; letter-spacing:-0.01em; }
+.sub { color:var(--text-secondary); margin:0 0 18px; }
+.panel { background:var(--surface-1); border:1px solid var(--border); border-radius:12px; padding:18px; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin:0 0 14px; font-size:13px; color:var(--text-secondary); }
+.key { display:inline-flex; align-items:center; gap:6px; }
+.sw { width:14px; height:10px; border-radius:3px; display:inline-block; }
+.sw.b0 { background:var(--track); outline:1px solid var(--border); }
+.frkey { width:2px; height:14px; background:var(--mark); display:inline-block; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead th { font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary);
+  font-weight:600; text-align:left; padding:4px 8px 8px; }
+.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; padding:3px 8px; }
+th.num { text-align:right; }
+.ghead th { text-align:left; font-size:14px; font-weight:600; padding:14px 8px 4px;
+  border-top:1px solid var(--border); }
+tbody:first-of-type .ghead th { border-top:0; }
+.rlabel { font-weight:400; color:var(--text-secondary); white-space:nowrap; padding:3px 8px; text-align:left; width:1%; }
+.rep { font-variant-numeric:tabular-nums; }
+.ctag { font-size:11px; padding:1px 7px; border-radius:99px; border:1px solid var(--border);
+  margin-right:6px; color:var(--text-secondary); }
+.ctag.c-staged { border-color:var(--accent); color:var(--text-primary); }
+.trackcell { width:100%; padding:3px 8px; }
+.track { position:relative; height:16px; }
+.seg { position:absolute; top:0; bottom:0; border-right:2px solid var(--surface-1); }
+.seg:first-child { border-radius:4px 0 0 4px; }
+.seg.b0 { background:var(--track); }
+.seg.b1, .sw.b1 { background:var(--b1); }
+.seg.b2, .sw.b2 { background:var(--b2); }
+.seg.b3, .sw.b3 { background:var(--b3); }
+.fr { position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px; background:var(--mark); pointer-events:none; }
+.staged { color:var(--text-primary); font-weight:700; }
+.axis { position:relative; height:18px; }
+.tick { position:absolute; transform:translateX(-50%); font-size:11px; color:var(--text-muted);
+  text-transform:none; letter-spacing:0; font-weight:400; }
+.tick:first-child { transform:none; }
+.tick:last-child { transform:translateX(-100%); }
+.note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; }
+#tip { position:fixed; pointer-events:none; background:var(--surface-1); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.15); display:none; z-index:2; max-width:320px; }
+@media (max-width:640px) {
+  .hide-sm { display:none; }
+  .tick:not(:first-child):not(:last-child) { display:none; }
+  .num, .rlabel, .trackcell, thead th { padding-left:4px; padding-right:4px; }
+  .rlabel { width:auto; }
+}
+</style></head>
+<body><div class="wrap">
+<h1>Dense ops dashboard: time to first render</h1>
+<p class="sub">15 runs. None put a partial page on screen first: every one went from nothing to its final page in one step.</p>
+<section class="panel">
+<div class="legend"><span class="key"><span class="sw b0"></span>Nothing scoreable on screen</span><span class="key"><span class="sw b1"></span>Under half the brief</span><span class="key"><span class="sw b2"></span>Half or more</span><span class="key"><span class="sw b3"></span>The whole brief</span><span class="key"><span class="frkey"></span>First render</span></div>
+<table>
+<thead><tr><th></th><th><div class="axis"><span class="tick" style="left:0.000%">0s</span><span class="tick" style="left:14.286%">30s</span><span class="tick" style="left:28.571%">60s</span><span class="tick" style="left:42.857%">90s</span><span class="tick" style="left:57.143%">120s</span><span class="tick" style="left:71.429%">150s</span><span class="tick" style="left:85.714%">180s</span><span class="tick" style="left:100.000%">210s</span></div></th>
+<th class="num">First<span class="hide-sm"> render</span></th><th class="num hide-sm">Whole brief</th><th class="num">Stages</th></tr></thead>
+<tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-sonnet-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 1: first render 18.0s, whole brief 18.0s, 1 stage"><span class="seg b0" style="left:0.000%;width:8.578%" data-tip="cc-sonnet-5.5, run 1: 0.0s–18.0s, score 0.00"></span><span class="seg b3" style="left:8.578%;width:9.461%" data-tip="cc-sonnet-5.5, run 1: 18.0s–37.9s, score 1.00"></span><span class="fr" style="left:8.578%" aria-hidden="true"></span></div></td>
+  <td class="num">18.0s</td><td class="num hide-sm">18.0s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 2: first render 18.9s, whole brief 18.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:8.980%" data-tip="cc-sonnet-5.5, run 2: 0.0s–18.9s, score 0.00"></span><span class="seg b3" style="left:8.980%;width:7.303%" data-tip="cc-sonnet-5.5, run 2: 18.9s–34.2s, score 1.00"></span><span class="fr" style="left:8.980%" aria-hidden="true"></span></div></td>
+  <td class="num">18.9s</td><td class="num hide-sm">18.9s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-sonnet-5.5 run 3: first render 20.0s, whole brief 20.0s, 1 stage"><span class="seg b0" style="left:0.000%;width:9.508%" data-tip="cc-sonnet-5.5, run 3: 0.0s–20.0s, score 0.00"></span><span class="seg b3" style="left:9.508%;width:6.667%" data-tip="cc-sonnet-5.5, run 3: 20.0s–34.0s, score 1.00"></span><span class="fr" style="left:9.508%" aria-hidden="true"></span></div></td>
+  <td class="num">20.0s</td><td class="num hide-sm">20.0s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-sonnet-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 1: first render 29.6s, whole brief 29.6s, 1 stage"><span class="seg b0" style="left:0.000%;width:14.107%" data-tip="pi-sonnet-5.5, run 1: 0.0s–29.6s, score 0.00"></span><span class="seg b3" style="left:14.107%;width:7.170%" data-tip="pi-sonnet-5.5, run 1: 29.6s–44.7s, score 1.00"></span><span class="fr" style="left:14.107%" aria-hidden="true"></span></div></td>
+  <td class="num">29.6s</td><td class="num hide-sm">29.6s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 2: first render 16.1s, whole brief 16.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:7.681%" data-tip="pi-sonnet-5.5, run 2: 0.0s–16.1s, score 0.00"></span><span class="seg b3" style="left:7.681%;width:6.832%" data-tip="pi-sonnet-5.5, run 2: 16.1s–30.5s, score 1.00"></span><span class="fr" style="left:7.681%" aria-hidden="true"></span></div></td>
+  <td class="num">16.1s</td><td class="num hide-sm">16.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-sonnet-5.5 run 3: first render 23.3s, whole brief 23.3s, 1 stage"><span class="seg b0" style="left:0.000%;width:11.080%" data-tip="pi-sonnet-5.5, run 3: 0.0s–23.3s, score 0.00"></span><span class="seg b3" style="left:11.080%;width:7.041%" data-tip="pi-sonnet-5.5, run 3: 23.3s–38.1s, score 1.00"></span><span class="fr" style="left:11.080%" aria-hidden="true"></span></div></td>
+  <td class="num">23.3s</td><td class="num hide-sm">23.3s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gpt-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 1: first render 35.7s, whole brief 35.7s, 1 stage"><span class="seg b0" style="left:0.000%;width:17.012%" data-tip="pi-gpt-5.5, run 1: 0.0s–35.7s, score 0.00"></span><span class="seg b3" style="left:17.012%;width:7.700%" data-tip="pi-gpt-5.5, run 1: 35.7s–51.9s, score 1.00"></span><span class="fr" style="left:17.012%" aria-hidden="true"></span></div></td>
+  <td class="num">35.7s</td><td class="num hide-sm">35.7s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 2: first render 30.0s, whole brief 30.0s, 1 stage"><span class="seg b0" style="left:0.000%;width:14.265%" data-tip="pi-gpt-5.5, run 2: 0.0s–30.0s, score 0.00"></span><span class="seg b3" style="left:14.265%;width:7.648%" data-tip="pi-gpt-5.5, run 2: 30.0s–46.0s, score 1.00"></span><span class="fr" style="left:14.265%" aria-hidden="true"></span></div></td>
+  <td class="num">30.0s</td><td class="num hide-sm">30.0s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gpt-5.5 run 3: first render 30.9s, whole brief 30.9s, 1 stage"><span class="seg b0" style="left:0.000%;width:14.724%" data-tip="pi-gpt-5.5, run 3: 0.0s–30.9s, score 0.00"></span><span class="seg b3" style="left:14.724%;width:7.281%" data-tip="pi-gpt-5.5, run 3: 30.9s–46.2s, score 1.00"></span><span class="fr" style="left:14.724%" aria-hidden="true"></span></div></td>
+  <td class="num">30.9s</td><td class="num hide-sm">30.9s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">cc-opus-5.5</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 1: first render 36.1s, whole brief 36.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:17.190%" data-tip="cc-opus-5.5, run 1: 0.0s–36.1s, score 0.00"></span><span class="seg b3" style="left:17.190%;width:8.243%" data-tip="cc-opus-5.5, run 1: 36.1s–53.4s, score 1.00"></span><span class="fr" style="left:17.190%" aria-hidden="true"></span></div></td>
+  <td class="num">36.1s</td><td class="num hide-sm">36.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 2: first render 33.4s, whole brief 33.4s, 1 stage"><span class="seg b0" style="left:0.000%;width:15.912%" data-tip="cc-opus-5.5, run 2: 0.0s–33.4s, score 0.00"></span><span class="seg b3" style="left:15.912%;width:9.216%" data-tip="cc-opus-5.5, run 2: 33.4s–52.8s, score 1.00"></span><span class="fr" style="left:15.912%" aria-hidden="true"></span></div></td>
+  <td class="num">33.4s</td><td class="num hide-sm">33.4s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="cc-opus-5.5 run 3: first render 34.7s, whole brief 34.7s, 1 stage"><span class="seg b0" style="left:0.000%;width:16.509%" data-tip="cc-opus-5.5, run 3: 0.0s–34.7s, score 0.00"></span><span class="seg b3" style="left:16.509%;width:11.590%" data-tip="cc-opus-5.5, run 3: 34.7s–59.0s, score 1.00"></span><span class="fr" style="left:16.509%" aria-hidden="true"></span></div></td>
+  <td class="num">34.7s</td><td class="num hide-sm">34.7s</td>
+  <td class="num ">1</td></tr></tbody><tbody><tr class="ghead"><th colspan="5" scope="rowgroup">pi-gemini-3.8-flash</th></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 1</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 1: first render 45.1s, whole brief 45.1s, 1 stage"><span class="seg b0" style="left:0.000%;width:21.461%" data-tip="pi-gemini-3.8-flash, run 1: 0.0s–45.1s, score 0.00"></span><span class="seg b3" style="left:21.461%;width:39.657%" data-tip="pi-gemini-3.8-flash, run 1: 45.1s–128.3s, score 1.00"></span><span class="fr" style="left:21.461%" aria-hidden="true"></span></div></td>
+  <td class="num">45.1s</td><td class="num hide-sm">45.1s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 2</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 2: first render 38.6s, whole brief 38.6s, 1 stage"><span class="seg b0" style="left:0.000%;width:18.359%" data-tip="pi-gemini-3.8-flash, run 2: 0.0s–38.6s, score 0.00"></span><span class="seg b3" style="left:18.359%;width:43.750%" data-tip="pi-gemini-3.8-flash, run 2: 38.6s–130.4s, score 1.00"></span><span class="fr" style="left:18.359%" aria-hidden="true"></span></div></td>
+  <td class="num">38.6s</td><td class="num hide-sm">38.6s</td>
+  <td class="num ">1</td></tr><tr>
+  <th scope="row" class="rlabel"><span class="rep">run 3</span></th>
+  <td class="trackcell"><div class="track" role="img" aria-label="pi-gemini-3.8-flash run 3: first render 38.2s, whole brief 38.2s, 1 stage"><span class="seg b0" style="left:0.000%;width:18.188%" data-tip="pi-gemini-3.8-flash, run 3: 0.0s–38.2s, score 0.00"></span><span class="seg b3" style="left:18.188%;width:68.942%" data-tip="pi-gemini-3.8-flash, run 3: 38.2s–183.0s, score 1.00"></span><span class="fr" style="left:18.188%" aria-hidden="true"></span></div></td>
+  <td class="num">38.2s</td><td class="num hide-sm">38.2s</td>
+  <td class="num ">1</td></tr></tbody>
+</table>
+<p class="note">Each bar is one run, from the prompt to the moment the run ended (where the bar stops), shaded by how much of the
+brief the judge could see on screen. Agents are ordered by median first render. <b>Stages</b> counts the
+distinct scores the page passed through: 1 means it went from nothing to its final page in a single step.</p>
+</section>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+const tip = document.getElementById('tip');
+document.addEventListener('pointermove', (e) => {
+  const t = e.target.closest && e.target.closest('[data-tip]');
+  if (!t) { tip.style.display = 'none'; return; }
+  tip.textContent = t.dataset.tip;
+  tip.style.display = 'block';
+  const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px';
+  tip.style.top = (e.clientY + 14) + 'px';
+});
+</script>
+</body></html>
