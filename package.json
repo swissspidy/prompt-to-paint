@@ -23,7 +23,7 @@
     "@ai-sdk/google": "^4.0.80",
     "@ai-sdk/openai": "^4.0.75",
     "ai": "^7.0.114",
-    "playwright": "^1.63.0",
+    "playwright": "^1.64.0",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {
